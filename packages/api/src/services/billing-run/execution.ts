@@ -15,6 +15,7 @@ import {
 } from "./../bill-segment.service.js";
 import { logger } from "../../lib/logger.js";
 import { claimForGeneration } from "./claim.js";
+import { agreementInWindow } from "./window.js";
 
 /** What a failed or skipped account looks like to the item list. */
 function classify(err: unknown): { status: "SKIPPED" | "FAILED"; code: string; message: string } {
@@ -189,12 +190,17 @@ async function billOneAccount(args: {
 }> {
   const { utilityId, actorId, actorName, accountId, windowStart, windowEnd } = args;
 
+  /*
+   * The planner's own question, not a second one. This asked for an
+   * agreement still open at `windowEnd` while the planner asked for an
+   * overlap, so a service that stopped mid-window was put in the run
+   * here and then found not to exist — see `window.ts`.
+   */
   const agreements = await prisma.serviceAgreement.findMany({
     where: {
       utilityId,
       accountId,
-      startDate: { lte: windowEnd },
-      OR: [{ endDate: null }, { endDate: { gte: windowEnd } }],
+      ...agreementInWindow({ periodStart: windowStart, periodEnd: windowEnd }),
     },
     select: { id: true },
     orderBy: { agreementNumber: "asc" },

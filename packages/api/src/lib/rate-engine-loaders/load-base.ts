@@ -42,11 +42,29 @@ export async function loadBase(
     include: {
       account: true,
       rateServiceClass: { select: { code: true } },
-      // Premise is reached via the active service point in this schema.
+      /*
+       * Premise is reached via the service point — the one that served
+       * **this period**, not the one open today.
+       *
+       * `endDate: null` could not bill a service that had stopped:
+       * closing an agreement end-dates its service points
+       * (`closeServiceAgreement`), and a final bill is for a period
+       * that is over by definition, so the premise came back empty and
+       * rating failed with "no active service point with a premise".
+       * The same overlap the rate-schedule assignments below already
+       * use.
+       *
+       * Newest first, where `endDate: null` was effectively that: with
+       * `asc` an agreement holding an old closed service point and a
+       * current open one would now rate against the old one.
+       */
       servicePoints: {
-        where: { endDate: null },
+        where: {
+          startDate: { lte: period.endDate },
+          OR: [{ endDate: null }, { endDate: { gte: period.startDate } }],
+        },
         include: { premise: true },
-        orderBy: { startDate: "asc" },
+        orderBy: { startDate: "desc" },
         take: 1,
       },
       rateScheduleAssignments: {
@@ -74,8 +92,27 @@ export async function loadBase(
 
   const sp = sa.servicePoints[0];
   if (!sp?.premise) {
-    throw new Error(
-      `Service agreement ${saId} has no active service point with a premise`,
+    /*
+     * A 400 with a code, not a bare `Error`.
+     *
+     * Asking to rate a period the agreement had no service in is a bad
+     * request, and this used to be unreachable for one: while the
+     * lookup above asked for the service point open *today*, a period
+     * from 1999 resolved a premise anyway and failed later on the
+     * tariff instead. Period-scoping it brought this throw into play,
+     * and as a bare `Error` it reached the client as a 500.
+     *
+     * No assignments gate ahead of it, though it would also be absent
+     * for such a request: `loadBase` serves callers that want the
+     * context without a tariff — the season-set suites read the
+     * seasons off it — so an empty assignment list is theirs to judge,
+     * not this loader's.
+     */
+    throw Object.assign(
+      new Error(
+        `Service agreement ${saId} has no active service point with a premise covering this period`,
+      ),
+      { statusCode: 400, code: "NO_SERVICE_POINT_IN_PERIOD" },
     );
   }
   const premiseRow = sp.premise;

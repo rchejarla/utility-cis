@@ -315,12 +315,35 @@ export async function createBillSegmentForServiceAgreement(
       // 4. Pre-load meter-keyed vars (engine infers meter ids from
       //    meter:reads:* keys at rate time; we add them up-front so the
       //    engine doesn't have to call back into the registry).
+      /*
+       * The meters installed **during this period**, not the ones
+       * installed today — the same point the TOU comment below makes
+       * about register mappings, applied to the installation itself.
+       *
+       * Closing an agreement end-dates its service points and removes
+       * its meter installations, so `endDate: null` / `removedDate:
+       * null` found nothing for a final bill and the engine was handed
+       * no reads for a meter that had reported all month. It is also
+       * what a re-rate of any historical period needs: the meter that
+       * was on the service point then.
+       */
       const spMeters = await tx.serviceAgreement.findUniqueOrThrow({
         where: { id: saId, utilityId },
         select: {
           servicePoints: {
-            where: { endDate: null },
-            include: { meters: { where: { removedDate: null }, select: { meterId: true } } },
+            where: {
+              startDate: { lte: period.endDate },
+              OR: [{ endDate: null }, { endDate: { gte: period.startDate } }],
+            },
+            include: {
+              meters: {
+                where: {
+                  addedDate: { lte: period.endDate },
+                  OR: [{ removedDate: null }, { removedDate: { gte: period.startDate } }],
+                },
+                select: { meterId: true },
+              },
+            },
           },
         },
       });

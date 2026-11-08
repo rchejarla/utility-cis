@@ -301,29 +301,69 @@ asking only about reads would list every AMI meter as outstanding —
 hundreds of rows needing no action, which is how a readiness screen
 teaches people to ignore it.
 
-#### Found while building it: three filters for one question
+#### Found while building it: three filters for one question (fixed 2026-11-08)
 
-"Which agreements does this window involve" is asked in three places
+"Which agreements does this window involve" was asked in three places
 with three answers:
 
 | Where | Filter |
 |---|---|
 | `billing-run/execution.ts` — what actually bills | no status filter, `endDate >= windowEnd` |
 | `billing-run/planning.ts` — the pre-run blocker check | no status filter, `endDate >= windowStart` |
-| `reading-progress.service.ts` — this screen | mirrors the executor, deliberately |
+| `reading-progress.service.ts` — this screen | mirrored the executor, deliberately |
 
-So **an agreement that ended mid-window is checked for configuration
+So **an agreement that ended mid-window was checked for configuration
 faults and then never billed.** A service that closed on the 20th used
-water from the 11th, and nothing bills it: a cycle run skips it, and
-there is no separate final-bill path that picks it up. One of those two
-filters is wrong. This screen mirrors the executor on purpose — an
-operator needs to know what the run *will* skip, not what it ought to —
-which means it will stop listing those services the day the executor is
-fixed, and that is the right coupling.
+water from the 11th and nothing billed it: the run skipped the account
+with `NO_ACTIVE_ASSIGNMENTS` — which `classify` files as noise an
+operator scrolls past — and a later run excludes the agreement under
+either filter.
 
-Neither filters on `status`, so a `PENDING` service with a meter
-assigned would be attempted by a run. It rarely has one, which is why
-nobody has seen it.
+**The overlap won, and there is now one function:**
+`agreementInWindow` in `billing-run/window.ts`, called by all three.
+The executor was the wrong one — a utility has to bill service that was
+taken, and `resolveServicePeriod` could always do it, since the period
+ends at the newest unbilled read, so a final read on the 20th gives a
+period ending on the 20th.
+
+Admitting the agreement exposed two more "open now" filters in the same
+path, both fixed with the same overlap:
+
+- `rate-engine-loaders/load-base.ts` reached the premise through
+  `servicePoints: { endDate: null }`, so rating a closed service failed
+  with *"no active service point with a premise"* — `closeServiceAgreement`
+  end-dates the service points, and a final bill is for a period that
+  is over by definition.
+- `bill-segment.service.ts` collected the meters to pre-load reads for
+  through `endDate: null` / `removedDate: null`, so the engine got no
+  reads for a meter that had reported all month.
+
+Both now ask what was in force *during the period*, which is also what
+re-rating any historical period needs. Covered by *"a service that
+ended inside the window bills it, up to its final read"* in
+`billing-run.integration.test.ts`, and at the loader's own level in
+`load-base.integration.test.ts`.
+
+**One error code changed.** Period-scoping the premise lookup brought a
+previously unreachable throw into play: a period the agreement had no
+service in — `POST /service-agreements/:id/bill-segments` with
+`1999-01-01`–`1999-01-31` — used to resolve today's service point and
+fail further on with `NO_ACTIVE_ASSIGNMENTS`. It now answers
+**`NO_SERVICE_POINT_IN_PERIOD`**, still a 400, and that throw carries a
+status code where it was a bare `Error` that would have reached the
+client as a 500. The assignments gate stays in `bill-segment.service.ts`
+rather than moving into the loader: `loadBase` serves callers that want
+the rating context without a tariff, which the season-set suites rely
+on.
+
+**Still open.** None of them filters on `status`, so a `PENDING` service
+with a meter assigned would be attempted by a run. It rarely has one,
+which is why nobody has seen it.
+
+**Also still open, and larger:** a *closed account*. Move-out sets the
+account `CLOSED` and `BILLABLE_ACCOUNT_STATUSES` is `["ACTIVE"]`, so
+the planner never sees it and its last days are billed by nothing. That
+is spec 09 rule 9's final bill, which is not built.
 
 ### Import Center (`/meter-reads/import`) — live (UI), partial (backend)
 

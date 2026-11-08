@@ -5,6 +5,7 @@ import type {
 } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { computeBillPeriod } from "./bill.service.js";
+import { agreementInWindow } from "./billing-run/window.js";
 
 /**
  * Which meters a cycle still has to read before it can bill (spec 08).
@@ -71,33 +72,25 @@ export async function getReadingProgress(
   const intervalEnd = new Date(windowEnd.getTime() + 86_400_000);
 
   /*
-   * **The run's own filter, copied.** Not a better one: this screen is
+   * **The run's own filter, shared rather than copied.** This screen is
    * worth having only if it predicts what a run will do, so it asks the
-   * question `billOneAccount` asks — started on or before the window
-   * ends, and still open at the window's end
-   * (`billing-run/execution.ts`). No status filter, because the run has
-   * none either.
+   * run's question by calling the run's function
+   * (`billing-run/window.ts`).
    *
-   * Two things that came out of comparing them, both recorded in spec
-   * 08 and neither fixed here:
+   * It was a copy of the executor's literal until 2026-11-08, and
+   * comparing the two found that the executor and the planner disagreed
+   * — an agreement that ended mid-window was checked for configuration
+   * faults and then never billed. That is fixed at the source; the note
+   * is kept because this is where it was found, and because the reason
+   * for sharing is that a copy drifted once already.
    *
-   * - `findRunBlockers` in `planning.ts` uses `endDate >= windowStart`
-   *   while the executor uses `>= windowEnd`, so an agreement that
-   *   ended mid-window is **checked for configuration faults and then
-   *   never billed**. One of the two is wrong; a service that closed on
-   *   the 20th used water from the 11th, and somebody has to bill it.
-   * - Neither filters on `status`, so a `PENDING` service with a meter
-   *   assigned would be attempted. It rarely has one, which is why it
-   *   has never shown.
-   *
-   * Mirroring a filter I think is too loose beats inventing a fourth
-   * answer: an operator reading this screen needs to know what the run
-   * will skip, not what it ought to.
+   * One thing still open: neither filters on `status`, so a `PENDING`
+   * service with a meter assigned would be attempted. It rarely has
+   * one, which is why it has never shown.
    */
   const agreement = {
     account: { billingCycleId: cycle.id },
-    startDate: { lte: windowEnd },
-    OR: [{ endDate: null }, { endDate: { gte: windowEnd } }],
+    ...agreementInWindow(window),
   };
 
   /** An open assignment of a meter to a service point. */

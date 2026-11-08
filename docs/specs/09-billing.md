@@ -527,7 +527,13 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
 
 8. **Collection handoff (revised 2026-10-09):** CIS issues the `Bill` and owns the receivable. The only thing sent to SaaSLogic is the amount due for an issued Bill, keyed on the Bill for idempotency, so the customer has something payable. No charge breakdown is sent for pricing — CIS has already priced it. Previously this step POSTed a per-agreement billing instruction and stored a returned `saaslogic_invoice_id`. See modules 10 and 21.
 
-9. **Final bill:** When a service agreement is terminated (status → FINAL), a final bill is generated for the period from the last regular bill to the final read date, prorated appropriately.
+9. **Final bill (partly shipped 2026-11-08):** When a service agreement is terminated (status → FINAL), a final bill is generated for the period from the last regular bill to the final read date, prorated appropriately.
+
+    **What works:** a cycle run now bills an agreement that ended inside its window, to the final read date. Until 2026-11-08 it did not — the executor required the agreement still be open at the window's end while the planner only required an overlap, so the account was put in the run and then skipped with `NO_ACTIVE_ASSIGNMENTS`. One shared filter (`billing-run/window.ts`), plus two "open now" filters in the rating path that the same close had broken: the premise lookup in `load-base.ts` and the meter pre-load in `bill-segment.service.ts` both asked which service points and installations are open *today* rather than which were in force during the period. See spec 08 for the full account.
+
+    **What does not:** a terminated agreement on a **closed account**. Move-out sets the account `CLOSED` and `BILLABLE_ACCOUNT_STATUSES` is `["ACTIVE"]`, so the planner never includes it and the final days are billed by nothing. The lifecycle the code already implies is agreement `FINAL` → final bill → `CLOSED` (`closeServiceAgreement` says so in as many words: *"FINAL → CLOSED is a legitimate billing-lifecycle step (final bill issued)"*), and `Account.status = FINAL` is documented in spec 04 as "final bill being prepared" — a status the move-out workflow skips, going `ACTIVE` → `CLOSED` directly. Closing that gap means a run that bills `ACTIVE` and `FINAL` accounts, a move-out that leaves the account `FINAL`, and closure that follows the bill. Not built, and not a filter fix.
+
+    Also worth noting: spec 04's closure guard is described as ensuring "final billing occurs before closure". It only checks for `PENDING`/`ACTIVE` agreements; it never checks that a bill exists.
 
 10. **Charge validation:** Before submission, total_amount is validated against the adopted rate schedule. Discrepancies above a configurable tolerance threshold trigger an exception requiring supervisor approval (Bozeman Req 140).
 

@@ -622,8 +622,143 @@ describe("processing a run", () => {
         where: { billingRunId: run.id, status: "PENDING" },
       });
       expect(pending).toBe(run.accountCount);
-  
+
     }), 120_000);
+});
+
+/**
+ * A service that stopped inside the window still has to be billed.
+ *
+ * The planner and the executor asked different questions about which
+ * agreements belong to a window. The planner wanted an overlap
+ * (`endDate >= windowStart`); the executor wanted the agreement still
+ * open at the window's *end* (`endDate >= windowEnd`). So an account
+ * whose service closed on the 20th of a window ending on the 30th was
+ * put in the run and then found to have no agreement at all — skipped
+ * with `NO_ACTIVE_ASSIGNMENTS`, which `classify` deliberately files as
+ * noise an operator scrolls past.
+ *
+ * The days between the last bill and the final read were then billed by
+ * nothing: a later run excludes the agreement under both filters, and
+ * there is no separate final-bill path (spec 09 rule 9 describes one;
+ * it is not built). Meanwhile `findRunBlockers` *did* include the
+ * agreement, so the run would block on its rate schedule and then never
+ * bill it.
+ */
+describe("a service that ended inside the window", () => {
+  it("bills it, up to its final read", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const windowEnd = new Date(`${WINDOW_END}T00:00:00.000Z`);
+
+      /*
+       * An account with exactly one agreement, so dropping the
+       * agreement drops the account — the failure is then the
+       * `NO_ACTIVE_ASSIGNMENTS` skip, not a bill that is quietly short
+       * one service and looks fine.
+       */
+      const candidates = await prisma.serviceAgreement.findMany({
+        where: {
+          utilityId,
+          endDate: null,
+          status: "ACTIVE",
+          account: { billingCycleId: cycleId, status: "ACTIVE" },
+          meterReads: { some: { billedAt: null, readDate: { lte: windowEnd } } },
+        },
+        select: {
+          id: true,
+          accountId: true,
+          account: { select: { _count: { select: { serviceAgreements: true } } } },
+          meterReads: {
+            where: { billedAt: null, readDate: { lte: windowEnd } },
+            orderBy: [{ readDate: "desc" }],
+            take: 1,
+            select: { readDate: true },
+          },
+        },
+      });
+      const subject = candidates.find((c) => c.account._count.serviceAgreements === 1);
+      if (!subject) throw new Error("No single-agreement account with an unbilled read in the window");
+
+      const finalRead = subject.meterReads[0].readDate;
+      /*
+       * The whole point is a stop date *before* the window closes: with
+       * `endDate === windowEnd` the old filter admits the agreement too
+       * and this test would pass without proving anything.
+       */
+      expect(finalRead.getTime()).toBeLessThan(windowEnd.getTime());
+
+      /*
+       * `beforeEach` puts back runs, bills and spent reads, but not
+       * accounts or agreements — so this closure has to be undone here
+       * or every later test in the file runs against an account whose
+       * service stopped. Captured rather than assumed: the service
+       * point and the meter installation are closed by the same call.
+       */
+      const spmWhere = { utilityId, servicePoint: { serviceAgreementId: subject.id } };
+      const priorSpms = await prisma.servicePointMeter.findMany({
+        where: spmWhere,
+        select: { id: true, removedDate: true },
+      });
+      const priorSps = await prisma.servicePoint.findMany({
+        where: { serviceAgreementId: subject.id },
+        select: { id: true, status: true, endDate: true },
+      });
+
+      try {
+        // The move-out path, not a hand-written row: closing an
+        // agreement also end-dates its service points and meter
+        // installations, and billing has to survive that too.
+        const ed = await import("../../services/effective-dating.service.js");
+        await ed.closeServiceAgreement(utilityId, ACTOR_ID, "Tester", {
+          saId: subject.id,
+          endDate: finalRead,
+          status: "FINAL",
+          reason: "Moved out",
+        });
+
+        const run = JSON.parse((await startRun()).body);
+        await processBillingRun({
+          runId: run.id,
+          utilityId,
+          actorId: ACTOR_ID,
+          actorName: "Tester",
+        });
+
+        const item = await prisma.billingRunItem.findFirstOrThrow({
+          where: { billingRunId: run.id, accountId: subject.accountId },
+        });
+        // The message is in the comparison so a failure says *why*
+        // rather than only that it was not billed.
+        expect({
+          status: item.status,
+          code: item.errorCode,
+          message: item.errorMessage,
+        }).toEqual({ status: "BILLED", code: null, message: null });
+        // To the stop date, not stretched to the window's end: the
+        // customer owes for the days they had service.
+        expect(item.servicePeriodEnd?.toISOString().slice(0, 10)).toBe(
+          finalRead.toISOString().slice(0, 10),
+        );
+      } finally {
+        for (const spm of priorSpms) {
+          await prisma.servicePointMeter.update({
+            where: { id: spm.id },
+            data: { removedDate: spm.removedDate },
+          });
+        }
+        for (const sp of priorSps) {
+          await prisma.servicePoint.update({
+            where: { id: sp.id },
+            data: { status: sp.status, endDate: sp.endDate },
+          });
+        }
+        await prisma.serviceAgreement.update({
+          where: { id: subject.id },
+          data: { status: "ACTIVE", endDate: null },
+        });
+      }
+    }), 300_000);
 });
 
 describe("posting a run", () => {
