@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { FieldDefinition } from "@utility-cis/shared";
 /*
  * Both vocabularies come from shared now. This page offered `OTHER` as
@@ -21,6 +21,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { IntervalsTab } from "@/components/meters/intervals-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
@@ -37,6 +38,12 @@ interface Meter {
   removalDate?: string;
   notes?: string;
   customFields?: Record<string, unknown>;
+  /**
+   * Whether this meter has ever reported an interval — the one honest
+   * test for showing the Intervals tab, since `meterType` says how a
+   * meter is *read* rather than how its usage arrives.
+   */
+  reportsIntervals?: boolean;
   premise?: { id: string; addressLine1: string; city: string; state: string };
   commodity?: { id: string; name: string };
   uom?: { id: string; name: string; code: string };
@@ -83,7 +90,15 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const { canView, canEdit, canDelete } = usePermission("meters");
   const [meter, setMeter] = useState<Meter | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview");
+  /*
+   * The tab and the day can come in the URL, because the coverage
+   * queue links here naming both: it has just said this meter lost
+   * three hours on a given day, and landing on Overview with no day
+   * chosen makes the reader ask the question again by hand.
+   */
+  const search = useSearchParams();
+  const [activeTab, setActiveTab] = useState(search.get("tab") ?? "overview");
+  const linkedDay = search.get("day");
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
@@ -273,6 +288,18 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
           { key: "overview", label: "Overview" },
           { key: "agreements", label: `Agreements (${meter.serviceAgreementMeters?.length ?? 0})` },
           { key: "history", label: "History" },
+          /*
+           * Only for a meter that actually reports intervals. Most
+           * meters never will, and a tab whose only content is "nothing
+           * here" is noise on the commonest page in the system.
+           *
+           * The flag comes from the meter fetch — one indexed row —
+           * and **not from `meter_type`**: how a meter is read is not
+           * how its usage is delivered, and this repo has the evidence
+           * in both directions (an AMR meter with mapped TOU registers,
+           * AMI meters with no intervals at all).
+           */
+          ...(meter.reportsIntervals ? [{ key: "intervals", label: "Intervals" }] : []),
           { key: "notes", label: "Notes" },
           { key: "attachments", label: "Attachments" },
         ]}
@@ -612,6 +639,8 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             emptyMessage="This meter has not been assigned to any service agreement yet."
           />
         )}
+
+        {activeTab === "intervals" && <IntervalsTab meterId={id} initialDay={linkedDay} />}
 
         {activeTab === "notes" && <NotesTab subject="meters" entityId={id} />}
 

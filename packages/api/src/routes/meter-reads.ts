@@ -5,6 +5,7 @@ import {
   correctMeterReadSchema,
   meterReadQuerySchema,
   meterReadingProgressQuerySchema,
+  meterIntervalSeriesQuerySchema,
   resolveExceptionSchema,
 } from "@utility-cis/shared";
 import {
@@ -19,6 +20,7 @@ import {
   deleteMeterRead,
 } from "../services/meter-read.service.js";
 import { getReadingProgress } from "../services/reading-progress.service.js";
+import { getMeterIntervalSeries } from "../services/meter-interval-series.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { z } from "zod";
 
@@ -143,6 +145,22 @@ export async function meterReadRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       await deleteMeterRead(utilityId, actorId, actorName, id);
       return reply.status(204).send();
+    },
+  );
+
+  /*
+   * One meter's interval series — what it actually reported, and where
+   * the holes are. Gated on `meters` like the read history beside it:
+   * it is a fact about the device, read from the device's own page.
+   */
+  app.get(
+    "/api/v1/meters/:meterId/intervals",
+    { config: { module: "meters", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const { meterId } = meterIdParamSchema.parse(request.params);
+      const query = meterIntervalSeriesQuerySchema.parse(request.query ?? {});
+      return reply.send(await getMeterIntervalSeries(utilityId, meterId, query));
     },
   );
 

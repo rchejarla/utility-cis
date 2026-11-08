@@ -271,7 +271,16 @@ export default function IntervalCoveragePage() {
             {rows.map((row) => (
               <tr key={row.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
                 <td style={{ ...tdCell, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
-                  <Link href={`/meters/${row.meterId}`} style={{ color: "var(--accent-primary)" }}>
+                  {/*
+                    * Straight to the day this row is about. The link
+                    * used to land on the meter's Overview, which left
+                    * the reader to find the Intervals tab and pick the
+                    * date the row had just named.
+                    */}
+                  <Link
+                    href={`/meters/${row.meterId}?tab=intervals&day=${row.windowStart.slice(0, 10)}`}
+                    style={{ color: "var(--accent-primary)" }}
+                  >
                     {row.meter.meterNumber}
                   </Link>
                 </td>

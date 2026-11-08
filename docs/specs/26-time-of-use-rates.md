@@ -763,10 +763,38 @@ raw intervals from the same meters. Compression is therefore entirely a
 >    (`RowResult` is ok-or-error), so today a zoneless file is read in
 >    the tenant's zone silently — and one whose times are really in
 >    another zone imports cleanly and bills against the wrong periods.
-> 2. **A series view.** Still nothing shows an interval: a day or a week
->    for one meter with its quality flags, on the meter detail page.
->    Needs a route, and a cap — a week of 15-minute data is 672 points,
->    a month 2,976.
+> 2. ~~A series view~~ — **built 2026-11-07.** `GET
+>    /api/v1/meters/:id/intervals` and an **Intervals** tab on the meter,
+>    a bar per interval so a hole is a hole (a line chart would
+>    interpolate across one and draw a confident line through data that
+>    does not exist). Coloured by quality, because `actual` and
+>    `estimated` are different claims about the same hour.
+>
+>    **Days are the tenant's local days**, using the same `localMidnight`
+>    the nightly sweep builds its windows with — so a day here is the day
+>    an exception is opened for, and the holes drawn are the holes
+>    reported. It drew UTC days and UTC hours until somebody opened the
+>    chart and saw a household's evening peak at midnight; the dev seed
+>    was leaving `utility_config.timezone` at its `UTC` default for a
+>    Montana utility, which also meant a scheduler set to 03:00 fired at
+>    8pm local.
+>
+>    The tab shows only for a meter that **has** intervals — one indexed
+>    row on the meter fetch, not `meter_type`, which says how a meter is
+>    read rather than how its usage arrives (spec 03). Seven days at a
+>    time, refused with `RANGE_TOO_LONG` beyond that rather than
+>    truncated: a view that quietly drops the end of a range is how
+>    somebody concludes a meter stopped reporting.
+>
+>    The coverage queue links straight to the day it reports, which is
+>    the loop those two screens were missing.
+>
+>    **Not a cross-meter list, on purpose.** A read is one row per meter
+>    per month and browsable; intervals are ~2,976 rows per meter per
+>    month, so ten thousand meters is thirty million rows a month — and
+>    a single 15-minute quantity means nothing outside its own series.
+>    The fleet-level questions already have screens: Interval Coverage
+>    for "which meters have holes", Reading Progress for "did it arrive".
 >
 > **A scale limit worth knowing.** The framework is row-at-a-time, each
 > row in its own transaction. A month of 15-minute data is 2,976 rows
