@@ -263,27 +263,31 @@ describe("what a cycle is not expected to read", () => {
   });
 
   /*
-   * Mirrors the run rather than correcting it.
+   * Mirrors the run — which changed on 2026-11-08, so this assertion
+   * turned over with it.
    *
-   * `billOneAccount` bills agreements still open at the window's *end*,
-   * so one that closed on the 20th of a window ending on the 10th of
-   * the next month is never billed by a cycle run — and listing it as
-   * an outstanding read would send somebody to read a meter for a bill
-   * that is not coming.
+   * A service that closed on the 20th of a window ending on the 10th of
+   * the next month used water from the 11th to the 20th, and no run
+   * would bill it: the executor wanted an agreement still open at the
+   * window's *end* while the planner only wanted an overlap, so the
+   * account came back `SKIPPED` with `NO_ACTIVE_ASSIGNMENTS`. This test
+   * asserted that behaviour, and its own comment called it a defect.
    *
-   * It is also a defect, recorded in spec 08 and not fixed here: that
-   * service used water from the 11th to the 20th, `findRunBlockers`
-   * checks it (`endDate >= windowStart`) while the executor skips it
-   * (`>= windowEnd`), and the two cannot both be right.
+   * The run bills it now, from one shared filter
+   * (`billing-run/window.ts`), so a read for that service is genuinely
+   * outstanding — and saying which reads a run is waiting on is the
+   * whole job of this screen. The coupling held: fixing the run flipped
+   * this screen without anybody editing it, which is why it mirrors the
+   * run rather than keeping its own opinion.
    */
-  it("does not expect one that closed mid-window, because no run will bill it", async () => {
+  it("expects one that closed mid-window, because the run bills it now", async () => {
     await service({
       agreementNumber: "SA-CLOSING",
       meterId: fixA.meterId,
       endDate: new Date("2026-01-20"),
     });
 
-    expect(await progress()).toMatchObject({ expected: 0, outstanding: 0 });
+    expect(await progress()).toMatchObject({ expected: 1, outstanding: 1 });
   });
 
   it("refuses a cycle that is not this tenant's", async () => {

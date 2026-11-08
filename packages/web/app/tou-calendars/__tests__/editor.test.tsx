@@ -592,7 +592,20 @@ describe("the spot check", () => {
     await userEvent.click(screen.getByRole("button", { name: "Check this time" }));
 
     expect(await screen.findByText("Pick a date first.")).toBeInTheDocument();
-    expect(get).not.toHaveBeenCalled();
+    /*
+     * Asserted against the two URLs the spot check calls, not against
+     * every GET the spy saw.
+     *
+     * `findByTestId` resolves when the panel renders, which is before
+     * the page has finished loading its season sets, holiday sets and
+     * periods — so `mockClear` lands mid-flight and the fetches that
+     * settle afterwards are recorded as new calls. On an idle machine
+     * they are all in by then and the spy is empty; on a loaded CI
+     * runner two arrived and this failed with "called 2 times", about
+     * requests that have nothing to do with the spot check.
+     */
+    const asked = get.mock.calls.map((c) => String(c[0]));
+    expect(asked.filter((u) => /\/(spot-check|day)$/.test(u))).toEqual([]);
   });
 
   it("lays out a whole day, which is how an observance rule is checked", async () => {

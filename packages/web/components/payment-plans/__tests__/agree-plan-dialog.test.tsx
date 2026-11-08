@@ -151,7 +151,16 @@ describe("agree plan dialog", () => {
     renderDialog();
 
     await waitFor(() => expect(screen.getByLabelText(/down payment/i)).toBeInTheDocument());
-    expect(screen.getByText(today)).toBeInTheDocument();
+    /*
+     * `findBy`, because the schedule is not the down-payment field.
+     * The field renders from the terms; the rows need the debts, which
+     * arrive in a fetch of their own — so waiting for the field and
+     * then reading the schedule synchronously is waiting for the wrong
+     * thing. It held on an idle machine and failed on CI with "Unable
+     * to find an element with the text: 2026-11-08", which reads like a
+     * date bug and is not one.
+     */
+    expect(await screen.findByText(today)).toBeInTheDocument();
   });
 
   it("refuses to agree a plan over nothing, at the control", async () => {
