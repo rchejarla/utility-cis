@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
+import { selectLoadedOption } from "@/test-support/select-loaded-option";
 import DelinquencyRulesPage from "../page";
 
 /**
@@ -97,7 +98,7 @@ describe("the late fee on a delinquency tier", () => {
 
     await user.selectOptions(screen.getByLabelText("Charge"), "PERCENT_OF_BALANCE");
     await user.type(await screen.findByPlaceholderText("e.g. 1.5"), "1.5");
-    await user.selectOptions(await screen.findByLabelText("Reason shown on the bill"), REASON.id);
+    await selectLoadedOption("Reason shown on the bill", REASON.id);
     await user.click(screen.getByText("Save"));
 
     await waitFor(() => expect(patch).toHaveBeenCalled());
@@ -116,7 +117,7 @@ describe("the late fee on a delinquency tier", () => {
 
     await user.selectOptions(screen.getByLabelText("Charge"), "FLAT_FEE");
     await user.type(await screen.findByPlaceholderText("e.g. 25.00"), "25");
-    await user.selectOptions(await screen.findByLabelText("Reason shown on the bill"), REASON.id);
+    await selectLoadedOption("Reason shown on the bill", REASON.id);
     await user.click(screen.getByText("Save"));
 
     await waitFor(() => expect(patch).toHaveBeenCalled());

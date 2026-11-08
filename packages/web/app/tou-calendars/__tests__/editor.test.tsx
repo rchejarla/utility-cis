@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { apiClient } from "@/lib/api-client";
+import { selectLoadedOption } from "@/test-support/select-loaded-option";
 import TouCalendarEditorPage from "../[id]/page";
 
 /**
@@ -488,7 +489,7 @@ describe("the holiday set", () => {
     patch.mockResolvedValue({});
 
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "hset-1");
+    await selectLoadedOption("Holiday set", "hset-1");
     // Picking is picking; Apply is the save.
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
@@ -507,7 +508,7 @@ describe("the holiday set", () => {
     patch.mockResolvedValue({});
 
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "");
+    await selectLoadedOption("Holiday set", "");
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() =>
@@ -887,7 +888,7 @@ describe("the season set, while the calendar is a draft", () => {
     );
 
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+    await selectLoadedOption("Season set", "set-2");
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(await screen.findByTestId("action-error")).toHaveTextContent(/does not define/);
@@ -948,7 +949,7 @@ describe("changing a set the calendar names", () => {
     patch.mockResolvedValue({});
 
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+    await selectLoadedOption("Season set", "set-2");
 
     expect(screen.getByTestId("pending-change")).toBeInTheDocument();
     expect(patch).not.toHaveBeenCalled();
@@ -965,7 +966,7 @@ describe("changing a set the calendar names", () => {
           : Promise.resolve(calendar()),
     );
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "hset-1");
+    await selectLoadedOption("Holiday set", "hset-1");
 
     const row = screen.getByTestId("pending-change");
     expect(row.textContent).toMatch(/Adds a Holiday day type/);
@@ -975,7 +976,7 @@ describe("changing a set the calendar names", () => {
   it("says detaching removes the day type, rather than refusing afterwards", async () => {
     get.mockResolvedValue(calendar({ touHolidaySetId: HOLIDAY_SET.id, holidaySet: HOLIDAY_SET }));
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "");
+    await selectLoadedOption("Holiday set", "");
 
     const row = screen.getByTestId("pending-change");
     expect(row.textContent).toMatch(/Removes the Holiday day type/);
@@ -985,7 +986,7 @@ describe("changing a set the calendar names", () => {
   it("says a season-set change is refused rather than dropping hours", async () => {
     twoSeasonSets();
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+    await selectLoadedOption("Season set", "set-2");
 
     expect(screen.getByTestId("pending-change").textContent).toMatch(
       /refused rather than deleting them/,
@@ -1009,7 +1010,7 @@ describe("changing a set the calendar names", () => {
   it("treats picking what is already chosen as no change at all", async () => {
     twoSeasonSets();
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-1");
+    await selectLoadedOption("Season set", "set-1");
     expect(screen.queryByTestId("pending-change")).toBeNull();
   });
 
@@ -1024,7 +1025,7 @@ describe("changing a set the calendar names", () => {
     patch.mockResolvedValue({});
 
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+    await selectLoadedOption("Season set", "set-2");
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(await screen.findByTestId("change-applied")).toHaveTextContent(
@@ -1038,7 +1039,7 @@ describe("changing a set the calendar names", () => {
     // of the other's pending selection.
     twoSeasonSets();
     renderPage();
-    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+    await selectLoadedOption("Season set", "set-2");
 
     expect(screen.getByLabelText("Holiday set")).toBeDisabled();
     expect(screen.getByLabelText("Season set")).toBeEnabled();

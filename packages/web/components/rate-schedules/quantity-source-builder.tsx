@@ -89,6 +89,23 @@ export function QuantitySourceBuilder({
       .catch(console.error);
   }, [base, periods.length]);
 
+  /*
+   * The period a charge already prices is always among the options —
+   * before the tenant's list arrives, and if it never does because the
+   * fetch failed (which is caught and logged, leaving the list empty
+   * for good).
+   *
+   * A `<select>` whose value names no option renders *blank*, so
+   * opening a saved `tou_period` charge showed "Choose a period…" for a
+   * charge that prices one. The state was right and a save kept the
+   * period; the display was the lie — and a lie an author would act on
+   * by picking again.
+   */
+  const options =
+    peakCode && !periods.some((p) => p.peakCode === peakCode)
+      ? [...periods, { peakCode, label: peakCode }]
+      : periods;
+
   useEffect(() => {
     const assembled: Record<string, unknown> = { base };
     if (base === "premise_attribute") {
@@ -144,9 +161,9 @@ export function QuantitySourceBuilder({
             style={inputStyle}
           >
             <option value="">Choose a period…</option>
-            {periods.map((p) => (
+            {options.map((p) => (
               <option key={p.peakCode} value={p.peakCode}>
-                {p.label} ({p.peakCode})
+                {p.label === p.peakCode ? p.peakCode : `${p.label} (${p.peakCode})`}
               </option>
             ))}
           </select>

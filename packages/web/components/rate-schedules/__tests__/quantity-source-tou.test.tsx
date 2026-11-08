@@ -97,7 +97,11 @@ describe("the TOU period source", () => {
     render(<QuantitySourceBuilder value={{ base: "metered" }} onChange={onChange} />);
 
     await userEvent.selectOptions(screen.getByLabelText("Quantity source"), "tou_period");
-    await userEvent.selectOptions(await screen.findByLabelText("TOU period"), "peak");
+    // The select exists on the render that switches the base; its
+    // options arrive with the tenant's period list, so waiting for the
+    // control is not waiting for the thing being selected.
+    await screen.findByRole("option", { name: /On-peak/ });
+    await userEvent.selectOptions(screen.getByLabelText("TOU period"), "peak");
 
     expect(onChange).toHaveBeenLastCalledWith(
       { base: "tou_period", peak_code: "peak" },
@@ -122,5 +126,29 @@ describe("the TOU period source", () => {
       { base: "tou_period", peak_code: "off_peak" },
       true,
     );
+  });
+
+  /*
+   * The display used to race the tenant's period list. A `<select>`
+   * whose value names no option renders *blank*, so a saved charge read
+   * back as "Choose a period…" until the fetch landed — and for good if
+   * it failed, since the error is caught and logged and the list stays
+   * empty. The emitted value was always right; the screen was not, and
+   * an author reading an empty required field picks again.
+   *
+   * It surfaced as a flake: the assertion above passed on an idle
+   * machine, where the fetch resolved inside `findBy`'s first poll, and
+   * failed on a loaded CI runner.
+   */
+  it("shows the period it prices before the tenant's list arrives", () => {
+    get.mockReturnValue(new Promise(() => {}));
+    render(
+      <QuantitySourceBuilder
+        value={{ base: "tou_period", peak_code: "off_peak" }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("TOU period")).toHaveValue("off_peak");
   });
 });
