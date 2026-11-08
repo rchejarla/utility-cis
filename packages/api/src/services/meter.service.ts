@@ -21,7 +21,7 @@ export async function listMeters(utilityId: string, query: MeterQuery) {
 }
 
 export async function getMeter(id: string, utilityId: string) {
-  return prisma.meter.findUniqueOrThrow({
+  const meter = await prisma.meter.findUniqueOrThrow({
     where: { id, utilityId },
     include: {
       premise: true,
@@ -42,6 +42,27 @@ export async function getMeter(id: string, utilityId: string) {
       },
     },
   });
+
+  /*
+   * Does this meter report intervals at all?
+   *
+   * The detail page shows an Intervals tab only when it does, and
+   * **`meter_type` is not the test** — spec 03 and the
+   * `meter_type_smart_removed` migration both record that how a meter
+   * is *read* is not how its usage is *delivered*, and the seeded data
+   * shows it in both directions: an AMR meter with three mapped TOU
+   * registers, and AMI meters reporting no intervals at all.
+   *
+   * One indexed row, `(meter_id, interval_start)`, rather than a count:
+   * the question is whether there is one, and a month of 15-minute
+   * data is 2,976 rows to count for a boolean.
+   */
+  const anInterval = await prisma.meterReadInterval.findFirst({
+    where: { utilityId, meterId: id },
+    select: { meterId: true },
+  });
+
+  return { ...meter, reportsIntervals: anInterval !== null };
 }
 
 export async function createMeter(

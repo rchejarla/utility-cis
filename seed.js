@@ -1181,6 +1181,17 @@ async function main() {
   await p.utilityConfig.create({
     data: {
       utilityId: UID,
+      /*
+       * The tenant's own zone, and Bozeman is Mountain.
+       *
+       * It took the column's `UTC` default until 2026-11-07, while the
+       * seeded TOU calendar was already `America/Denver` — so every
+       * feature that says "local" meant UTC for a Montana utility: a
+       * scheduler set to run at 03:00 fired at 8pm local, and the
+       * meter's interval chart drew a household's evening peak at
+       * midnight. Noticed by looking at that chart.
+       */
+      timezone: "America/Denver",
       settings: {
         billDocuments: { storageIntegration: "dev-files" },
         issuer: {

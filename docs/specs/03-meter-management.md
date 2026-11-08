@@ -34,7 +34,7 @@ Physical device measuring utility consumption at a specific premise.
 | install_date | DATE | Required; date meter was placed in service |
 | removal_date | DATE | Optional; null = currently installed |
 | status | ENUM | `ACTIVE`, `REMOVED`, `DEFECTIVE`, `PENDING_INSTALL` |
-| notes | TEXT | Optional free-text notes |
+| ~~notes~~ | — | **Dropped 2026-11-08.** One note, no author, no date, overwritten by the second — the pattern the Notes tab replaced on 2026-11-02 (below). It outlived the decision on three screens that still wrote to it. |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -132,7 +132,6 @@ All endpoints require JWT authentication with `utility_id` claim.
 | multiplier | No | positive number, default 1.0 |
 | installDate | Yes | ISO date string |
 | status | No | Default ACTIVE |
-| notes | No | free text |
 
 **Update restrictions:** `premiseId` and `meterNumber` cannot be changed via PATCH (`updateMeterSchema` omits both). To move a meter to a different premise, remove it from the current premise (set `removal_date`, `status = REMOVED`) and commission a new meter record at the new premise.
 

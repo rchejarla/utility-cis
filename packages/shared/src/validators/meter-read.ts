@@ -351,6 +351,71 @@ export const readingProgressSchema = z.object({
 
 export type ReadingProgress = z.infer<typeof readingProgressSchema>;
 
+/**
+ * One meter's interval series, as `GET /api/v1/meters/:id/intervals`
+ * sends it.
+ *
+ * **Where the gaps come from matters.** They are
+ * `findCoverageProblems`' output — the same tiling the roll-up refuses
+ * on and the nightly sweep opens exceptions for — so a hole drawn here
+ * is the hole that stops a bill. A screen computing its own would be
+ * worse than no screen.
+ *
+ * Note the rule these response schemas follow, since two of them look
+ * different: **a schema describes the wire**, so timestamps are
+ * strings. A service may hold `Date`s internally; where it builds its
+ * whole response by hand it may adopt the wire type instead and get
+ * the compiler to check what it produces, which `getReadingProgress`
+ * does and this one does not.
+ */
+export const intervalPointSchema = z.object({
+  intervalStart: z.string(),
+  lengthMinutes: z.number().int().positive(),
+  quantity: z.string(),
+  /** actual | estimated | missing | edited — a VARCHAR with a CHECK. */
+  quality: z.string(),
+});
+
+export const meterIntervalSeriesSchema = z.object({
+  meterId: z.string().uuid(),
+  meterNumber: z.string(),
+  uomCode: z.string().nullable(),
+  from: z.string(),
+  to: z.string(),
+  /**
+   * The zone the days are measured in and the series reads in — the
+   * tenant's own. Not UTC, which drew a household's evening peak at
+   * midnight until somebody looked at the chart.
+   */
+  timeZone: z.string(),
+  /** Has this meter ever reported one? A water meter never will. */
+  reportsIntervals: z.boolean(),
+  intervals: z.array(intervalPointSchema),
+  summary: z.object({
+    count: z.number().int().nonnegative(),
+    total: z.string(),
+    byQuality: z.record(z.number().int().nonnegative()),
+    minutesCovered: z.number().int().nonnegative(),
+    minutesInRange: z.number().int().positive(),
+    gaps: z.array(
+      z.object({ startsAt: z.string(), minutes: z.number().int().positive() }),
+    ),
+  }),
+});
+
+export type IntervalPoint = z.infer<typeof intervalPointSchema>;
+export type MeterIntervalSeries = z.infer<typeof meterIntervalSeriesSchema>;
+
+/** Both days or neither; the service defaults to the newest day. */
+export const meterIntervalSeriesQuerySchema = z
+  .object({
+    from: z.string().date().optional(),
+    to: z.string().date().optional(),
+  })
+  .strict();
+
+export type MeterIntervalSeriesQuery = z.infer<typeof meterIntervalSeriesQuerySchema>;
+
 // Bulk import has moved to the generic /api/v1/imports endpoint with
 // kind-aware handlers (see spec 22). The kind handler defines its own
 // per-row Zod-style validation in `parseRow`; there's no longer a

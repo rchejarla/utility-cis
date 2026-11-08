@@ -28,7 +28,6 @@ interface MeterForm extends Record<string, unknown> {
   uomId: string;
   multiplier: string;
   installDate: string;
-  notes: string;
   customFields: Record<string, unknown>;
 }
 
@@ -96,7 +95,6 @@ export default function NewMeterPage() {
         uomId: "",
         multiplier: "1",
         installDate: "",
-        notes: "",
         customFields: {},
       }}
       fields={[
@@ -206,13 +204,6 @@ export default function NewMeterPage() {
             />
           ),
         },
-        {
-          key: "notes",
-          label: "Notes",
-          type: "textarea",
-          placeholder: "Optional notes...",
-          rows: 4,
-        },
         // Tenant-configurable custom fields. Renders nothing when no
         // schema is configured.
         {
@@ -238,7 +229,6 @@ export default function NewMeterPage() {
         };
         if (form.uomId) body.uomId = form.uomId;
         if (form.installDate) body.installDate = form.installDate;
-        if (form.notes) body.notes = form.notes;
         if (form.customFields && Object.keys(form.customFields).length > 0) {
           body.customFields = form.customFields;
         }

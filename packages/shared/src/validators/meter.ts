@@ -55,7 +55,6 @@ export const createMeterSchema = z.object({
   // commissioned with no removal date.
   removalDate: z.string().date().nullable().optional(),
   status: meterStatusEnum.default("ACTIVE"),
-  notes: z.string().optional(),
   // Tenant-configurable custom fields. Validated server-side.
   customFields: z.record(z.unknown()).optional(),
 }).strict();

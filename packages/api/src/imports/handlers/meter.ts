@@ -54,7 +54,6 @@ interface MeterRow {
   status?: MeterStatus;
   dialCount?: number;
   multiplier?: number;
-  notes?: string;
 }
 
 interface BatchData {
@@ -171,13 +170,6 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       example: "1.0",
       aliases: ["^multiplier$", "^factor$"],
     },
-    {
-      name: "notes",
-      label: "Notes",
-      required: false,
-      example: "Sub-meter for irrigation",
-      aliases: ["^notes$", "^comments$"],
-    },
   ],
 
   templateRows: [
@@ -192,7 +184,6 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       status: "ACTIVE",
       dialCount: "5",
       multiplier: "1.0",
-      notes: "",
     },
   ],
 
@@ -302,7 +293,6 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
         status,
         dialCount,
         multiplier,
-        notes: ((raw.notes ?? "").trim()) || undefined,
       },
     };
   },
@@ -490,7 +480,6 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
           status: row.status ?? "ACTIVE",
           dialCount: row.dialCount ?? null,
           multiplier: row.multiplier ?? 1.0,
-          notes: row.notes ?? null,
         },
       });
 
@@ -526,7 +515,6 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
           status: row.status ?? "ACTIVE",
           dialCount: row.dialCount ?? null,
           multiplier: row.multiplier ?? 1.0,
-          notes: row.notes ?? null,
         },
       });
 

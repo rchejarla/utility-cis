@@ -134,8 +134,12 @@ describe("adding a note", () => {
 
   it("keeps every note rather than replacing the last", () =>
     seedAsPlatform(async () => {
-      // The failure mode of a `notes` column on the entity, which is
-      // what `meter.notes` is and why this table exists.
+      /*
+       * The failure mode of a `notes` column on the entity, which is
+       * what `meter.notes` was and why this table exists. That column
+       * was dropped on 2026-11-08, having outlived its replacement by
+       * six days on screens that offered both.
+       */
       await addNote(TENANT_A, "First call.");
       await addNote(TENANT_A, "Second call, owner unavailable.");
       const notes = await listNotes(TENANT_A);
