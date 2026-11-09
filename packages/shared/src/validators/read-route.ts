@@ -21,7 +21,18 @@ export const readRouteInputSchema = z.object({
   origin: z.enum(READ_ROUTE_ORIGINS).default("LOCAL"),
   active: z.boolean().default(true),
 });
+/** The parsed shape: defaults live in the schema alone, so callers parse before calling the service. */
 export type ReadRouteInput = z.infer<typeof readRouteInputSchema>;
+
+/**
+ * What an update may change. `origin` is not here on purpose: it is
+ * decided at creation (LOCAL by hand, EXTERNAL by the importer) and
+ * changing it reassigns who owns the itinerary. Claiming a vendor route
+ * as local is a deliberate operation with its own endpoint and audit
+ * event, not a PATCH field.
+ */
+export const readRouteUpdateSchema = readRouteInputSchema.omit({ origin: true }).partial();
+export type ReadRouteUpdate = z.infer<typeof readRouteUpdateSchema>;
 
 export const readRouteSchema = z.object({
   id: z.string().uuid(),
@@ -41,7 +52,8 @@ export const readRouteSummarySchema = readRouteSchema.extend({
 });
 export type ReadRouteSummary = z.infer<typeof readRouteSummarySchema>;
 
-export const readRouteQuerySchema = baseListQuerySchema.extend({
+/** Ordered by code, always: `sort` and `order` are omitted so the contract says what it does. */
+export const readRouteQuerySchema = baseListQuerySchema.omit({ sort: true, order: true }).extend({
   billingCycleId: z.string().uuid().optional(),
   origin: z.enum(READ_ROUTE_ORIGINS).optional(),
   active: queryBoolean.optional(),
