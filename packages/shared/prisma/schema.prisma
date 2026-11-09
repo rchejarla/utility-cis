@@ -86,6 +86,9 @@ model Utility {
   measureTypeDefs        MeasureTypeDef[]
   meterEvents            MeterEvent[]
   meterDataExceptions    MeterDataException[]
+  readRoutes             ReadRoute[]
+  readRouteStops         ReadRouteStop[]
+  readSkips              ReadSkip[]
   meterReads             MeterRead[]
   meterReadIntervals     MeterReadInterval[]
   meterRegisters         MeterRegister[]
@@ -446,6 +449,7 @@ model Premise {
 
   // Relations
   meters            Meter[]
+  readRouteStops    ReadRouteStop[]
   servicePoints     ServicePoint[]
   owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   containers        Container[]
@@ -502,6 +506,7 @@ model Meter {
   meterReads             MeterRead[]
   meterReadIntervals     MeterReadInterval[]
   dataExceptions         MeterDataException[]
+  readSkips              ReadSkip[]
   servicePointMeters     ServicePointMeter[]
   registers              MeterRegister[]
   events                 MeterEvent[]
@@ -837,6 +842,7 @@ model BillingCycle {
   accounts       Account[]
   bills          Bill[]
   billingRuns    BillingRun[]
+  readRoutes     ReadRoute[]
 
   @@unique([utilityId, cycleCode])
   @@index([utilityId, active])
@@ -1017,6 +1023,12 @@ model MeterRead {
   readerId           String?    @map("reader_id") @db.Uuid
   billedAt           DateTime?  @map("billed_at") @db.Timestamptz
   importBatchId      String?    @map("import_batch_id") @db.Uuid
+  /// The route this read was taken on (spec 08, read routes). NULL for a
+  /// read taken off-route, and for every read before routes existed.
+  /// Single-column here, composite in the migration. **No unique
+  /// constraint may ever name it**: the hypertable needs `read_datetime`
+  /// in every one.
+  routeId            String?    @map("route_id") @db.Uuid
   correctsReadId     String?    @map("corrects_read_id") @db.Uuid
   createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
   updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz
@@ -1026,6 +1038,7 @@ model MeterRead {
   serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Restrict)
   register         MeterRegister?   @relation(fields: [registerId], references: [id], onDelete: SetNull)
   uom              UnitOfMeasure    @relation(fields: [uomId], references: [id], onDelete: Restrict)
+  route            ReadRoute?       @relation(fields: [routeId], references: [id], onDelete: SetNull)
 
   // Composite PK: TimescaleDB hypertables require the partition column
   // (readDatetime) to appear in every unique constraint, including the PK.
@@ -1038,6 +1051,7 @@ model MeterRead {
   @@index([registerId])
   @@index([utilityId, importBatchId])
   @@index([utilityId, readEventId])
+  @@index([utilityId, routeId])
   @@map("meter_read")
 }
 
@@ -1143,6 +1157,92 @@ model MeterDataException {
 
   @@index([utilityId, status, windowStart], map: "meter_data_exception_open_by_window")
   @@map("meter_data_exception")
+}
+
+/// An ordered walk a reader makes for one billing cycle (spec 08, read
+/// routes). `origin` says whose it is: LOCAL is ours to edit, EXTERNAL
+/// mirrors a reading system's route and is not. A CHECK holds the two.
+///
+/// Every key here is single-column in this file and composite in the
+/// migration — `(utility_id, billing_cycle_id) -> billing_cycle
+/// (utility_id, id)` — because Prisma cannot express a composite
+/// `SetNull` key whose `utility_id` is non-nullable.
+model ReadRoute {
+  id             String   @id @default(uuid()) @db.Uuid
+  utilityId      String   @map("utility_id") @db.Uuid
+  utility        Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  code           String   @db.VarChar(50)
+  name           String   @db.VarChar(255)
+  billingCycleId String   @map("billing_cycle_id") @db.Uuid
+  /// LOCAL | EXTERNAL, by CHECK.
+  origin         String   @default("LOCAL") @db.VarChar(20)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  billingCycle BillingCycle    @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
+  stops        ReadRouteStop[]
+  skips        ReadSkip[]
+  meterReads   MeterRead[]
+
+  @@unique([utilityId, code])
+  @@unique([utilityId, id], map: "read_route_utility_id_id_key")
+  @@index([utilityId, billingCycleId])
+  @@map("read_route")
+}
+
+/// One premise on a route, at one position. A stop is a premise because
+/// a reader walks to a building, not a device; the meters there come
+/// from the service-point chain. Unique on sequence and on premise per
+/// route.
+model ReadRouteStop {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String   @map("utility_id") @db.Uuid
+  utility     Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  readRouteId String   @map("read_route_id") @db.Uuid
+  premiseId   String   @map("premise_id") @db.Uuid
+  sequence    Int
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  /// Single-column here, composite in the migration, as on `ReadRoute`.
+  readRoute ReadRoute @relation(fields: [readRouteId], references: [id], onDelete: Cascade)
+  premise   Premise   @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+
+  @@unique([utilityId, readRouteId, sequence], map: "read_route_stop_sequence_key")
+  @@unique([utilityId, readRouteId, premiseId], map: "read_route_stop_premise_key")
+  @@map("read_route_stop")
+}
+
+/// A meter a reader could not read on a date, and why. Keyed on the
+/// meter because what could not be read is a device: one meter at a
+/// premise can be behind a locked gate while its neighbour reads.
+///
+/// One *open* skip per meter per day, by a **partial** unique index
+/// (`read_skip_one_open_per_meter_day`, `WHERE resolved_at IS NULL`)
+/// that exists only in the migration — Prisma cannot express it, so
+/// `migrate dev` would propose dropping it. A resolved skip stays as
+/// history beside a new one.
+model ReadSkip {
+  id          String    @id @default(uuid()) @db.Uuid
+  utilityId   String    @map("utility_id") @db.Uuid
+  utility     Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  meterId     String    @map("meter_id") @db.Uuid
+  readRouteId String?   @map("read_route_id") @db.Uuid
+  readDate    DateTime  @map("read_date") @db.Date
+  /// LOCKED_GATE | DOG | BURIED | UNREADABLE | OBSTRUCTED |
+  /// APPEARS_VACANT | NO_METER_FOUND, by CHECK.
+  skipReason  String    @map("skip_reason") @db.VarChar(50)
+  notes       String?   @db.Text
+  readerId    String?   @map("reader_id") @db.Uuid
+  resolvedAt  DateTime? @map("resolved_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  /// Single-column here, composite in the migration, as on `ReadRoute`.
+  meter     Meter      @relation(fields: [meterId], references: [id], onDelete: Cascade)
+  readRoute ReadRoute? @relation(fields: [readRouteId], references: [id], onDelete: SetNull)
+
+  @@index([utilityId, readRouteId, readDate])
+  @@map("read_skip")
 }
 
 model AuditLog {
