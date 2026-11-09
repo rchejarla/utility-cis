@@ -247,6 +247,13 @@ export const meterReadingProgressQuerySchema = z
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(500).default(50),
     asOf: z.string().date().optional(),
+    /**
+     * Narrow the answer to one read route (read routes design §5.9). The
+     * route must belong to `billingCycleId`: a route is worked inside one
+     * cycle's window, so asking for another cycle's route is a mistake to
+     * refuse rather than answer.
+     */
+    readRouteId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -326,6 +333,14 @@ export const outstandingReadSchema = z.object({
   premise: z.string().nullable(),
   /** Null when the meter has never been read at all. */
   lastReadDate: z.string().nullable(),
+  /**
+   * Present on every row, null when the answer was not asked per route:
+   * the cycle-wide answer does not say which route a meter is on, and
+   * guessing would put a code on the screen that the sheet may not carry.
+   */
+  routeCode: z.string().nullable(),
+  /** Why a reader could not read it, from its open skip. Null when none is open. */
+  skipReason: z.string().nullable(),
 });
 
 export type OutstandingRead = z.infer<typeof outstandingReadSchema>;

@@ -71,6 +71,9 @@ async function service(opts: {
   status?: "PENDING" | "ACTIVE" | "FINAL" | "CLOSED";
   endDate?: Date | null;
   removedDate?: Date | null;
+  /** Default to the fixture's premise and account. */
+  premiseId?: string;
+  accountId?: string;
 }): Promise<string> {
   const fix = opts.fix ?? fixA;
   const utilityId = opts.utilityId ?? fix.utilityId;
@@ -80,7 +83,7 @@ async function service(opts: {
       data: {
         utilityId,
         agreementNumber: opts.agreementNumber,
-        accountId: fix.accountId,
+        accountId: opts.accountId ?? fix.accountId,
         commodityId: fix.commodityId,
         startDate: new Date("2025-01-01"),
         endDate: opts.endDate ?? null,
@@ -92,7 +95,7 @@ async function service(opts: {
       data: {
         utilityId,
         serviceAgreementId: agreement.id,
-        premiseId: fix.premiseId,
+        premiseId: opts.premiseId ?? fix.premiseId,
         startDate: new Date("2025-01-01"),
       },
       select: { id: true },
@@ -110,7 +113,12 @@ async function service(opts: {
   });
 }
 
-async function seedRead(meterId: string, saId: string, readDate: string): Promise<void> {
+async function seedRead(
+  meterId: string,
+  saId: string,
+  readDate: string,
+  over: { routeId?: string; registerId?: string } = {},
+): Promise<void> {
   await seedAsPlatform(async () => {
     await prismaImports.prisma.meterRead.create({
       data: {
@@ -120,6 +128,8 @@ async function seedRead(meterId: string, saId: string, readDate: string): Promis
         uomId: fixA.uomId,
         readDate: new Date(readDate),
         readDatetime: new Date(readDate),
+        routeId: over.routeId ?? null,
+        registerId: over.registerId ?? null,
         reading: 100,
         priorReading: 50,
         consumption: 50,
@@ -299,5 +309,264 @@ describe("what a cycle is not expected to read", () => {
       statusCode: 404,
       code: "CYCLE_NOT_FOUND",
     });
+  });
+});
+
+/*
+ * ─── Per route (read routes design §5.9) ─────────────────────────────
+ *
+ * Window for AS_OF is Jan 11 – Feb 10, so the previous one, which an
+ * EXTERNAL route's membership is learned from, is Dec 11 – Jan 10.
+ */
+
+/** A second premise in the fixture's tenant. */
+async function extraPremise(label: string): Promise<string> {
+  return seedAsPlatform(async () => {
+    const p = await prismaImports.prisma.premise.create({
+      data: {
+        utilityId: TENANT_A,
+        addressLine1: `9 ${label} Road`,
+        city: "Testville",
+        state: "TS",
+        zip: "00000",
+        premiseType: "RESIDENTIAL",
+        commodityIds: [fixA.commodityId],
+        status: "ACTIVE",
+      },
+    });
+    return p.id;
+  });
+}
+
+async function route(opts: {
+  code: string;
+  origin?: "LOCAL" | "EXTERNAL";
+  stops?: string[];
+}): Promise<string> {
+  return seedAsPlatform(async () => {
+    const r = await prismaImports.prisma.readRoute.create({
+      data: {
+        utilityId: TENANT_A,
+        code: opts.code,
+        name: opts.code,
+        billingCycleId: fixA.billingCycleId,
+        origin: opts.origin ?? "LOCAL",
+      },
+    });
+    for (const [i, premiseId] of (opts.stops ?? []).entries()) {
+      await prismaImports.prisma.readRouteStop.create({
+        data: { utilityId: TENANT_A, readRouteId: r.id, premiseId, sequence: i + 1 },
+      });
+    }
+    return r.id;
+  });
+}
+
+async function skip(meterId: string, reason: string, resolved = false): Promise<void> {
+  await seedAsPlatform(async () => {
+    await prismaImports.prisma.readSkip.create({
+      data: {
+        utilityId: TENANT_A,
+        meterId,
+        readDate: new Date("2026-02-05"),
+        skipReason: reason,
+        resolvedAt: resolved ? new Date("2026-02-06T00:00:00Z") : null,
+      },
+    });
+  });
+}
+
+describe("progress for one LOCAL route", () => {
+  it("counts only the stops on the named route, not the whole cycle", async () => {
+    /*
+     * Fails if the stop scoping (`readableRowsForPremises(..., stopPremiseIds, ...)`)
+     * is deleted: the off-route service on the same cycle would count.
+     */
+    const offRoute = await extraPremise("Off");
+    await service({ agreementNumber: "SA-ON", meterId: fixA.meterId });
+    await service({
+      agreementNumber: "SA-OFF",
+      meterId: fixA.meterId2,
+      premiseId: offRoute,
+    });
+    const r = await route({ code: "R-ON", stops: [fixA.premiseId] });
+
+    const perRoute = await progress({ readRouteId: r });
+    const cycleWide = await progress();
+
+    expect(perRoute).toMatchObject({ expected: 1, read: 0, outstanding: 1 });
+    expect(perRoute.data.map((d) => d.agreementNumber)).toEqual(["SA-ON"]);
+    expect(perRoute.data[0]!.routeCode).toBe("R-ON");
+    // The control: without the filter the same data is two.
+    expect(cycleWide.expected).toBe(2);
+  });
+
+  it("ignores the account's cycle when the route names stops", async () => {
+    /*
+     * §5.1: the sheet prints every stop, so the count must match the
+     * sheet. Fails if the `account: { billingCycleId }` clause is kept on
+     * the route branch: this account is on another cycle.
+     */
+    const stop = await extraPremise("OtherCycle");
+    const otherAccountId = await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const cycle2 = await prisma.billingCycle.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Cycle-other",
+          cycleCode: "C-OTHER",
+          readDayOfMonth: 1,
+          billDayOfMonth: 20,
+          frequency: "MONTHLY",
+        },
+      });
+      const a = await prisma.account.create({
+        data: {
+          utilityId: TENANT_A,
+          accountNumber: "ACCT-OTHER",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: cycle2.id,
+          depositAmount: 0,
+        },
+      });
+      return a.id;
+    });
+    await service({
+      agreementNumber: "SA-ELSEWHERE",
+      meterId: fixA.meterId,
+      premiseId: stop,
+      accountId: otherAccountId,
+    });
+    const r = await route({ code: "R-X", stops: [stop] });
+
+    expect((await progress({ readRouteId: r })).expected).toBe(1);
+    expect((await progress()).expected).toBe(0);
+  });
+
+  it("counts a register as a row, so the number matches the sheet", async () => {
+    /*
+     * Trap 4: per-route is register-grained (readableRowsForPremises),
+     * the cycle-wide path assignment-grained. Fails if the route branch
+     * counts assignments instead.
+     */
+    const sa = await service({ agreementNumber: "SA-REG", meterId: fixA.meterId });
+    const regs = await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const measureType = await prisma.measureTypeDef.findFirstOrThrow({
+        where: { OR: [{ utilityId: TENANT_A }, { utilityId: null }] },
+        orderBy: { id: "asc" },
+      });
+      const ids: string[] = [];
+      for (const n of [1, 2]) {
+        const reg = await prisma.meterRegister.create({
+          data: {
+            utilityId: TENANT_A,
+            meterId: fixA.meterId,
+            registerNumber: n,
+            uomId: fixA.uomId,
+            measureTypeId: measureType.id,
+            isActive: true,
+          },
+        });
+        ids.push(reg.id);
+      }
+      return ids;
+    });
+    const r = await route({ code: "R-REG", stops: [fixA.premiseId] });
+    await seedRead(fixA.meterId, sa, "2026-02-08", { registerId: regs[0]! });
+
+    const p = await progress({ readRouteId: r });
+
+    expect(p).toMatchObject({ expected: 2, read: 1, outstanding: 1 });
+    expect((await progress()).expected).toBe(1);
+  });
+
+  it("refuses a route that does not exist for this cycle", async () => {
+    await expect(
+      progress({ readRouteId: "00000000-0000-4000-8000-0000000000aa" }),
+    ).rejects.toMatchObject({ statusCode: 404, code: "ROUTE_NOT_FOUND" });
+  });
+});
+
+describe("progress for an EXTERNAL route", () => {
+  it("expects the meters whose latest read in the previous window carried the route", async () => {
+    /*
+     * §5.4: membership is learned. m1 read on the route last window: in.
+     * m2 read on it only before last window (Dec 1): out - fails if the
+     * previous-window bound is deleted. m3 read on it, then moved to
+     * another route later in the same window: out - fails if "latest read
+     * carries it" is weakened to "any read carried it".
+     */
+    const sa1 = await service({ agreementNumber: "SA-M1", meterId: fixA.meterId });
+    const sa2 = await service({ agreementNumber: "SA-M2", meterId: fixA.meterId2 });
+    const sa3 = await service({ agreementNumber: "SA-M3", meterId: fixA.meterId3 });
+    const ext = await route({ code: "VENDOR-7", origin: "EXTERNAL" });
+    const other = await route({ code: "VENDOR-8", origin: "EXTERNAL" });
+    await seedRead(fixA.meterId, sa1, "2026-01-05", { routeId: ext });
+    await seedRead(fixA.meterId2, sa2, "2025-12-01", { routeId: ext });
+    await seedRead(fixA.meterId3, sa3, "2026-01-03", { routeId: ext });
+    await seedRead(fixA.meterId3, sa3, "2026-01-09", { routeId: other });
+
+    const p = await progress({ readRouteId: ext });
+
+    expect(p).toMatchObject({ expected: 1, read: 0, outstanding: 1 });
+    expect(p.data.map((d) => d.meterId)).toEqual([fixA.meterId]);
+    expect(p.data[0]!.routeCode).toBe("VENDOR-7");
+
+    // And it is read once the vendor's file lands inside this window.
+    await seedRead(fixA.meterId, sa1, "2026-02-08", { routeId: ext });
+    expect(await progress({ readRouteId: ext })).toMatchObject({
+      expected: 1,
+      read: 1,
+      outstanding: 0,
+    });
+  });
+
+  it("reports received-only for a route with no prior reads", async () => {
+    /*
+     * A first-ever route has nothing to learn from. The read already
+     * received on it this window is deliberately not an expectation
+     * (fails if expected were derived from the current window).
+     */
+    const sa = await service({ agreementNumber: "SA-NEW", meterId: fixA.meterId });
+    const ext = await route({ code: "VENDOR-NEW", origin: "EXTERNAL" });
+    await seedRead(fixA.meterId, sa, "2026-02-08", { routeId: ext });
+
+    expect(await progress({ readRouteId: ext })).toMatchObject({
+      expected: 0,
+      read: 0,
+      outstanding: 0,
+      data: [],
+    });
+  });
+});
+
+describe("why an outstanding row is outstanding", () => {
+  it("names the open skip's reason, and nothing for a resolved or absent one", async () => {
+    /*
+     * Fails if the skip lookup is deleted, or if it stops filtering on
+     * `resolvedAt: null` (the resolved one on meter2 would name a reason).
+     */
+    await service({ agreementNumber: "SA-S1", meterId: fixA.meterId });
+    await service({ agreementNumber: "SA-S2", meterId: fixA.meterId2 });
+    await service({ agreementNumber: "SA-S3", meterId: fixA.meterId3 });
+    await skip(fixA.meterId, "LOCKED_GATE");
+    await skip(fixA.meterId2, "DOG", true);
+    const r = await route({ code: "R-SK", stops: [fixA.premiseId] });
+
+    const byRoute = await progress({ readRouteId: r });
+    const reason = (p: typeof byRoute, n: string) =>
+      p.data.find((d) => d.agreementNumber === n)!.skipReason;
+
+    expect(reason(byRoute, "SA-S1")).toBe("LOCKED_GATE");
+    expect(reason(byRoute, "SA-S2")).toBeNull();
+    expect(reason(byRoute, "SA-S3")).toBeNull();
+    // The cycle-wide path states the same fact, and no route code.
+    const cycleWide = await progress();
+    expect(cycleWide.data.find((d) => d.agreementNumber === "SA-S1")!.skipReason).toBe(
+      "LOCKED_GATE",
+    );
+    expect(cycleWide.data.every((d) => d.routeCode === null)).toBe(true);
   });
 });

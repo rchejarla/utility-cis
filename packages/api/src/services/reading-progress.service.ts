@@ -6,6 +6,7 @@ import type {
 import { prisma } from "../lib/prisma.js";
 import { computeBillPeriod } from "./bill.service.js";
 import { agreementInWindow } from "./billing-run/window.js";
+import { readableRowsForPremises } from "./read-route/readable-rows.js";
 
 /**
  * Which meters a cycle still has to read before it can bill (spec 08).
@@ -30,6 +31,22 @@ import { agreementInWindow } from "./billing-run/window.js";
  * asking only about reads would report every AMI meter as outstanding —
  * a list of hundreds that needed no action, which is how a readiness
  * screen teaches people to ignore it.
+ *
+ * **One function, one branch on what the route is** (read routes design
+ * §5.9). Without `readRouteId` the expected set is the cycle's own: the
+ * assignments on agreements whose account is on the cycle, counted per
+ * assignment, in the database. With one, a reading week is being worked
+ * route by route, and the only thing that changes is *which meters are
+ * expected* - the window, the `agreementInWindow` filter, what counts as
+ * read, the last read and the skip reason are the same code. There is
+ * deliberately no second implementation: the one that mirrors the run
+ * stays the only one.
+ *
+ * The two expected sets differ in grain, and that is decided rather than
+ * accidental. A LOCAL route's is **per register**, from the same
+ * predicate the printed sheet uses (`readableRowsForPremises`), so the
+ * route's number cannot disagree with the paper in the reader's hand.
+ * The cycle-wide one stays per assignment. They are not made to agree.
  */
 
 /*
@@ -79,7 +96,7 @@ export async function getReadingProgress(
    *
    * It was a copy of the executor's literal until 2026-11-08, and
    * comparing the two found that the executor and the planner disagreed
-   * — an agreement that ended mid-window was checked for configuration
+   * - an agreement that ended mid-window was checked for configuration
    * faults and then never billed. That is fixed at the source; the note
    * is kept because this is where it was found, and because the reason
    * for sharing is that a copy drifted once already.
@@ -88,54 +105,89 @@ export async function getReadingProgress(
    * service with a meter assigned would be attempted. It rarely has
    * one, which is why it has never shown.
    */
-  const agreement = {
-    account: { billingCycleId: cycle.id },
-    ...agreementInWindow(window),
-  };
+  const inWindow = agreementInWindow(window);
 
-  /** An open assignment of a meter to a service point. */
-  const expectedWhere = {
-    utilityId,
-    removedDate: null,
-    servicePoint: { serviceAgreement: agreement },
-  };
+  const route = query.readRouteId
+    ? await prisma.readRoute.findFirst({
+        // On this cycle too: a route is worked inside one cycle's window.
+        where: { id: query.readRouteId, utilityId, billingCycleId: cycle.id },
+        select: { id: true, code: true, origin: true },
+      })
+    : null;
+  if (query.readRouteId && !route) {
+    throw Object.assign(new Error(`Read route ${query.readRouteId} not found on this cycle`), {
+      statusCode: 404,
+      code: "ROUTE_NOT_FOUND",
+    });
+  }
 
-  const outstandingWhere = {
-    ...expectedWhere,
-    meter: {
-      meterReads: { none: { readDate: { gte: windowStart, lte: windowEnd } } },
-      meterReadIntervals: {
-        none: { intervalStart: { gte: windowStart, lt: intervalEnd } },
+  let expected: number;
+  let outstanding: number;
+  let page: Candidate[];
+
+  if (!route) {
+    /** An open assignment of a meter to a service point. */
+    const expectedWhere = {
+      utilityId,
+      removedDate: null,
+      servicePoint: { serviceAgreement: { account: { billingCycleId: cycle.id }, ...inWindow } },
+    };
+
+    const outstandingWhere = {
+      ...expectedWhere,
+      meter: {
+        meterReads: { none: { readDate: { gte: windowStart, lte: windowEnd } } },
+        meterReadIntervals: {
+          none: { intervalStart: { gte: windowStart, lt: intervalEnd } },
+        },
       },
-    },
-  };
+    };
 
-  const [expected, outstanding] = await Promise.all([
-    prisma.servicePointMeter.count({ where: expectedWhere }),
-    prisma.servicePointMeter.count({ where: outstandingWhere }),
-  ]);
+    [expected, outstanding] = await Promise.all([
+      prisma.servicePointMeter.count({ where: expectedWhere }),
+      prisma.servicePointMeter.count({ where: outstandingWhere }),
+    ]);
 
-  const rows = await prisma.servicePointMeter.findMany({
-    where: outstandingWhere,
-    orderBy: [{ meter: { meterNumber: "asc" } }],
-    skip: (query.page - 1) * query.limit,
-    take: query.limit,
-    select: {
-      meterId: true,
-      meter: { select: { meterNumber: true } },
-      servicePoint: {
-        select: {
-          premise: { select: { addressLine1: true, city: true } },
-          serviceAgreement: {
-            select: {
-              agreementNumber: true,
-              account: { select: { accountNumber: true } },
+    const rows = await prisma.servicePointMeter.findMany({
+      where: outstandingWhere,
+      orderBy: [{ meter: { meterNumber: "asc" } }],
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+      select: {
+        meterId: true,
+        meter: { select: { meterNumber: true } },
+        servicePoint: {
+          select: {
+            premise: { select: { addressLine1: true, city: true } },
+            serviceAgreement: {
+              select: {
+                agreementNumber: true,
+                account: { select: { accountNumber: true } },
+              },
             },
           },
         },
       },
-    },
-  });
+    });
+    page = rows.map((r) => ({
+      meterId: r.meterId,
+      meterNumber: r.meter.meterNumber,
+      agreementNumber: r.servicePoint?.serviceAgreement?.agreementNumber ?? "—",
+      accountNumber: r.servicePoint?.serviceAgreement?.account?.accountNumber ?? "—",
+      premise: r.servicePoint?.premise
+        ? `${r.servicePoint.premise.addressLine1}, ${r.servicePoint.premise.city}`
+        : null,
+    }));
+  } else {
+    const units =
+      route.origin === "EXTERNAL"
+        ? await learnedUnits(utilityId, route.id, cycle, window, inWindow)
+        : await stopUnits(utilityId, route.id, window, inWindow);
+    const unread = await withoutAReadInWindow(utilityId, units, window.periodStart, windowEnd, intervalEnd);
+    expected = units.length;
+    outstanding = unread.length;
+    page = unread.slice((query.page - 1) * query.limit, query.page * query.limit);
+  }
 
   /*
    * The last read of each meter on this page, in one query rather than
@@ -143,14 +195,37 @@ export async function getReadingProgress(
    * meter never read is a new service, one last read in July is a
    * meter somebody has stopped reaching.
    */
-  const lastReads = rows.length
+  const pageMeterIds = [...new Set(page.map((r) => r.meterId))];
+  const lastReads = pageMeterIds.length
     ? await prisma.meterRead.groupBy({
         by: ["meterId"],
-        where: { utilityId, meterId: { in: rows.map((r) => r.meterId) } },
+        where: { utilityId, meterId: { in: pageMeterIds } },
         _max: { readDate: true },
       })
     : [];
   const lastByMeter = new Map(lastReads.map((g) => [g.meterId, g._max.readDate ?? null]));
+
+  /*
+   * Why a reader came back without a number, from the meter's open skip
+   * in this window. Open means unresolved: a skip heals when the read
+   * arrives, and a resolved one is history, not a reason. Asked of both
+   * paths, because a locked gate is a fact about the meter and not about
+   * which screen is looking; the newest open one wins if there are two.
+   */
+  const skips = pageMeterIds.length
+    ? await prisma.readSkip.findMany({
+        where: {
+          utilityId,
+          meterId: { in: pageMeterIds },
+          resolvedAt: null,
+          readDate: { gte: windowStart, lte: windowEnd },
+        },
+        orderBy: [{ createdAt: "desc" }],
+        select: { meterId: true, skipReason: true },
+      })
+    : [];
+  const skipByMeter = new Map<string, string>();
+  for (const k of skips) if (!skipByMeter.has(k.meterId)) skipByMeter.set(k.meterId, k.skipReason);
 
   return {
     billingCycleId: cycle.id,
@@ -160,15 +235,12 @@ export async function getReadingProgress(
     expected,
     read: expected - outstanding,
     outstanding,
-    data: rows.map((r): OutstandingRead => ({
-      meterId: r.meterId,
-      meterNumber: r.meter.meterNumber,
-      agreementNumber: r.servicePoint?.serviceAgreement?.agreementNumber ?? "—",
-      accountNumber: r.servicePoint?.serviceAgreement?.account?.accountNumber ?? "—",
-      premise: r.servicePoint?.premise
-        ? `${r.servicePoint.premise.addressLine1}, ${r.servicePoint.premise.city}`
-        : null,
+    data: page.map((r): OutstandingRead => ({
+      ...r,
       lastReadDate: lastByMeter.get(r.meterId)?.toISOString() ?? null,
+      // The cycle-wide answer does not know a meter's route; see the schema.
+      routeCode: route?.code ?? null,
+      skipReason: skipByMeter.get(r.meterId) ?? null,
     })),
     meta: {
       total: outstanding,
@@ -177,4 +249,213 @@ export async function getReadingProgress(
       pages: Math.ceil(outstanding / query.limit),
     },
   };
+}
+
+/** A row the screen can name, before the last read and skip are attached. */
+type Candidate = Omit<OutstandingRead, "lastReadDate" | "routeCode" | "skipReason">;
+
+/** One thing a route expects a number for: a register, or a bare meter. */
+interface ExpectedUnit extends Candidate {
+  registerId: string | null;
+}
+
+const oneDay = 86_400_000;
+
+function address(p: { addressLine1: string; city: string } | undefined): string | null {
+  return p ? `${p.addressLine1}, ${p.city}` : null;
+}
+
+function byMeterNumber(a: ExpectedUnit, b: ExpectedUnit): number {
+  return a.meterNumber.localeCompare(b.meterNumber);
+}
+
+/**
+ * A LOCAL route expects what its stops produce: the sheet's rows.
+ *
+ * **It does not ask the account's cycle.** The route names its stops, and
+ * the sheet prints every one (§5.1), so a service whose account is on a
+ * different cycle is still a line on the paper and must be one in the
+ * count. The agreement still has to be in the window, by the run's own
+ * filter.
+ *
+ * `onDate` is the window's last day, because that is the day the reads
+ * being waited on are for; `readableRowsForPremises` normalises it to the
+ * UTC midnight its `@db.Date` columns compare against.
+ */
+async function stopUnits(
+  utilityId: string,
+  routeId: string,
+  window: { periodStart: Date; periodEnd: Date },
+  inWindow: ReturnType<typeof agreementInWindow>,
+): Promise<ExpectedUnit[]> {
+  const stops = await prisma.readRouteStop.findMany({
+    where: { utilityId, readRouteId: routeId },
+    select: { premiseId: true },
+  });
+  const rows = await readableRowsForPremises(
+    utilityId,
+    stops.map((s) => s.premiseId),
+    window.periodEnd,
+  );
+  if (rows.length === 0) return [];
+
+  const [agreements, premises] = await Promise.all([
+    prisma.serviceAgreement.findMany({
+      where: { utilityId, id: { in: [...new Set(rows.map((r) => r.serviceAgreementId))] }, ...inWindow },
+      select: { id: true, agreementNumber: true },
+    }),
+    prisma.premise.findMany({
+      where: { utilityId, id: { in: stops.map((s) => s.premiseId) } },
+      select: { id: true, addressLine1: true, city: true },
+    }),
+  ]);
+  const agreementNumber = new Map(agreements.map((a) => [a.id, a.agreementNumber]));
+  const premise = new Map(premises.map((p) => [p.id, p]));
+
+  return rows
+    .filter((r) => agreementNumber.has(r.serviceAgreementId))
+    .map((r) => ({
+      meterId: r.meterId,
+      meterNumber: r.meterNumber,
+      registerId: r.registerId,
+      agreementNumber: agreementNumber.get(r.serviceAgreementId)!,
+      accountNumber: r.accountNumber,
+      premise: address(premise.get(r.premiseId)),
+    }))
+    .sort(byMeterNumber);
+}
+
+/**
+ * An EXTERNAL route has no stops - the vendor owns the walk - so what it
+ * expects is learned (§5.4): the meters whose **most recent read within
+ * the previous window** carried this route.
+ *
+ * **Bounded to the previous window, on purpose.** "Most recent read of
+ * each meter, ever" is a per-meter aggregate over all history of a
+ * hypertable partitioned by `read_datetime`; bounded, it is a
+ * time-partitioned scan that `meter_read_utility_id_route_id_idx` serves.
+ * It is also more right: a meter that moved from route A to route B would
+ * otherwise be expected on both for ever, where per window it lands on
+ * exactly one. The window is bounded on `read_datetime` as well as
+ * `read_date`, because only the former prunes chunks.
+ *
+ * A route with no reads in that window - a first-ever one - expects
+ * nothing, and says so rather than inventing a list.
+ */
+async function learnedUnits(
+  utilityId: string,
+  routeId: string,
+  cycle: { billDayOfMonth: number; frequency: string },
+  window: { periodStart: Date; periodEnd: Date },
+  inWindow: ReturnType<typeof agreementInWindow>,
+): Promise<ExpectedUnit[]> {
+  // The period that closed the day before this one opened.
+  const previous = computeBillPeriod(
+    { createdAt: new Date(0), billingCycle: cycle },
+    new Date(window.periodStart.getTime() - oneDay),
+  );
+  const inPrevious = {
+    readDate: { gte: previous.periodStart, lte: previous.periodEnd },
+    readDatetime: {
+      gte: previous.periodStart,
+      lt: new Date(previous.periodEnd.getTime() + oneDay),
+    },
+  };
+
+  const onRoute = await prisma.meterRead.findMany({
+    where: { utilityId, routeId, ...inPrevious },
+    distinct: ["meterId"],
+    select: { meterId: true },
+  });
+  if (onRoute.length === 0) return [];
+
+  // Most recent first, so the first row seen for a meter is its latest.
+  const latest = await prisma.meterRead.findMany({
+    where: { utilityId, meterId: { in: onRoute.map((r) => r.meterId) }, ...inPrevious },
+    orderBy: [{ readDatetime: "desc" }],
+    select: { meterId: true, routeId: true },
+  });
+  const seen = new Set<string>();
+  const stillOnRoute: string[] = [];
+  for (const r of latest) {
+    if (seen.has(r.meterId)) continue;
+    seen.add(r.meterId);
+    if (r.routeId === routeId) stillOnRoute.push(r.meterId);
+  }
+  if (stillOnRoute.length === 0) return [];
+
+  const assignments = await prisma.servicePointMeter.findMany({
+    where: {
+      utilityId,
+      meterId: { in: stillOnRoute },
+      removedDate: null,
+      servicePoint: { serviceAgreement: inWindow },
+    },
+    orderBy: [{ meter: { meterNumber: "asc" } }],
+    select: {
+      meterId: true,
+      meter: { select: { meterNumber: true } },
+      servicePoint: {
+        select: {
+          premise: { select: { addressLine1: true, city: true } },
+          serviceAgreement: {
+            select: { agreementNumber: true, account: { select: { accountNumber: true } } },
+          },
+        },
+      },
+    },
+  });
+  const byMeter = new Map<string, ExpectedUnit>();
+  for (const a of assignments) {
+    if (byMeter.has(a.meterId)) continue;
+    byMeter.set(a.meterId, {
+      meterId: a.meterId,
+      meterNumber: a.meter.meterNumber,
+      registerId: null,
+      agreementNumber: a.servicePoint?.serviceAgreement?.agreementNumber ?? "—",
+      accountNumber: a.servicePoint?.serviceAgreement?.account?.accountNumber ?? "—",
+      premise: address(a.servicePoint?.premise),
+    });
+  }
+  return [...byMeter.values()];
+}
+
+/**
+ * Of these units, the ones with no read in the window - and no intervals,
+ * for a meter whose reads are rolled up at billing. A unit with a register
+ * is read by a read of that register; a bare meter by any read of it.
+ */
+async function withoutAReadInWindow(
+  utilityId: string,
+  units: ExpectedUnit[],
+  windowStart: Date,
+  windowEnd: Date,
+  intervalEnd: Date,
+): Promise<ExpectedUnit[]> {
+  if (units.length === 0) return [];
+  const meterIds = [...new Set(units.map((u) => u.meterId))];
+  const [reads, intervals] = await Promise.all([
+    prisma.meterRead.findMany({
+      where: { utilityId, meterId: { in: meterIds }, readDate: { gte: windowStart, lte: windowEnd } },
+      select: { meterId: true, registerId: true },
+    }),
+    prisma.meterReadInterval.findMany({
+      where: { utilityId, meterId: { in: meterIds }, intervalStart: { gte: windowStart, lt: intervalEnd } },
+      distinct: ["meterId"],
+      select: { meterId: true },
+    }),
+  ]);
+  const registersRead = new Map<string, Set<string | null>>();
+  for (const r of reads) {
+    const held = registersRead.get(r.meterId) ?? new Set();
+    held.add(r.registerId);
+    registersRead.set(r.meterId, held);
+  }
+  const hasIntervals = new Set(intervals.map((i) => i.meterId));
+  return units.filter((u) => {
+    if (hasIntervals.has(u.meterId)) return false;
+    const held = registersRead.get(u.meterId);
+    if (!held) return true;
+    return u.registerId === null ? false : !held.has(u.registerId);
+  });
 }
