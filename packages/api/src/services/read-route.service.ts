@@ -515,7 +515,5 @@ export async function listUnsequencedPremises(
     }),
     prisma.premise.count({ where }),
   ]);
-  // The column is a plain string with no CHECK; the premise contract (premise.ts) types it as this enum, so this narrows to match it, not to a guarantee.
-  const data = rows.map((r) => ({ ...r, premiseType: r.premiseType as PremiseSummary["premiseType"] }));
-  return paginatedResponse(data, total, { page, limit, sort: "addressLine1", order: "asc" });
+  return paginatedResponse(rows, total, { page, limit, sort: "addressLine1", order: "asc" });
 }

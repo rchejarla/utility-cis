@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { baseListQuerySchema, paginationMetaSchema, queryBoolean } from "../lib/base-list-query";
-import { premiseTypeEnum } from "./premise";
 
 /**
  * A read route: the ordered walk a meter reader makes (spec 08, read
@@ -101,7 +100,11 @@ export const premiseSummarySchema = z.object({
   city: z.string(),
   state: z.string(),
   zip: z.string(),
-  premiseType: premiseTypeEnum,
+  // Deliberately a string, not `premiseTypeEnum`: the column is tenant-extensible
+  // through `premise_type_def`, so a closed enum would reject a valid global type
+  // (MULTI_FAMILY). This differs from premise.ts on purpose; that enum is narrower
+  // than its own data.
+  premiseType: z.string(),
 });
 export type PremiseSummary = z.infer<typeof premiseSummarySchema>;
 
