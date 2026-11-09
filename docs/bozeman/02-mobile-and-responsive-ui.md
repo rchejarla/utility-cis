@@ -156,6 +156,7 @@ This is a new application surface. None of it exists today. The route segment sh
   - **Implementation:** Add the role to the preset-role array in `seed.js` (the only definition — the shared package's `PRESET_ROLES` was unused and has been deleted). Add an `assignedToUserId` filter to meter-read and service-request listings.
 
 - **FR-MOB-T3-002 — Daily route view.** `/field/route` displays today's assigned meter reads as a vertical list grouped by neighborhood / route order. Each item shows: meter number, address, last-read date+value, sequence number. The list works offline (cached at start-of-shift sync).
+  - **Membership and order come from `read_route_stop`** (spec 30), ordered by its `sequence`, not from a uuid array on the assignment. A stop is a premise and may carry more than one row — one per active register, and AMI meters are excluded because they need no visit. Spec 30 §5.12 is the single predicate for which rows appear; this view and the desktop sheet must not compute it twice.
   - **Acceptance:** Tech taps a route item, sees the meter detail screen ready for read entry.
 
 - **FR-MOB-T3-003 — Meter-read entry.** `/field/meter-reads/new?meterId=X` on phone:
@@ -224,20 +225,37 @@ This table fixes which existing or future routes belong to which tier. It's the 
 
 ```prisma
 // Field-tech route assignment (FR-MOB-T3-002)
-model MeterReadRoute {
+//
+// **The original `MeterReadRoute` here was superseded on 2026-11-08.** It
+// carried route membership as `meterIds String[]` with no sequence column,
+// which cannot be joined, indexed, or constrained per tenant, and which keys
+// a route to meters — so a meter swap edited the route. Membership and order
+// now live in `read_route` + `read_route_stop`, premise-keyed and sequenced:
+// see `docs/superpowers/specs/2026-11-08-read-routes-and-reading-system-design.md`
+// §6.2, which becomes spec 30.
+//
+// What survives is the part only this surface needs: who holds a route today
+// and how far through it they are. Spec 30 §6 refused a per-route-per-day run
+// entity for the clipboard phase and named *this* surface as the case that
+// earns it back — a technician syncs a pack at the start of a shift, and "what
+// was on your device this morning" is a fact to record, not one to derive.
+model ReadRouteAssignment {
   id            String   @id @default(uuid()) @db.Uuid
   utilityId     String   @map("utility_id") @db.Uuid
-  routeName     String   @map("route_name") @db.VarChar(100)
+  readRouteId   String   @map("read_route_id") @db.Uuid
   technicianId  String?  @map("technician_id") @db.Uuid
   scheduledDate DateTime @map("scheduled_date") @db.Date
   status        RouteStatus @default(SCHEDULED)
-  meterIds      String[] @map("meter_ids") @db.Uuid
 
   technician CisUser? @relation(fields: [technicianId], references: [id], onDelete: SetNull)
 
+  // `read_route_id` is a composite tenant-scoped key in SQL —
+  // `(utility_id, read_route_id) -> read_route (utility_id, id)` — as every
+  // key between two tenant-scoped tables is.
+  @@unique([utilityId, readRouteId, scheduledDate])
   @@index([utilityId, technicianId, scheduledDate])
   @@index([utilityId, scheduledDate, status])
-  @@map("meter_read_route")
+  @@map("read_route_assignment")
 }
 
 enum RouteStatus { SCHEDULED IN_PROGRESS COMPLETED CANCELLED }
