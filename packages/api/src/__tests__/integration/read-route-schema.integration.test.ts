@@ -198,19 +198,91 @@ describe("read route schema", () => {
     ]);
   });
 
-  it("lets a bulk resequence through when the sequence key is deferred", async () => {
+  /**
+   * Two stops, because one row can never collide with itself.
+   *
+   * What this key's DEFERRABLE buys comes in two strengths, and the
+   * tests below separate them. INITIALLY IMMEDIATE alone moves the check
+   * from each row to the end of the *statement*, which is all a single
+   * bulk `sequence + 1` needs. A multi-statement resequence passes
+   * through duplicates between statements and needs SET CONSTRAINTS
+   * DEFERRED as well.
+   */
+  async function twoStopsOnARoute(): Promise<{ route: string; first: string; second: string }> {
     const route = await insertRoute();
     await insertStop(route, fixA.premiseId, 1);
-    const { prisma } = prismaImports;
-    await seedAsPlatform(async () => {
-      await prisma.$transaction(async (tx) => {
-        await tx.$executeRawUnsafe(`SET CONSTRAINTS "read_route_stop_sequence_key" DEFERRED`);
-        await tx.$executeRawUnsafe(
-          `UPDATE read_route_stop SET sequence = sequence + 1 WHERE read_route_id = $1::uuid AND sequence >= 1`,
-          route,
-        );
-      });
+    const other = await seedAsPlatform(() =>
+      prismaImports.prisma.premise.create({
+        data: {
+          utilityId: TENANT_A,
+          addressLine1: "2 Test Lane",
+          city: "Testville",
+          state: "TS",
+          zip: "00000",
+          premiseType: "RESIDENTIAL",
+          commodityIds: [fixA.commodityId],
+          status: "ACTIVE",
+        },
+        select: { id: true },
+      }).then((p) => p.id),
+    );
+    await insertStop(route, other, 2);
+    return { route, first: fixA.premiseId, second: other };
+  }
+
+  const inTx = (fn: (tx: { $executeRawUnsafe: (q: string, ...v: unknown[]) => Promise<number> }) => Promise<void>) =>
+    seedAsPlatform(async () => {
+      await prismaImports.prisma.$transaction(async (tx) => fn(tx));
     });
+
+  const bump = (route: string) => (tx: { $executeRawUnsafe: (q: string, ...v: unknown[]) => Promise<number> }) =>
+    tx.$executeRawUnsafe(
+      `UPDATE read_route_stop SET sequence = sequence + 1 WHERE read_route_id = $1::uuid AND sequence >= 1`,
+      route,
+    ).then(() => undefined);
+
+  const sequences = (route: string) =>
+    seedAsPlatform(async () =>
+      (await prismaImports.prisma.readRouteStop.findMany({
+        where: { readRouteId: route },
+        orderBy: { sequence: "asc" },
+        select: { sequence: true },
+      })).map((r) => r.sequence),
+    );
+
+  it("lets one bulk UPDATE resequence a route without any SET CONSTRAINTS", async () => {
+    const { route } = await twoStopsOnARoute();
+    await inTx(bump(route));
+    expect(await sequences(route)).toEqual([2, 3]);
+  });
+
+  it("is what makes that possible: the same UPDATE on a plain unique key raises", async () => {
+    // A scratch table with an ordinary, non-deferrable unique, so the
+    // contrast is the constraint's flag and nothing else.
+    await expect(
+      inTx(async (tx) => {
+        await tx.$executeRawUnsafe(`CREATE TEMP TABLE scratch_stop (seq int, CONSTRAINT scratch_stop_seq_key UNIQUE (seq)) ON COMMIT DROP`);
+        await tx.$executeRawUnsafe(`INSERT INTO scratch_stop VALUES (1), (2)`);
+        await tx.$executeRawUnsafe(`UPDATE scratch_stop SET seq = seq + 1`);
+      }),
+    ).rejects.toThrow(/scratch_stop_seq_key/);
+  });
+
+  it("refuses a two-statement resequence unless the key is deferred", async () => {
+    const { route, first, second } = await twoStopsOnARoute();
+    const steps = (tx: { $executeRawUnsafe: (q: string, ...v: unknown[]) => Promise<number> }) =>
+      tx.$executeRawUnsafe(`UPDATE read_route_stop SET sequence = 2 WHERE read_route_id = $1::uuid AND premise_id = $2::uuid`, route, first)
+        .then(() => tx.$executeRawUnsafe(`UPDATE read_route_stop SET sequence = 3 WHERE read_route_id = $1::uuid AND premise_id = $2::uuid`, route, second))
+        .then(() => undefined);
+
+    await expect(inTx(steps)).rejects.toThrow(/read_route_stop_sequence_key/);
+    expect(await sequences(route)).toEqual([1, 2]);
+
+    await inTx(async (tx) => {
+      await tx.$executeRawUnsafe(`SET CONSTRAINTS "read_route_stop_sequence_key" DEFERRED`);
+      await steps(tx);
+    });
+    expect(await sequences(route)).toEqual([2, 3]);
   });
 
   it("deletes a route's stops, and only forgets the route on skips and reads", async () => {
