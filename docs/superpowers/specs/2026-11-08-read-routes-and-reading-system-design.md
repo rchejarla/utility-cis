@@ -326,9 +326,56 @@ has never existed. *(My call.)*
   route column at all, the upsert never fires and the ingest half ships inert
   while looking complete. Until a sample is mapped, Req 76 is **not** claimed as
   covered for routes.
-- **API.** `POST /api/v1/meter-reads` accepts `routeCode`. Same resolution.
-- **Pull or push from a vendor.** apptor-connect, per CLAUDE.md. Out of scope to
-  build here; in scope to not design against.
+- **API, for our own callers.** `POST /api/v1/meter-reads` accepts `routeCode`.
+  Same resolution. This is the existing route behind a user's token.
+
+- **API, for an outside reading system.** Rao's call, 2026-11-09: *"I feel still
+  we need to expose API to populate `meter_read`."* Req 76 says "secure **APIs**
+  or file interfaces", so a file-only answer is a partial one, and the
+  alternative is not cheaper — a vendor pushing to apptor-connect's `events`
+  plane still needs a drain worker doing exactly what this handler does, plus a
+  queue hop. A file import also cannot hand an integrator a per-row error while
+  they are still debugging their column mapping.
+
+  **It is exposed as a batch import, not a single-row write.** A reading system
+  sends a day or a route, not one read. `POST /api/v1/imports/meter-read`
+  creates an `ImportBatch` with `source = API`, runs the rows through the same
+  `meter_read` handler the file path uses, and returns the batch id plus per-row
+  results. That inherits validation, staging, audit, the agreement resolution,
+  consumption computation, per-row rejection reporting and a receipt the caller
+  can re-fetch — none of which a bare row write has. `ImportBatchSource` already
+  admits `API`, so this was anticipated.
+
+  **The real work is machine authentication, and it does not exist.**
+  `middleware/auth.ts` populates exactly one of `request.user` or
+  `request.platformActor`, and both are `CisUser` rows. There is no machine
+  principal, no API key, no service account. Admitting a vendor without one
+  means minting a person's token and handing it over — a shared credential
+  carrying a human's permissions, with that human's name on every audit row.
+  **This endpoint must not ship before a machine credential exists**, and that
+  credential is the design work, not the route.
+
+  Two candidate shapes, and this design does not pick between them:
+
+  1. A per-tenant API credential we issue, stored here as a hash, scoped to one
+     module and permission (`meter_reads:CREATE`), revocable, rate-limited, and
+     identified in `audit_log` as itself rather than as a person.
+  2. OAuth2 client credentials through apptorID, which is available in this
+     environment but **is not currently integrated** — CLAUDE.md states auth is
+     NextAuth.js with JWT.
+
+  **This does not contravene CLAUDE.md's credential rule, and the direction is
+  why.** That rule forbids *this codebase holding a vendor's secret*. A
+  credential **we issue to them, to call us**, is the opposite direction: ours to
+  mint, rotate and revoke, and only its hash is stored. Outbound calls to a
+  vendor's API are unchanged and still go through apptor-connect's `proxy`
+  plane, which holds their secret and never hands it out.
+
+- **Pull or push through apptor-connect.** Still the right rail for a vendor who
+  prefers it, and for SFTP drops: `proxy` when we pull, `events` when they push,
+  `files` for a drop. Out of scope to build here. Offering an API does not
+  replace this — it means a utility's own IT can post a file's worth of reads
+  without a connector being onboarded first.
 
 ### 5.6 Printing the sheet
 
@@ -562,7 +609,7 @@ untouched by this work and stay with the field client.
 | Req | Story | Where it lands |
 |---|---|---|
 | 75 | Meter reading system is the authoritative source | Unchanged (spec 08). This adds route provenance to what arrives. |
-| 76 | Integrate via secure APIs or file interfaces | `routeCode` on the importer and on `POST /meter-reads`; vendor transport via apptor-connect. **Route provenance stays provisional** until a real export is mapped (§9) — the column aliases are a guess. |
+| 76 | Integrate via secure APIs or file interfaces | Both doors (§5.5): the file importer, and `POST /api/v1/imports/meter-read` as a batch import for an outside system. The API half is **gated on a machine credential that does not exist** — it must not ship behind a person's token. Transport via apptor-connect stays available. **Route provenance stays provisional** until a real export is mapped (§9). |
 | 78 | Read cycle scheduling and read route grouping | **This spec.** Grouping: `read_route` + `read_route_stop`. Scheduling: the route's cycle and that cycle's `read_day_of_month`. Replaces the `ServiceAgreement.read_sequence` claim at spec 08 line 429, which was never true. |
 | 96 | Estimation and substitution rules for missing reads | Not built here. `ReadSkip` is its input. |
 
@@ -612,6 +659,27 @@ both are commitments rather than notes:
 
 Building the local half — routes, stops, the sheet, entry, skips — does not
 depend on any of it.
+
+**A second question is now open, and it is also his.**
+
+*Which machine credential does the inbound API use?* Rao decided on 2026-11-09
+that an API to populate `meter_read` must be exposed (§5.5). That is settled;
+how a caller authenticates is not, and it is the only part of this design that
+cannot be settled by a builder, because it commits the product to an auth
+direction well beyond meter reads:
+
+1. **A per-tenant API key we issue** — small, self-contained, hash stored here,
+   scoped to `meter_reads:CREATE`, revocable, and attributable in `audit_log`.
+   It is also a second authentication mechanism to maintain forever.
+2. **OAuth2 client credentials through apptorID** — the right long-term shape if
+   this product is heading there anyway, and it is available in this
+   environment. But it **is not currently integrated** (CLAUDE.md: auth is
+   NextAuth.js with JWT), so this endpoint would be the first caller, and it
+   would carry the cost of that integration.
+
+**Either way the endpoint does not ship behind a `CisUser` token.** That is not
+a preference — it puts a person's name on a vendor's audit rows and gives a
+vendor a person's permissions.
 
 The nine-question builder check is otherwise settled in place; each answer is
 marked in its own section as my call. The ones most worth a second look, because
