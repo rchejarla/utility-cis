@@ -551,6 +551,13 @@ const RESET_TABLES = [
    * than work out that the cascade covers it.
    */
   "meter_data_exception",
+  /*
+   * The read-route tables cascade from `billing_cycle`, `premise` and
+   * `meter`; named for the same reason as `meter_data_exception`.
+   */
+  "read_skip",
+  "read_route_stop",
+  "read_route",
   "meter",
   "account",
   "premise",

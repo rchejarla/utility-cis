@@ -1165,8 +1165,10 @@ model MeterDataException {
 ///
 /// Every key here is single-column in this file and composite in the
 /// migration — `(utility_id, billing_cycle_id) -> billing_cycle
-/// (utility_id, id)` — because Prisma cannot express a composite
-/// `SetNull` key whose `utility_id` is non-nullable.
+/// (utility_id, id)` — because all of the codebase's tenant-scoped keys
+/// live in SQL (some, the `SetNull` ones, cannot be written here at all,
+/// and one convention is easier to keep than two). This particular key
+/// is `Restrict` and could be expressed; it stays in SQL regardless.
 model ReadRoute {
   id             String   @id @default(uuid()) @db.Uuid
   utilityId      String   @map("utility_id") @db.Uuid
@@ -1194,7 +1196,10 @@ model ReadRoute {
 /// One premise on a route, at one position. A stop is a premise because
 /// a reader walks to a building, not a device; the meters there come
 /// from the service-point chain. Unique on sequence and on premise per
-/// route.
+/// route. The sequence key is `DEFERRABLE INITIALLY IMMEDIATE` so a bulk
+/// resequence can pass through duplicates; Prisma cannot express that,
+/// so it lives in the `read_route_stop_sequence_deferrable` migration and
+/// `migrate dev` would propose reverting it.
 model ReadRouteStop {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String   @map("utility_id") @db.Uuid

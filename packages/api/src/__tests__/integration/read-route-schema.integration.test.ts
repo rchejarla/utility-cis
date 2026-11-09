@@ -15,10 +15,11 @@ import {
  * The three tables read routes stand on, and the rules the database
  * itself enforces on them.
  *
- * Every assertion here provokes the constraint and reads its name out of
- * the error, rather than inspecting the catalogue: a CHECK that exists
- * but was written against the wrong column would pass a catalogue read
- * and fail this.
+ * Apart from the first test, which reads the catalogue for RLS, every
+ * assertion here provokes the constraint and reads its name out of the
+ * error: a CHECK that exists but was written against the wrong column
+ * would pass a catalogue read and fail this. The delete test does the
+ * same for the three ON DELETE rules, by deleting.
  */
 
 let pgContainer: StartedPostgreSqlContainer;
@@ -100,8 +101,8 @@ async function insertSkip(over: {
 
 describe("read route schema", () => {
   it("forces RLS on all three tables", async () => {
-    const rows = await seedAsPlatform(() =>
-      prismaImports.prisma.$queryRaw<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }[]>`
+    const rows = await seedAsPlatform(async () =>
+      await prismaImports.prisma.$queryRaw<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }[]>`
         SELECT relname, relrowsecurity, relforcerowsecurity
         FROM pg_class
         WHERE relname IN ('read_route', 'read_route_stop', 'read_skip')
@@ -182,5 +183,94 @@ describe("read route schema", () => {
     await insertSkip({ resolvedAt: "2026-02-02T00:00:00Z" });
     await insertSkip();
     await insertSkip({ resolvedAt: "2026-02-03T00:00:00Z" });
+  });
+
+  it("makes the sequence key deferrable and the premise key not", async () => {
+    const rows = await seedAsPlatform(async () =>
+      await prismaImports.prisma.$queryRaw<{ conname: string; condeferrable: boolean; condeferred: boolean }[]>`
+        SELECT conname, condeferrable, condeferred FROM pg_constraint
+        WHERE conname IN ('read_route_stop_sequence_key', 'read_route_stop_premise_key')
+        ORDER BY conname`,
+    );
+    expect(rows).toEqual([
+      { conname: "read_route_stop_premise_key", condeferrable: false, condeferred: false },
+      { conname: "read_route_stop_sequence_key", condeferrable: true, condeferred: false },
+    ]);
+  });
+
+  it("lets a bulk resequence through when the sequence key is deferred", async () => {
+    const route = await insertRoute();
+    await insertStop(route, fixA.premiseId, 1);
+    const { prisma } = prismaImports;
+    await seedAsPlatform(async () => {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET CONSTRAINTS "read_route_stop_sequence_key" DEFERRED`);
+        await tx.$executeRawUnsafe(
+          `UPDATE read_route_stop SET sequence = sequence + 1 WHERE read_route_id = $1::uuid AND sequence >= 1`,
+          route,
+        );
+      });
+    });
+  });
+
+  it("deletes a route's stops, and only forgets the route on skips and reads", async () => {
+    const { prisma } = prismaImports;
+    const route = await insertRoute();
+    await insertStop(route, fixA.premiseId, 1);
+
+    const { skipId, readId, readDatetime } = await seedAsPlatform(async () => {
+      const skip = await prisma.readSkip.create({
+        data: {
+          utilityId: TENANT_A,
+          meterId: fixA.meterId,
+          readRouteId: route,
+          readDate: new Date("2026-02-01"),
+          skipReason: "DOG",
+        },
+        select: { id: true },
+      });
+      const agreement = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: TENANT_A,
+          agreementNumber: "SA-DEL-1",
+          accountId: fixA.accountId,
+          commodityId: fixA.commodityId,
+          startDate: new Date("2025-01-01"),
+          status: "ACTIVE",
+        },
+        select: { id: true },
+      });
+      const readDatetime = new Date("2026-02-01T12:00:00Z");
+      const read = await prisma.meterRead.create({
+        data: {
+          utilityId: TENANT_A,
+          meterId: fixA.meterId,
+          serviceAgreementId: agreement.id,
+          uomId: fixA.uomId,
+          readDate: new Date("2026-02-01"),
+          readDatetime,
+          reading: 100,
+          priorReading: 50,
+          consumption: 50,
+          readType: "ACTUAL",
+          readSource: "AMR",
+          routeId: route,
+        },
+        select: { id: true },
+      });
+      return { skipId: skip.id, readId: read.id, readDatetime };
+    });
+
+    await seedAsPlatform(async () => {
+      await prisma.$executeRawUnsafe(`DELETE FROM read_route WHERE id = $1::uuid`, route);
+    });
+
+    await seedAsPlatform(async () => {
+      expect(await prisma.readRouteStop.findMany({ where: { readRouteId: route } })).toEqual([]);
+      const skip = await prisma.readSkip.findFirst({ where: { id: skipId } });
+      expect(skip).toMatchObject({ id: skipId, readRouteId: null, utilityId: TENANT_A });
+      const read = await prisma.meterRead.findFirst({ where: { id: readId, readDatetime } });
+      expect(read).toMatchObject({ id: readId, routeId: null, utilityId: TENANT_A });
+    });
   });
 });
