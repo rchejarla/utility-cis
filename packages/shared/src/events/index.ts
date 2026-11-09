@@ -51,6 +51,7 @@ export const EVENT_TYPES = {
   READ_ROUTE_UPDATED: "read_route.updated",
   READ_ROUTE_STOP_CREATED: "read_route_stop.created",
   READ_ROUTE_STOP_DELETED: "read_route_stop.deleted",
+  READ_SKIP_CREATED: "read_skip.created",
   METER_CREATED: "meter.created",
   METER_UPDATED: "meter.updated",
   /**

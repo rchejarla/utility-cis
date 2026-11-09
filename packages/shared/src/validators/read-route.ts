@@ -113,3 +113,21 @@ export const unsequencedPremiseListResponseSchema = z.object({
   meta: paginationMetaSchema,
 });
 export type UnsequencedPremiseListResponse = z.infer<typeof unsequencedPremiseListResponseSchema>;
+
+/**
+ * Why a stop produced no number. The list is the CHECK on
+ * `read_skip.skip_reason` in the `read_routes` migration, in its order;
+ * the database is the arbiter and this is the same list for the callers
+ * that would otherwise find out from a constraint error.
+ */
+export const SKIP_REASONS = [
+  "LOCKED_GATE",
+  "DOG",
+  "BURIED",
+  "UNREADABLE",
+  "OBSTRUCTED",
+  "APPEARS_VACANT",
+  "NO_METER_FOUND",
+] as const;
+export const skipReasonSchema = z.enum(SKIP_REASONS);
+export type SkipReason = z.infer<typeof skipReasonSchema>;

@@ -8,6 +8,7 @@ import {
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { upsertExternalRoute } from "../../services/read-route.service.js";
+import { resolveSkipsForRead } from "../../services/read-skip.service.js";
 import {
   computeConsumption,
   resolveServiceAgreementId,
@@ -360,6 +361,8 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
         readerId: ctx.actorId,
       },
     });
+
+    await resolveSkipsForRead(ctx.tx, ctx.utilityId, meter.id, readDate);
 
     await writeAuditRow(
       ctx.tx,
