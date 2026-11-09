@@ -51,6 +51,7 @@ beforeEach(() =>
 
 const ON = new Date("2026-06-15");
 
+
 const rowsFor = (premiseIds: string[], onDate = ON, tenant = TENANT_A) =>
   tenancy.runAsTenant(tenant, () => rr.readableRowsForPremises(tenant, premiseIds, onDate));
 
@@ -136,6 +137,7 @@ async function makeMeter(
     if (over.registers?.length) {
       const measureType = await prisma.measureTypeDef.findFirstOrThrow({
         where: { OR: [{ utilityId: stop.tenant }, { utilityId: null }] },
+        orderBy: { id: "asc" },
       });
       for (const r of over.registers) {
         await prisma.meterRegister.create({
@@ -159,6 +161,10 @@ describe("which rows a stop produces", () => {
   it("includes a MANUAL meter with an open assignment, as one row with null register", async () => {
     const stop = await makeStop();
     const meter = await makeMeter(stop);
+    const account = await seedAsPlatform(async () =>
+      await prismaImports.prisma.account.findFirstOrThrow({ where: { id: fixA.accountId } }),
+    );
+    expect(account.accountNumber).toMatch(/^ACCT-/);
     const rows = await rowsFor([stop.premiseId]);
     expect(rows).toEqual([
       {
@@ -168,7 +174,7 @@ describe("which rows a stop produces", () => {
         registerId: null,
         registerNumber: null,
         serviceAgreementId: stop.agreementId,
-        accountNumber: expect.any(String),
+        accountNumber: account.accountNumber,
         uomId: fixA.uomId,
       },
     ]);
@@ -222,10 +228,9 @@ describe("which rows a stop produces", () => {
 
   it("is date-scoped: a past date sees an assignment that has since been removed", async () => {
     const stop = await makeStop();
-    const m = await makeMeter(stop, { assign: { removedDate: "2026-03-01" } });
+    await makeMeter(stop, { assign: { removedDate: "2026-03-01" } });
     expect(await rowsFor([stop.premiseId], new Date("2026-02-01"))).toHaveLength(1);
     expect(await rowsFor([stop.premiseId], ON)).toHaveLength(0);
-    expect(m.id).toBeTruthy();
   });
 
   it("reaches the meter through the service point, so an agreement always resolves", async () => {
@@ -278,21 +283,35 @@ describe("which rows a stop produces", () => {
     expect(await rowsFor([])).toEqual([]);
   });
 
-  it("returns a meter once when it moved between service points on the date", async () => {
+  it("keeps the later assignment when a meter moves between stops on the day, whatever else is in the call", async () => {
     // Old assignment ends the day the new one begins; both are open on that day.
-    const a = await makeStop();
-    const m = await makeMeter(a, { assign: { removedDate: "2026-06-15" } });
+    const p1 = await makeStop();
+    const p2 = await makeStop();
+    const m = await makeMeter(p1, { assign: { removedDate: "2026-06-15" } });
     await seedAsPlatform(async () => {
       await prismaImports.prisma.servicePointMeter.create({
         data: {
           utilityId: TENANT_A,
-          servicePointId: a.servicePointId,
+          servicePointId: p2.servicePointId,
           meterId: m.id,
           addedDate: new Date("2026-06-15"),
         },
       });
     });
-    expect(await rowsFor([a.premiseId])).toHaveLength(1);
+    // Created in the other order too would not matter: the later addedDate wins.
+    const both = await rowsFor([p1.premiseId, p2.premiseId]);
+    expect(both).toHaveLength(1);
+    expect(both[0].premiseId).toBe(p2.premiseId);
+    expect(both[0].serviceAgreementId).toBe(p2.agreementId);
+    // The same answer from a call that does not mention the winning stop.
+    expect(await rowsFor([p1.premiseId])).toEqual([]);
+    expect((await rowsFor([p2.premiseId])).map((r) => r.meterId)).toEqual([m.id]);
+  });
+
+  it("treats onDate as a calendar day: a time of day does not drop an assignment removed that day", async () => {
+    const stop = await makeStop();
+    const m = await makeMeter(stop, { assign: { removedDate: "2026-06-15" } });
+    expect((await rowsFor([stop.premiseId], new Date("2026-06-15T15:30:00Z"))).map((r) => r.meterId)).toEqual([m.id]);
   });
 
   it("does not see another tenant's rows", async () => {

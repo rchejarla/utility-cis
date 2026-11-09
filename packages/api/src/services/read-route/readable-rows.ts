@@ -34,12 +34,26 @@ export interface ReadableRow {
  */
 const VISITED_METER_TYPES = ["MANUAL", "AMR"] as const;
 
+/**
+ * `onDate` is a calendar day. The assignment columns are `@db.Date`, which
+ * Prisma returns as UTC midnight, so it is normalised to UTC midnight here:
+ * a caller passing `new Date()` for "today" would otherwise make
+ * `removedDate >= onDate` false for an assignment removed today and drop a
+ * row the sheet must print.
+ */
 export async function readableRowsForPremises(
   utilityId: string,
   premiseIds: string[],
-  onDate: Date,
+  onDateInput: Date,
 ): Promise<ReadableRow[]> {
   if (premiseIds.length === 0) return [];
+  const onDate = new Date(
+    Date.UTC(onDateInput.getUTCFullYear(), onDateInput.getUTCMonth(), onDateInput.getUTCDate()),
+  );
+  const openAt = {
+    addedDate: { lte: onDate },
+    OR: [{ removedDate: null }, { removedDate: { gte: onDate } }],
+  };
 
   /*
    * Reached through ServicePointMeter → ServicePoint, never through
@@ -58,12 +72,12 @@ export async function readableRowsForPremises(
   const assignments = await prisma.servicePointMeter.findMany({
     where: {
       utilityId,
-      addedDate: { lte: onDate },
-      OR: [{ removedDate: null }, { removedDate: { gte: onDate } }],
+      ...openAt,
       servicePoint: { premiseId: { in: premiseIds } },
       meter: { meterType: { in: [...VISITED_METER_TYPES] }, status: "ACTIVE" },
     },
     select: {
+      id: true,
       addedDate: true,
       servicePoint: {
         select: {
@@ -91,19 +105,30 @@ export async function readableRowsForPremises(
   /*
    * A meter reassigned on the day it left its old service point is open
    * at both on that day (removal is inclusive, the next addition starts
-   * the same date). `resolveServiceAgreementId` settles that by taking the
-   * latest `addedDate`; doing the same here keeps the row and the
-   * agreement the submit will resolve identical, and keeps the meter from
-   * appearing twice.
+   * the same date; the database's own range is half-open, so it permits
+   * this). `resolveServiceAgreementId` settles that by taking the latest
+   * `addedDate` across ALL of the meter's open assignments, with no
+   * premise filter, so the winner is decided from the same candidate set
+   * here: the batch query above is narrowed to `premiseIds`, and deciding
+   * from it alone would make a stop's answer depend on what else was in
+   * the call. Constant round trips: one more query for all meters.
    */
-  const latest = new Map<string, (typeof assignments)[number]>();
-  for (const a of assignments) {
-    const held = latest.get(a.meter.id);
-    if (!held || a.addedDate > held.addedDate) latest.set(a.meter.id, a);
+  const meterIds = [...new Set(assignments.map((a) => a.meter.id))];
+  const allOpen = meterIds.length
+    ? await prisma.servicePointMeter.findMany({
+        where: { utilityId, meterId: { in: meterIds }, ...openAt },
+        select: { id: true, meterId: true, addedDate: true },
+      })
+    : [];
+  const winner = new Map<string, { id: string; addedDate: Date }>();
+  for (const o of allOpen) {
+    const held = winner.get(o.meterId);
+    if (!held || o.addedDate > held.addedDate) winner.set(o.meterId, o);
   }
+  const latest = assignments.filter((a) => winner.get(a.meter.id)?.id === a.id);
 
   const rows: ReadableRow[] = [];
-  for (const a of latest.values()) {
+  for (const a of latest) {
     const base = {
       premiseId: a.servicePoint.premiseId,
       meterId: a.meter.id,
