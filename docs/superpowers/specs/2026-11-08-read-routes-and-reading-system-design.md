@@ -244,6 +244,37 @@ Written by: the importer (§5.4), `POST /api/v1/meter-reads`, and route entry.
 Partial unique index on `(utility_id, meter_id, read_date)` — one skip per meter
 per day.
 
+**Why this keys on a meter while a stop keys on a premise.** The grains differ on
+purpose: a stop says **where to go**, a skip says **what was not read**. A skip
+is the absence of a read, so it keys like a read — `meter_read` carries
+`meter_id` and no `premise_id` either, and both consumers (billing's
+`NO_READ_IN_WINDOW` refusal and Req 96's estimation) work per meter. A
+premise-keyed skip would be the only row in the reading path whose grain did not
+match the thing it stands in for. §5.12 is the bridge between the two, and it is
+deliberately one predicate so the sheet, the expected count and the skip set
+cannot disagree.
+
+Two consequences follow, and both are load-bearing:
+
+- **One locked gate writes several rows.** Nobody got through the gate, so every
+  meter at that address is unread, and §5.12 prints per active register — a
+  two-meter stop yields two or three skip rows for one physical fact. That is a
+  **display** problem, solved in the query by grouping on `Meter.premise_id`,
+  not in the schema. Ungrouped, the Outstanding Reads screen shows the same gate
+  three times and reads as three problems.
+- **Resolution is per row, which is the behaviour we want.** When one meter at
+  that premise is read, its skip resolves and the others do not — exactly what
+  happens when somebody gets the front meter but not the one round the back. A
+  premise-grain skip would have to rule on whether that counts as resolved, and
+  either answer is wrong half the time.
+
+**There is deliberately no `register_id`.** An access skip fails every register
+at once. The per-register case already exists and is somebody else's: spec 08's
+Phase 2.5 path, `{ registerId, skipReason }` with `OUT_OF_SERVICE |
+INACCESSIBLE | DEFECTIVE`, recorded as a `MeterEvent`. That one is a device
+fact and belongs there. Different grain for different jobs, which is why the two
+vocabularies do not merge.
+
 **`resolved_at` is written in the read-create path, not by a sweep.** When a read
 is written for a meter that has an open skip inside the same window (§5.11), that
 skip is resolved in the same transaction. A nightly sweep would be a new
