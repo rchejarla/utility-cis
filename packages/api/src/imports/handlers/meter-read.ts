@@ -57,8 +57,10 @@ interface BatchData {
   >;
   /**
    * Routes the file names, by code. Loaded once per batch for the codes
-   * that already exist, and added to by `processRow` the first time it
-   * creates one, so a 500-row file naming a new route inserts it once.
+   * that already exist, and never written to afterwards: a route created
+   * inside a row's transaction vanishes if that row rolls back, so caching
+   * it here would hand a later row a dead id. Repeat rows of a new code
+   * rely on `upsertExternalRoute` being idempotent instead.
    * `origin` is what lets a vendor file be refused a route we maintain.
    */
   routeByCode: Map<string, { id: string; origin: string }>;
@@ -221,12 +223,12 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
     return {
       ok: true,
       row: {
-        routeCode,
         meterNumber,
         readDatetime: parsedDate.toISOString(),
         reading,
         readType,
         readSource,
+        routeCode,
       },
     };
   },
@@ -306,6 +308,8 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
     if (row.routeCode && !knownRoute) {
       // A code nobody has seen: it becomes an EXTERNAL route on the cycle
       // of this row's own account.
+      // Cannot miss: `serviceAgreementId` was resolved for this same tenant
+      // moments ago, so no typed error is needed for this lookup.
       const agreement = await ctx.tx.serviceAgreement.findFirstOrThrow({
         where: { id: serviceAgreementId, utilityId: ctx.utilityId },
         select: { account: { select: { billingCycleId: true } } },
@@ -328,7 +332,6 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
         }
         throw err;
       }
-      batchData.routeByCode.set(row.routeCode, { id: routeId, origin: "EXTERNAL" });
     }
 
     const { priorReading, consumption, exceptionCode } = await computeConsumption(
