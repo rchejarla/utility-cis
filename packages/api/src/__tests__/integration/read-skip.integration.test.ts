@@ -540,3 +540,62 @@ describe("the route a skip was found on", () => {
     expect((await skipRows(meter.id))[0].readRouteId).toBe(route.id);
   });
 });
+
+describe("one call naming meters on different cycles", () => {
+  /*
+   * Cycle A bills on the 10th, cycle B on the 20th, so for a skip on 06-12:
+   *   A's window is 06-11 .. 07-10, B's is 05-21 .. 06-20.
+   * 06-25 is inside A's window only; 05-25 inside B's only. A guard that
+   * judged every meter by one shared window gets one of the two cases below
+   * wrong whichever window it picks.
+   */
+  const SKIP_DAY = "2026-06-12";
+
+  async function twoCycles() {
+    const accountB = await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const cycleB = await prisma.billingCycle.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Cycle-B",
+          cycleCode: "C-B20",
+          readDayOfMonth: 1,
+          billDayOfMonth: 20,
+          frequency: "MONTHLY",
+        },
+      });
+      return prisma.account.create({
+        data: {
+          utilityId: TENANT_A,
+          accountNumber: "ACCT-B20",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: cycleB.id,
+          depositAmount: 0,
+        },
+      });
+    });
+    const stopA = await makeStop(fixA);
+    const stopB = await makeStop({ ...fixA, accountId: accountB.id });
+    return { stopA, stopB, a: await makeMeter(stopA), b: await makeMeter(stopB) };
+  }
+
+  it("refuses when the meter on cycle A has a read in A's window, which is outside B's", async () => {
+    // Breaks if: the already-read check judges every meter by one shared window (B's here).
+    const { stopA, a, b } = await twoCycles();
+    await seedRead(stopA, a.id, "2026-06-25");
+    await expect(record([a.id, b.id], SKIP_DAY)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "METER_ALREADY_READ",
+    });
+    expect(await skipRows(b.id)).toHaveLength(0);
+  });
+
+  it("writes both when each meter's only read is in the other's window", async () => {
+    // Breaks if: the check judges every meter by one shared window (A's here): B's read on 06-25 would refuse.
+    const { stopA, stopB, a, b } = await twoCycles();
+    await seedRead(stopB, b.id, "2026-06-25"); // in A's window, outside B's
+    await seedRead(stopA, a.id, "2026-05-25"); // in B's window, outside A's
+    expect(await record([a.id, b.id], SKIP_DAY)).toBe(2);
+  });
+});
