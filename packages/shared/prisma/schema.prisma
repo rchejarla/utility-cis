@@ -1215,6 +1215,8 @@ model ReadRouteStop {
 
   @@unique([utilityId, readRouteId, sequence], map: "read_route_stop_sequence_key")
   @@unique([utilityId, readRouteId, premiseId], map: "read_route_stop_premise_key")
+  /// One reader visits one address: a premise is a stop on at most one route.
+  @@unique([utilityId, premiseId], map: "read_route_stop_one_route_per_premise_key")
   @@map("read_route_stop")
 }
 

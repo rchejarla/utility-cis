@@ -281,6 +281,28 @@ function toStop(row: StopRow): ReadRouteStop {
 
 type RouteTx = Pick<typeof prisma, "$queryRaw">;
 
+function premiseTaken(onThisRoute: boolean): Error {
+  return httpError(
+    409,
+    "PREMISE_ALREADY_ON_ROUTE",
+    onThisRoute
+      ? "That premise is already a stop on this route"
+      : "That premise is already a stop on a route; remove it there first",
+  );
+}
+
+/**
+ * Whether a P2002 is on one of the two premise keys. `isUniqueViolation`
+ * cannot say: this table has three uniques, and the sequence key is not a
+ * premise problem. The driver adapter reports the constraint under
+ * `meta`, in a shape that has varied, so the whole of it is searched for
+ * the constraint names and the one column only the premise keys carry.
+ */
+function violatesPremiseKey(err: unknown): boolean {
+  const meta = JSON.stringify((err as { meta?: unknown }).meta ?? {});
+  return /premise_key|one_route_per_premise|premise_id/.test(meta);
+}
+
 function requireLocal(origin: string, routeId: string): void {
   if (origin !== "LOCAL") {
     throw httpError(
@@ -291,7 +313,15 @@ function requireLocal(origin: string, routeId: string): void {
   }
 }
 
-/** Lock the tenant's route and refuse it unless it is a LOCAL one. Returns nothing: the lock is the point. */
+/**
+ * Lock the tenant's route and refuse it unless it is a LOCAL one. Returns
+ * nothing: the lock is the point.
+ *
+ * **Must be called with a transaction's client.** `FOR UPDATE` holds
+ * until the transaction ends; handed the bare `prisma` it would autocommit
+ * and release at once, silently removing the serialisation the stop
+ * writes depend on. The type cannot say so (`prisma` satisfies it too).
+ */
 async function lockLocalRoute(tx: RouteTx, utilityId: string, routeId: string): Promise<void> {
   const rows = await tx.$queryRaw<{ origin: string }[]>`
     SELECT origin FROM read_route
@@ -318,18 +348,24 @@ export async function addStop(
 
         const premise = await tx.premise.findFirst({
           where: { id: input.premiseId, utilityId },
-          select: { id: true },
+          select: { id: true, status: true },
         });
         if (!premise) {
           throw httpError(404, "PREMISE_NOT_FOUND", `Premise ${input.premiseId} not found`);
         }
-        const already = await tx.readRouteStop.findFirst({
-          where: { utilityId, readRouteId: routeId, premiseId: input.premiseId },
-          select: { id: true },
-        });
-        if (already) {
-          throw httpError(409, "PREMISE_ALREADY_ON_ROUTE", "That premise is already a stop on this route");
+        // Guarded here, not only in the tray: a direct call must not be
+        // able to put a demolished or pending address on a walk.
+        if (premise.status !== "ACTIVE") {
+          throw httpError(400, "PREMISE_NOT_ACTIVE", `Premise ${input.premiseId} is not active`);
         }
+        // Any route, not just this one: a premise is a stop on at most one
+        // (`read_route_stop_one_route_per_premise_key`). The database is
+        // the arbiter; this names the refusal before it has to.
+        const already = await tx.readRouteStop.findFirst({
+          where: { utilityId, premiseId: input.premiseId },
+          select: { readRouteId: true },
+        });
+        if (already) throw premiseTaken(already.readRouteId === routeId);
 
         let sequence: number;
         if (input.afterSequence === undefined) {
@@ -366,11 +402,11 @@ export async function addStop(
     );
     return toStop(row);
   } catch (err) {
-    // The route lock serialises writers, so this is a backstop for the
-    // premise key only; the sequence key cannot collide under the lock.
-    if (isUniqueViolation(err)) {
-      throw httpError(409, "PREMISE_ALREADY_ON_ROUTE", "That premise is already a stop on this route");
-    }
+    // Backstop for a premise taken between the check and the insert on
+    // another route (the lock only serialises writers to THIS route).
+    // Only the premise keys are named; a sequence-key collision from a
+    // path that skipped the lock is a different fault and is rethrown.
+    if (isUniqueViolation(err) && violatesPremiseKey(err)) throw premiseTaken(false);
     throw err;
   }
 }
@@ -399,6 +435,13 @@ export async function removeStop(
   });
 }
 
+/**
+ * An EXTERNAL route answers `[]`, not an error: "what are its stops" is a
+ * fair question whose honest answer is "none here, the vendor owns that
+ * itinerary", and a screen should show that. `listUnsequencedPremises`
+ * deliberately differs and throws, since offering a tray to add stops to
+ * such a route is meaningless. Do not wire the two as parallel.
+ */
 export async function listStops(utilityId: string, routeId: string): Promise<ReadRouteStop[]> {
   const route = await prisma.readRoute.findFirst({
     where: { id: routeId, utilityId },
@@ -420,7 +463,11 @@ export async function listStops(utilityId: string, routeId: string): Promise<Rea
  * is already on another route would invite the double visit that
  * ordering exists to prevent. `routeId` therefore does not filter the
  * list; it only proves the route exists and is LOCAL, because the tray
- * is meaningless for a route whose stops a vendor decides.
+ * is meaningless for a route whose stops a vendor decides. That is why
+ * this throws on an EXTERNAL route where `listStops` answers `[]`; the
+ * pair differs on purpose.
+ *
+ * Only ACTIVE premises are offered, as `addStop` only accepts them.
  */
 export async function listUnsequencedPremises(
   utilityId: string,
@@ -438,13 +485,14 @@ export async function listUnsequencedPremises(
   const limit = query.limit ?? 50;
   const where = {
     utilityId,
+    status: "ACTIVE" as const,
     readRouteStops: { none: {} },
     ...(query.search
       ? {
           OR: [
             { addressLine1: { contains: query.search, mode: "insensitive" as const } },
             { city: { contains: query.search, mode: "insensitive" as const } },
-            { zip: { contains: query.search } },
+            { zip: { contains: query.search, mode: "insensitive" as const } },
           ],
         }
       : {}),
@@ -467,5 +515,7 @@ export async function listUnsequencedPremises(
     }),
     prisma.premise.count({ where }),
   ]);
-  return paginatedResponse(rows, total, { page, limit, sort: "addressLine1", order: "asc" });
+  // The column is a plain string with no CHECK; the premise contract (premise.ts) types it as this enum, so this narrows to match it, not to a guarantee.
+  const data = rows.map((r) => ({ ...r, premiseType: r.premiseType as PremiseSummary["premiseType"] }));
+  return paginatedResponse(data, total, { page, limit, sort: "addressLine1", order: "asc" });
 }

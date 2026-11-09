@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { baseListQuerySchema, paginationMetaSchema, queryBoolean } from "../lib/base-list-query";
+import { premiseTypeEnum } from "./premise";
 
 /**
  * A read route: the ordered walk a meter reader makes (spec 08, read
@@ -100,7 +101,7 @@ export const premiseSummarySchema = z.object({
   city: z.string(),
   state: z.string(),
   zip: z.string(),
-  premiseType: z.string(),
+  premiseType: premiseTypeEnum,
 });
 export type PremiseSummary = z.infer<typeof premiseSummarySchema>;
 
