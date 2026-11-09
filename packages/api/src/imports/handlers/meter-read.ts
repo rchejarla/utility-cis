@@ -7,6 +7,7 @@ import {
 } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
+import { upsertExternalRoute } from "../../services/read-route.service.js";
 import {
   computeConsumption,
   resolveServiceAgreementId,
@@ -45,6 +46,8 @@ interface MeterReadRow {
   reading: number;
   readType?: ReadType;
   readSource?: ReadSource;
+  /** The reading system's route or book code. Absent when the file has none. */
+  routeCode?: string;
 }
 
 interface BatchData {
@@ -52,6 +55,13 @@ interface BatchData {
     string,
     { id: string; meterNumber: string; status: string; uomId: string }
   >;
+  /**
+   * Routes the file names, by code. Loaded once per batch for the codes
+   * that already exist, and added to by `processRow` the first time it
+   * creates one, so a 500-row file naming a new route inserts it once.
+   * `origin` is what lets a vendor file be refused a route we maintain.
+   */
+  routeByCode: Map<string, { id: string; origin: string }>;
   /** Default readSource derived from the batch's source enum. */
   defaultReadSource: "MANUAL" | "AMR" | "AMI" | "SYSTEM";
 }
@@ -112,6 +122,15 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       example: "MANUAL",
       aliases: ["^readsource$", "^source$", "^channel$"],
     },
+    {
+      name: "routeCode",
+      label: "Route code",
+      required: false,
+      description:
+        "The reading system's route or book code the read was collected on. A code not yet known is added as an external route.",
+      example: "W-04",
+      aliases: ["^route$", "^routecode$", "^book$", "^routeid$"],
+    },
   ],
 
   templateRows: [
@@ -128,6 +147,7 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       reading: "8901.23",
       readType: "ACTUAL",
       readSource: "AMR",
+      routeCode: "W-04",
     },
   ],
 
@@ -196,9 +216,12 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       };
     }
 
+    const routeCode = (raw.routeCode ?? "").trim() || undefined;
+
     return {
       ok: true,
       row: {
+        routeCode,
         meterNumber,
         readDatetime: parsedDate.toISOString(),
         reading,
@@ -217,8 +240,21 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
     const meterByNumber = new Map(
       meters.map((m) => [m.meterNumber, m] as const),
     );
+    const routeCodes = [
+      ...new Set(rows.map((r) => r.routeCode).filter((c): c is string => !!c)),
+    ];
+    const routes = routeCodes.length
+      ? await prisma.readRoute.findMany({
+          where: { utilityId: ctx.utilityId, code: { in: routeCodes } },
+          select: { id: true, code: true, origin: true },
+        })
+      : [];
+    const routeByCode = new Map(
+      routes.map((r) => [r.code, { id: r.id, origin: r.origin }] as const),
+    );
     return {
       meterByNumber,
+      routeByCode,
       defaultReadSource: meterReadDefaultSource(ctx.source),
     };
   },
@@ -240,6 +276,16 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       };
     }
 
+    // A code we maintain ourselves is refused before any other work.
+    const knownRoute = row.routeCode ? batchData.routeByCode.get(row.routeCode) : undefined;
+    if (knownRoute?.origin === "LOCAL") {
+      return {
+        ok: false,
+        code: "ROUTE_IS_LOCAL",
+        message: `Route "${row.routeCode}" is maintained locally — an import cannot write reads onto it`,
+      };
+    }
+
     const readDatetime = new Date(row.readDatetime);
     const readDate = new Date(readDatetime.toISOString().slice(0, 10));
 
@@ -256,6 +302,35 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       return { ok: false, code: "METER_NOT_ASSIGNED", message };
     }
 
+    let routeId: string | null = knownRoute?.id ?? null;
+    if (row.routeCode && !knownRoute) {
+      // A code nobody has seen: it becomes an EXTERNAL route on the cycle
+      // of this row's own account.
+      const agreement = await ctx.tx.serviceAgreement.findFirstOrThrow({
+        where: { id: serviceAgreementId, utilityId: ctx.utilityId },
+        select: { account: { select: { billingCycleId: true } } },
+      });
+      try {
+        routeId = await upsertExternalRoute(
+          ctx.tx,
+          ctx.utilityId,
+          row.routeCode,
+          agreement.account.billingCycleId,
+        );
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code === "ROUTE_IS_LOCAL" || code === "CYCLE_NOT_FOUND") {
+          return {
+            ok: false,
+            code,
+            message: err instanceof Error ? err.message : `Route "${row.routeCode}" refused`,
+          };
+        }
+        throw err;
+      }
+      batchData.routeByCode.set(row.routeCode, { id: routeId, origin: "EXTERNAL" });
+    }
+
     const { priorReading, consumption, exceptionCode } = await computeConsumption(
       ctx.utilityId,
       meter.id,
@@ -269,6 +344,7 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
         utilityId: ctx.utilityId,
         meterId: meter.id,
         serviceAgreementId,
+        routeId,
         uomId: meter.uomId,
         readDate,
         readDatetime,
