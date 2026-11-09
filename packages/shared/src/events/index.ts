@@ -47,6 +47,8 @@ export const EVENT_TYPES = {
   UOM_UPDATED: "uom.updated",
   PREMISE_CREATED: "premise.created",
   PREMISE_UPDATED: "premise.updated",
+  READ_ROUTE_CREATED: "read_route.created",
+  READ_ROUTE_UPDATED: "read_route.updated",
   METER_CREATED: "meter.created",
   METER_UPDATED: "meter.updated",
   /**
