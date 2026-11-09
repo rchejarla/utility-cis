@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import type {
+  CorrectMeterReadInput,
+  CreateMeterReadEventInput,
+  CreateMeterReadInput,
+} from "@utility-cis/shared";
 import {
   bootPostgres,
   resetDb,
@@ -204,14 +209,17 @@ async function seedRead(stop: Stop, meterId: string, readDate: string) {
 }
 
 const createRead = (meterId: string, readDate: string) =>
-  asA(() => meterReads.createMeterRead(TENANT_A, ACTOR, "Test Actor", {
-    meterId,
-    readDate,
-    readDatetime: `${readDate}T12:00:00.000Z`,
-    reading: 100,
-    readType: "ACTUAL",
-    readSource: "MANUAL",
-  } as never));
+  asA(() => {
+    const input: CreateMeterReadInput = {
+      meterId,
+      readDate,
+      readDatetime: `${readDate}T12:00:00.000Z`,
+      reading: 100,
+      readType: "ACTUAL",
+      readSource: "MANUAL",
+    };
+    return meterReads.createMeterRead(TENANT_A, ACTOR, "Test Actor", input);
+  });
 
 const record = (
   meterIds: string[],
@@ -397,7 +405,7 @@ describe("resolving a skip from the other writers of meter_read", () => {
     const meter = await makeMeter(stop, { registers: 2 });
     await seedSkip(meter.id, SAME_WINDOW_EARLIER);
 
-    await asA(() => meterReads.createMeterReadEvent(TENANT_A, ACTOR, "Test Actor", {
+    const input: CreateMeterReadEventInput = {
       meterId: meter.id,
       readDate: IN_WINDOW,
       readDatetime: `${IN_WINDOW}T12:00:00.000Z`,
@@ -405,7 +413,8 @@ describe("resolving a skip from the other writers of meter_read", () => {
       skips: [],
       readType: "ACTUAL",
       readSource: "MANUAL",
-    } as never));
+    };
+    await asA(() => meterReads.createMeterReadEvent(TENANT_A, ACTOR, "Test Actor", input));
 
     expect((await skipRows(meter.id))[0].resolvedAt).not.toBeNull();
   });
@@ -440,11 +449,94 @@ describe("resolving a skip from the other writers of meter_read", () => {
     // A later visit found the meter unreachable again: an open skip after the read landed.
     await seedSkip(meter.id, SAME_WINDOW_EARLIER);
 
-    await asA(() => meterReads.correctMeterRead(TENANT_A, ACTOR, "Test Actor", original.id, {
+    const correction: CorrectMeterReadInput = {
       reading: 105,
       exceptionNotes: "transposed digits",
-    } as never));
+    };
+    await asA(() =>
+      meterReads.correctMeterRead(TENANT_A, ACTOR, "Test Actor", original.id, correction),
+    );
 
     expect((await skipRows(meter.id))[0].resolvedAt).toBeNull();
+  });
+});
+
+describe("the window around a bill day", () => {
+  // Bill day is the 10th: the window ending on it is 05-11 .. 06-10 and the next starts 06-11.
+  // Breaks if: `windowContaining`'s `day <= periodEnd` becomes `<` (06-10 jumps a window), or
+  // the +31-day probe is dropped (06-05 lands in the closed window 04-11 .. 05-10).
+  it.each([
+    ["06-05", "06-09", true],
+    ["06-05", "06-10", true], // the bill day itself is the last day of its window
+    ["06-05", "06-11", false], // the first day of the next window
+    ["06-11", "06-10", false],
+    ["06-11", "06-20", true],
+  ])("a skip on %s and a read on %s: resolved is %s", async (skipDay, readDay, resolves) => {
+    const stop = await makeStop();
+    const meter = await makeMeter(stop);
+    await seedSkip(meter.id, `2026-${skipDay}`);
+    await createRead(meter.id, `2026-${readDay}`);
+    expect((await skipRows(meter.id))[0].resolvedAt !== null).toBe(resolves);
+  });
+});
+
+describe("a billing cycle with no read window (non-monthly)", () => {
+  const makeQuarterly = () =>
+    seedAsPlatform(async () => {
+      await prismaImports.prisma.billingCycle.updateMany({
+        where: { utilityId: TENANT_A },
+        data: { frequency: "QUARTERLY" },
+      });
+    });
+
+  it("still records the read, and resolves nothing", async () => {
+    // Breaks if: `windowsByMeter` stops catching UNSUPPORTED_FREQUENCY (the 501 rolls the read back).
+    const stop = await makeStop();
+    const meter = await makeMeter(stop);
+    await seedSkip(meter.id, SAME_WINDOW_EARLIER);
+    await makeQuarterly();
+
+    await createRead(meter.id, IN_WINDOW);
+
+    const reads = await seedAsPlatform(async () =>
+      await prismaImports.prisma.meterRead.count({ where: { meterId: meter.id } }),
+    );
+    expect(reads).toBe(1);
+    expect((await skipRows(meter.id))[0].resolvedAt).toBeNull();
+    const resolved = await inTx((tx) =>
+      skips.resolveSkipsForRead(tx, TENANT_A, meter.id, new Date(IN_WINDOW)),
+    );
+    expect(resolved).toBe(0);
+  });
+
+  it("refuses to record a skip, by its own code rather than the bill service's", async () => {
+    // Breaks if: the `unsupported` check in `recordSkips` is deleted (METER_NOT_ASSIGNED would answer instead).
+    const stop = await makeStop();
+    const meter = await makeMeter(stop);
+    await makeQuarterly();
+    await expect(record([meter.id], IN_WINDOW)).rejects.toMatchObject({
+      statusCode: 501,
+      code: "READ_SKIP_CYCLE_UNSUPPORTED",
+    });
+  });
+});
+
+describe("the route a skip was found on", () => {
+  it("is stored and read back", async () => {
+    // Breaks if: `readRouteId: input.routeId` in `recordSkips` is hard-coded to null.
+    const stop = await makeStop();
+    const meter = await makeMeter(stop);
+    const route = await seedAsPlatform(async () =>
+      await prismaImports.prisma.readRoute.create({
+        data: {
+          utilityId: TENANT_A,
+          code: "R-1",
+          name: "Route 1",
+          billingCycleId: fixA.billingCycleId,
+        },
+      }),
+    );
+    await record([meter.id], IN_WINDOW, { routeId: route.id });
+    expect((await skipRows(meter.id))[0].readRouteId).toBe(route.id);
   });
 });
