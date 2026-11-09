@@ -65,3 +65,47 @@ export const readRouteListResponseSchema = z.object({
   meta: paginationMetaSchema,
 });
 export type ReadRouteListResponse = z.infer<typeof readRouteListResponseSchema>;
+
+/**
+ * Where a stop goes. Omitted `afterSequence` appends; `0` inserts at the
+ * front; otherwise the stop lands between the one at that sequence and
+ * whatever follows it. The caller names a position by the number it can
+ * see on screen, not by an id, because the sequence is what it sorts by.
+ */
+export const readRouteStopInputSchema = z.object({
+  premiseId: z.string().uuid(),
+  afterSequence: z.number().int().nonnegative().optional(),
+});
+export type ReadRouteStopInput = z.infer<typeof readRouteStopInputSchema>;
+
+/** A stop is a premise on a route; sequences are gapped integers (step 100), so only their order means anything. */
+export const readRouteStopSchema = z.object({
+  id: z.string().uuid(),
+  readRouteId: z.string().uuid(),
+  premiseId: z.string().uuid(),
+  sequence: z.number().int().positive(),
+  createdAt: z.string().datetime(),
+});
+export type ReadRouteStop = z.infer<typeof readRouteStopSchema>;
+
+/** The tray's filter: ordered by address, always, so `sort` and `order` are omitted. */
+export const unsequencedPremiseQuerySchema = baseListQuerySchema.omit({ sort: true, order: true });
+export type UnsequencedPremiseQuery = z.infer<typeof unsequencedPremiseQuerySchema>;
+
+/** Enough of a premise to recognise it in the tray; not the whole row. */
+export const premiseSummarySchema = z.object({
+  id: z.string().uuid(),
+  addressLine1: z.string(),
+  addressLine2: z.string().nullable(),
+  city: z.string(),
+  state: z.string(),
+  zip: z.string(),
+  premiseType: z.string(),
+});
+export type PremiseSummary = z.infer<typeof premiseSummarySchema>;
+
+export const unsequencedPremiseListResponseSchema = z.object({
+  data: z.array(premiseSummarySchema),
+  meta: paginationMetaSchema,
+});
+export type UnsequencedPremiseListResponse = z.infer<typeof unsequencedPremiseListResponseSchema>;

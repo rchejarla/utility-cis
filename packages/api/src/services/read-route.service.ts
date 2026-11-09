@@ -4,6 +4,10 @@ import type {
   ReadRouteQuery,
   ReadRouteUpdate,
   ReadRouteSummary,
+  ReadRouteStop,
+  ReadRouteStopInput,
+  UnsequencedPremiseQuery,
+  PremiseSummary,
   PaginatedResponse,
 } from "@utility-cis/shared";
 import { EVENT_TYPES } from "@utility-cis/shared";
@@ -16,7 +20,8 @@ import type { ImportTx } from "../imports/types.js";
  * Read routes: the named walks a meter reader makes, and the rows that
  * let a vendor's route code on an imported read point at something.
  *
- * Stops are Task 3's business; this file owns the route row itself.
+ * The route row is maintained first, then its stops (`addStop` and
+ * below), which are premises in a walking order.
  *
  * **A vendor's code becomes a row, not free text** (`upsertExternalRoute`):
  * an imported read names a route in the vendor's own vocabulary, and
@@ -230,4 +235,237 @@ export async function upsertExternalRoute(
     );
   }
   return row.id;
+}
+
+/**
+ * Stops: a premise on a route, in walking order (design §5.1).
+ *
+ * **Sequences are gapped integers, step 100.** An append is `max + 100`;
+ * an insert between `a` and `b` takes `floor((a + b) / 2)`, so placing a
+ * stop writes one row and leaves every neighbour where it was. The
+ * alternative, shifting everything after the insert up by one, rewrites
+ * half a route to add one address. When no integer fits between two
+ * neighbours the insert is refused (409 `SEQUENCE_FULL`) and the caller
+ * resequences the route, which is a separate operation, not something an
+ * insert does as a side effect.
+ *
+ * **A stop is a premise, not a meter**, and a route's stops are its
+ * current state, not an effective-dated history: no sequence number
+ * survives being edited, so there is nothing to version.
+ *
+ * Both writes lock the route row (`FOR UPDATE`) before reading the
+ * sequences. Without it two concurrent appends both read the same max,
+ * pick the same next sequence and one dies on the unique key with a
+ * constraint error that says nothing a caller could act on. The lock
+ * also makes the LOCAL check current for the length of the write.
+ */
+const SEQUENCE_STEP = 100;
+
+type StopRow = {
+  id: string;
+  readRouteId: string;
+  premiseId: string;
+  sequence: number;
+  createdAt: Date;
+};
+
+function toStop(row: StopRow): ReadRouteStop {
+  return {
+    id: row.id,
+    readRouteId: row.readRouteId,
+    premiseId: row.premiseId,
+    sequence: row.sequence,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+type RouteTx = Pick<typeof prisma, "$queryRaw">;
+
+function requireLocal(origin: string, routeId: string): void {
+  if (origin !== "LOCAL") {
+    throw httpError(
+      400,
+      "ROUTE_IS_EXTERNAL",
+      `Route ${routeId} belongs to a vendor's reading system; its stops are not kept here`,
+    );
+  }
+}
+
+/** Lock the tenant's route and refuse it unless it is a LOCAL one. Returns nothing: the lock is the point. */
+async function lockLocalRoute(tx: RouteTx, utilityId: string, routeId: string): Promise<void> {
+  const rows = await tx.$queryRaw<{ origin: string }[]>`
+    SELECT origin FROM read_route
+    WHERE id = ${routeId}::uuid AND utility_id = ${utilityId}::uuid
+    FOR UPDATE`;
+  if (rows.length === 0) {
+    throw httpError(404, "ROUTE_NOT_FOUND", `Read route ${routeId} not found`);
+  }
+  requireLocal(rows[0]!.origin, routeId);
+}
+
+export async function addStop(
+  utilityId: string,
+  actor: { id: string; name: string },
+  routeId: string,
+  input: ReadRouteStopInput,
+): Promise<ReadRouteStop> {
+  try {
+    const row = await auditCreate(
+      { utilityId, actorId: actor.id, actorName: actor.name, entityType: "ReadRouteStop" },
+      EVENT_TYPES.READ_ROUTE_STOP_CREATED,
+      async (tx) => {
+        await lockLocalRoute(tx, utilityId, routeId);
+
+        const premise = await tx.premise.findFirst({
+          where: { id: input.premiseId, utilityId },
+          select: { id: true },
+        });
+        if (!premise) {
+          throw httpError(404, "PREMISE_NOT_FOUND", `Premise ${input.premiseId} not found`);
+        }
+        const already = await tx.readRouteStop.findFirst({
+          where: { utilityId, readRouteId: routeId, premiseId: input.premiseId },
+          select: { id: true },
+        });
+        if (already) {
+          throw httpError(409, "PREMISE_ALREADY_ON_ROUTE", "That premise is already a stop on this route");
+        }
+
+        let sequence: number;
+        if (input.afterSequence === undefined) {
+          const last = await tx.readRouteStop.aggregate({
+            where: { utilityId, readRouteId: routeId },
+            _max: { sequence: true },
+          });
+          sequence = (last._max.sequence ?? 0) + SEQUENCE_STEP;
+        } else {
+          const after = input.afterSequence;
+          const next = await tx.readRouteStop.findFirst({
+            where: { utilityId, readRouteId: routeId, sequence: { gt: after } },
+            orderBy: { sequence: "asc" },
+            select: { sequence: true },
+          });
+          if (!next) {
+            sequence = after + SEQUENCE_STEP;
+          } else {
+            sequence = Math.floor((after + next.sequence) / 2);
+            if (sequence <= after) {
+              throw httpError(
+                409,
+                "SEQUENCE_FULL",
+                `No room between sequence ${after} and ${next.sequence}; resequence the route`,
+              );
+            }
+          }
+        }
+
+        return tx.readRouteStop.create({
+          data: { utilityId, readRouteId: routeId, premiseId: input.premiseId, sequence },
+        });
+      },
+    );
+    return toStop(row);
+  } catch (err) {
+    // The route lock serialises writers, so this is a backstop for the
+    // premise key only; the sequence key cannot collide under the lock.
+    if (isUniqueViolation(err)) {
+      throw httpError(409, "PREMISE_ALREADY_ON_ROUTE", "That premise is already a stop on this route");
+    }
+    throw err;
+  }
+}
+
+export async function removeStop(
+  utilityId: string,
+  actor: { id: string; name: string },
+  routeId: string,
+  stopId: string,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await lockLocalRoute(tx, utilityId, routeId);
+    const stop = await tx.readRouteStop.findFirst({
+      where: { id: stopId, readRouteId: routeId, utilityId },
+    });
+    if (!stop) throw httpError(404, "STOP_NOT_FOUND", `Stop ${stopId} is not on route ${routeId}`);
+    await tx.readRouteStop.delete({ where: { id: stopId } });
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId: actor.id, actorName: actor.name, entityType: "ReadRouteStop" },
+      EVENT_TYPES.READ_ROUTE_STOP_DELETED,
+      stopId,
+      stop,
+      null,
+    );
+  });
+}
+
+export async function listStops(utilityId: string, routeId: string): Promise<ReadRouteStop[]> {
+  const route = await prisma.readRoute.findFirst({
+    where: { id: routeId, utilityId },
+    select: { id: true },
+  });
+  if (!route) throw httpError(404, "ROUTE_NOT_FOUND", `Read route ${routeId} not found`);
+  const rows = await prisma.readRouteStop.findMany({
+    where: { utilityId, readRouteId: routeId },
+    orderBy: { sequence: "asc" },
+  });
+  return rows.map(toStop);
+}
+
+/**
+ * The tray: premises that are on **no route at all**.
+ *
+ * Not "premises missing from this route". A reader visits an address
+ * once, so a premise belongs on exactly one route, and offering one that
+ * is already on another route would invite the double visit that
+ * ordering exists to prevent. `routeId` therefore does not filter the
+ * list; it only proves the route exists and is LOCAL, because the tray
+ * is meaningless for a route whose stops a vendor decides.
+ */
+export async function listUnsequencedPremises(
+  utilityId: string,
+  routeId: string,
+  query: UnsequencedPremiseQuery,
+): Promise<{ data: PremiseSummary[]; meta: PaginatedResponse<PremiseSummary>["meta"] }> {
+  const route = await prisma.readRoute.findFirst({
+    where: { id: routeId, utilityId },
+    select: { origin: true },
+  });
+  if (!route) throw httpError(404, "ROUTE_NOT_FOUND", `Read route ${routeId} not found`);
+  requireLocal(route.origin, routeId);
+
+  const page = query.page ?? 1;
+  const limit = query.limit ?? 50;
+  const where = {
+    utilityId,
+    readRouteStops: { none: {} },
+    ...(query.search
+      ? {
+          OR: [
+            { addressLine1: { contains: query.search, mode: "insensitive" as const } },
+            { city: { contains: query.search, mode: "insensitive" as const } },
+            { zip: { contains: query.search } },
+          ],
+        }
+      : {}),
+  };
+  const [rows, total] = await Promise.all([
+    prisma.premise.findMany({
+      where,
+      orderBy: [{ addressLine1: "asc" }, { id: "asc" }],
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
+        id: true,
+        addressLine1: true,
+        addressLine2: true,
+        city: true,
+        state: true,
+        zip: true,
+        premiseType: true,
+      },
+    }),
+    prisma.premise.count({ where }),
+  ]);
+  return paginatedResponse(rows, total, { page, limit, sort: "addressLine1", order: "asc" });
 }
