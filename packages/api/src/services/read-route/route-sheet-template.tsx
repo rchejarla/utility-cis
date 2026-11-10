@@ -57,6 +57,16 @@ const s = StyleSheet.create({
   pageNo: { textAlign: "right", marginTop: 2 },
 });
 
+/**
+ * How many stops the route has, which is not how many lines print: a
+ * multi-register meter is several lines at one stop, and a stop with
+ * nothing to read is none. Counting lines alone would understate the route
+ * and be the one number a reader could use to notice a stop was missing.
+ */
+function routeStopCount(sheet: RouteSheet): number {
+  return new Set(sheet.stops.map((x) => x.sequence)).size + sheet.stopsWithNothingToRead.length;
+}
+
 export function RouteSheetTemplate({ sheet }: { sheet: RouteSheet }) {
   return (
     <Document title={`Route ${sheet.routeCode}`}>
@@ -66,8 +76,10 @@ export function RouteSheetTemplate({ sheet }: { sheet: RouteSheet }) {
             Route {sheet.routeCode} - {sheet.routeName}
           </Text>
           <Text style={s.muted}>
-            Cycle {sheet.cycleCode} | reads due {printedDate(sheet.readsDueOn)} | sheet for {printedDate(sheet.forDate)} |{" "}
-            {sheet.stops.length} {sheet.stops.length === 1 ? "line" : "lines"}
+            Cycle {sheet.cycleCode}
+            {sheet.readsDueOn ? ` | reads due ${printedDate(sheet.readsDueOn)}` : ""} | sheet for{" "}
+            {printedDate(sheet.forDate)} | {sheet.stops.length} {sheet.stops.length === 1 ? "line" : "lines"} on{" "}
+            {routeStopCount(sheet)} {routeStopCount(sheet) === 1 ? "stop" : "stops"}
           </Text>
         </View>
 

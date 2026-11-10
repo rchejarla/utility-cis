@@ -2,6 +2,13 @@ import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { computeBillPeriod } from "../bill.service.js";
 
 /**
+ * Billing windows, in one place: which service agreements belong to one
+ * (`agreementInWindow`) and which window a given day falls in
+ * (`windowContaining`). Each was once written twice and drifted, or would
+ * have been; callers import these rather than restating either.
+ */
+
+/**
  * Which service agreements belong to a billing window.
  *
  * **There were two answers to this and they disagreed.** The planner

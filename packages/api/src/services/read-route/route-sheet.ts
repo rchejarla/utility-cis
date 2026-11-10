@@ -41,11 +41,23 @@ export interface RouteSheet {
   routeCode: string;
   routeName: string;
   cycleCode: string;
-  /** YYYY-MM-DD: the cycle's read day, in the month of the window the sheet's date is in. */
-  readsDueOn: string;
+  /**
+   * YYYY-MM-DD: the cycle's read day, in the month of the window the sheet's
+   * date is in. Null for a cycle whose frequency has no window yet: the
+   * header is the only part that needs one, so the stops still print.
+   */
+  readsDueOn: string | null;
   /** YYYY-MM-DD: the day the sheet was built for. */
   forDate: string;
   stops: SheetStop[];
+  /**
+   * Stops on the route that produced no line, because their premise has no
+   * readable meter. Kept off the paper (a reader sent to an address with
+   * nothing to read is worse) but returned, because a stop that vanishes
+   * from a sheet without a trace is the silent failure §5.1 forbids. Whoever
+   * serves the sheet is expected to surface it.
+   */
+  stopsWithNothingToRead: { sequence: number; address: string }[];
 }
 
 function httpError(statusCode: number, code: string, message: string): Error {
@@ -66,8 +78,16 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 function readsDueOn(
   cycle: { billDayOfMonth: number; readDayOfMonth: number; frequency: string },
   onDate: Date,
-): string {
-  const { periodEnd } = windowContaining(cycle, onDate);
+): string | null {
+  let periodEnd: Date;
+  try {
+    ({ periodEnd } = windowContaining(cycle, onDate));
+  } catch (err) {
+    // `computeBillPeriod` windows MONTHLY only. That is a fact about bills,
+    // and no reason to refuse a sheet whose stops do not depend on it.
+    if ((err as { code?: string }).code === "UNSUPPORTED_FREQUENCY") return null;
+    throw err;
+  }
   const y = periodEnd.getUTCFullYear();
   const m = periodEnd.getUTCMonth();
   return isoDay(new Date(Date.UTC(y, m, billDayIn(y, m, cycle.readDayOfMonth))));
@@ -170,6 +190,10 @@ export async function buildRouteSheet(
     if (r.registerId) registerCount.set(r.meterId, (registerCount.get(r.meterId) ?? 0) + 1);
   }
 
+  const stopsWithNothingToRead = stops
+    .filter((s) => !rowsByPremise.has(s.premiseId))
+    .map((s) => ({ sequence: s.sequence, address: address.get(s.premiseId) ?? "" }));
+
   const sheetStops: SheetStop[] = [];
   // Walking order is the stops', not the rows': the rows are sorted by premise id.
   for (const stop of stops) {
@@ -198,6 +222,7 @@ export async function buildRouteSheet(
     readsDueOn: readsDueOn(route.billingCycle, onDate),
     forDate: isoDay(onDate),
     stops: sheetStops,
+    stopsWithNothingToRead,
   };
 }
 

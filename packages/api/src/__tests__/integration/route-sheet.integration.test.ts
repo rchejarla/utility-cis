@@ -53,7 +53,12 @@ const sheetFor = (routeId: string, onDate = ON, tenant = TENANT_A) =>
 
 let seq = 0;
 
-async function makeCycle(readDayOfMonth: number, billDayOfMonth: number, tenant = TENANT_A): Promise<string> {
+async function makeCycle(
+  readDayOfMonth: number,
+  billDayOfMonth: number,
+  frequency: "MONTHLY" | "BIMONTHLY" | "QUARTERLY" = "MONTHLY",
+  tenant = TENANT_A,
+): Promise<string> {
   const n = ++seq;
   return seedAsPlatform(async () => {
     const c = await prismaImports.prisma.billingCycle.create({
@@ -63,7 +68,7 @@ async function makeCycle(readDayOfMonth: number, billDayOfMonth: number, tenant 
         cycleCode: `SC-${n}`,
         readDayOfMonth,
         billDayOfMonth,
-        frequency: "MONTHLY",
+        frequency,
       },
     });
     return c.id;
@@ -167,6 +172,33 @@ async function makeStop(
       sequence,
     );
     return { premiseId: premise.id, meterId: meter.id, agreementId: agreement.id };
+  });
+}
+
+/** A premise on the route with no meter at all: a stop that produces no line. */
+async function makeBareStop(routeId: string, sequence: number, addressLine1: string): Promise<void> {
+  await seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const premise = await prisma.premise.create({
+      data: {
+        utilityId: TENANT_A,
+        addressLine1,
+        city: "Testville",
+        state: "TS",
+        zip: "00000",
+        premiseType: "RESIDENTIAL",
+        commodityIds: [fixA.commodityId],
+        status: "ACTIVE",
+      },
+    });
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO read_route_stop (utility_id, read_route_id, premise_id, sequence)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4)`,
+      TENANT_A,
+      routeId,
+      premise.id,
+      sequence,
+    );
   });
 }
 
@@ -302,6 +334,50 @@ describe("every stop prints", () => {
       ["M-MULTI", "2"],
       ["M-PLAIN", null],
     ]);
+  });
+});
+
+describe("a stop with nothing to read", () => {
+  it("is kept off the lines but returned, with its sequence and address", async () => {
+    /*
+     * §5.1: a stop filtered off a sheet is silent unless somebody is told.
+     * Breaks if: the `stopsWithNothingToRead` filter is removed (the list is
+     * empty), or the premise's address is not carried.
+     */
+    const route = await makeRoute(fixA.billingCycleId);
+    await makeStop(route, 100, "1 Metered Road");
+    await makeBareStop(route, 200, "2 Empty Lot Road");
+    await makeStop(route, 300, "3 Metered Road");
+
+    const sheet = await sheetFor(route);
+
+    expect(sheet.stops.map((s) => s.sequence)).toEqual([100, 300]);
+    expect(sheet.stopsWithNothingToRead).toEqual([{ sequence: 200, address: "2 Empty Lot Road, Testville" }]);
+  });
+
+  it("returns an empty list when every stop has a line", async () => {
+    // Breaks if: the filter inverts and returns stops that did print.
+    const route = await makeRoute(fixA.billingCycleId);
+    await makeStop(route, 100, "1 Metered Road");
+
+    expect((await sheetFor(route)).stopsWithNothingToRead).toEqual([]);
+  });
+});
+
+describe("a cycle the window logic does not support", () => {
+  it("still prints the stops, with no due date", async () => {
+    /*
+     * `computeBillPeriod` windows MONTHLY only and throws 501 for the rest.
+     * Only the header needs a window. Breaks if: the catch in `readsDueOn`
+     * is removed (the sheet fails with UNSUPPORTED_FREQUENCY).
+     */
+    const route = await makeRoute(await makeCycle(15, 20, "QUARTERLY"));
+    await makeStop(route, 100, "1 Quarter Road");
+
+    const sheet = await sheetFor(route);
+
+    expect(sheet.readsDueOn).toBeNull();
+    expect(sheet.stops).toHaveLength(1);
   });
 });
 

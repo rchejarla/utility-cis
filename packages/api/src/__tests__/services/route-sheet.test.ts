@@ -33,6 +33,7 @@ function sheet(stops: SheetStop[]): RouteSheet {
     readsDueOn: "2026-01-15",
     forDate: "2026-01-10",
     stops,
+    stopsWithNothingToRead: [],
   };
 }
 
