@@ -49,6 +49,14 @@ interface MeterReadRow {
   readSource?: ReadSource;
   /** The reading system's route or book code. Absent when the file has none. */
   routeCode?: string;
+  /**
+   * **Not a canonical field, on purpose** (so a file's column mapping can
+   * never produce it): only route entry's staging writes these two keys.
+   * `routeId` names a LOCAL route the read came off, which `routeCode`
+   * refuses by design; `registerId` names the register the number is of.
+   */
+  routeId?: string;
+  registerId?: string;
 }
 
 interface BatchData {
@@ -220,6 +228,8 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
     }
 
     const routeCode = (raw.routeCode ?? "").trim() || undefined;
+    const routeId = (raw.routeId ?? "").trim() || undefined;
+    const registerId = (raw.registerId ?? "").trim() || undefined;
 
     return {
       ok: true,
@@ -230,6 +240,8 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
         readType,
         readSource,
         routeCode,
+        routeId,
+        registerId,
       },
     };
   },
@@ -279,8 +291,22 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       };
     }
 
+    // An id, unlike a code, is only ever written by route entry's staging,
+    // so it may name a LOCAL route: that is the one door a read gets onto one.
+    let entryRouteId: string | null = null;
+    if (row.routeId) {
+      const route = await ctx.tx.readRoute.findFirst({
+        where: { id: row.routeId, utilityId: ctx.utilityId },
+        select: { id: true },
+      });
+      if (!route) {
+        return { ok: false, code: "ROUTE_NOT_FOUND", message: `Read route ${row.routeId} not found` };
+      }
+      entryRouteId = route.id;
+    }
+
     // A code we maintain ourselves is refused before any other work.
-    const knownRoute = row.routeCode ? batchData.routeByCode.get(row.routeCode) : undefined;
+    const knownRoute = !entryRouteId && row.routeCode ? batchData.routeByCode.get(row.routeCode) : undefined;
     if (knownRoute?.origin === "LOCAL") {
       return {
         ok: false,
@@ -305,8 +331,8 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       return { ok: false, code: "METER_NOT_ASSIGNED", message };
     }
 
-    let routeId: string | null = knownRoute?.id ?? null;
-    if (row.routeCode && !knownRoute) {
+    let routeId: string | null = entryRouteId ?? knownRoute?.id ?? null;
+    if (!entryRouteId && row.routeCode && !knownRoute) {
       // A code nobody has seen: it becomes an EXTERNAL route on the cycle
       // of this row's own account.
       // Cannot miss: `serviceAgreementId` was resolved for this same tenant
@@ -335,10 +361,28 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       }
     }
 
+    let uomId = meter.uomId;
+    let peakCode: string | null = null;
+    if (row.registerId) {
+      const register = await ctx.tx.meterRegister.findFirst({
+        where: { id: row.registerId, utilityId: ctx.utilityId, meterId: meter.id, isActive: true },
+        select: { uomId: true, peakCode: true },
+      });
+      if (!register) {
+        return {
+          ok: false,
+          code: "REGISTER_NOT_FOUND",
+          message: `Register ${row.registerId} is not an active register of meter "${row.meterNumber}"`,
+        };
+      }
+      uomId = register.uomId;
+      peakCode = register.peakCode;
+    }
+
     const { priorReading, consumption, exceptionCode } = await computeConsumption(
       ctx.utilityId,
       meter.id,
-      null,
+      row.registerId ?? null,
       row.reading,
       readDatetime,
     );
@@ -349,7 +393,9 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
         meterId: meter.id,
         serviceAgreementId,
         routeId,
-        uomId: meter.uomId,
+        registerId: row.registerId ?? null,
+        uomId,
+        peakCode,
         readDate,
         readDatetime,
         reading: row.reading,
