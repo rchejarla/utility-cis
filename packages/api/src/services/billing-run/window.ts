@@ -1,4 +1,5 @@
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
+import { computeBillPeriod } from "../bill.service.js";
 
 /**
  * Which service agreements belong to a billing window.
@@ -38,4 +39,33 @@ export function agreementInWindow(window: {
     startDate: { lte: window.periodEnd },
     OR: [{ endDate: null }, { endDate: { gte: window.periodStart } }],
   };
+}
+
+/**
+ * The window that *contains* `day`, which is not what `computeBillPeriod`
+ * returns for `asOf = day`: that is the last period already closed on
+ * that day, so a day between two bill days falls after its end. A read
+ * on the 5th belongs to the window the run on the 10th will bill, and a
+ * skip on the 3rd to the same one; asking for the closed period would
+ * put both in last month's, and a date-range match on it would find
+ * neither. The next period's end is 28 to 31 days on, so one more call
+ * with `asOf` 31 days past the closed end lands on it and not the one
+ * after.
+ *
+ * **That probe rests on `computeBillPeriod`'s `periodEnd` being
+ * inclusive** (a bill day is the last day of the period ending on it,
+ * `d >= thisMonth` there). The `day <= periodEnd` test is that equality
+ * case: a read on the bill day itself is in the window that ends on it.
+ * Were the end ever made exclusive, this would return the previous
+ * window on every bill day; the integration test pins the day before,
+ * the day of and the day after the bill day for that reason.
+ */
+export function windowContaining(
+  cycle: { billDayOfMonth: number; frequency: string },
+  day: Date,
+): { periodStart: Date; periodEnd: Date } {
+  const epoch = { createdAt: new Date(0), billingCycle: cycle };
+  const closed = computeBillPeriod(epoch, day);
+  if (day <= closed.periodEnd) return closed;
+  return computeBillPeriod(epoch, new Date(closed.periodEnd.getTime() + 31 * 86_400_000));
 }
