@@ -153,31 +153,9 @@ export async function getReadingProgress(
       orderBy: [{ meter: { meterNumber: "asc" } }],
       skip: (query.page - 1) * query.limit,
       take: query.limit,
-      select: {
-        meterId: true,
-        meter: { select: { meterNumber: true } },
-        servicePoint: {
-          select: {
-            premise: { select: { addressLine1: true, city: true } },
-            serviceAgreement: {
-              select: {
-                agreementNumber: true,
-                account: { select: { accountNumber: true } },
-              },
-            },
-          },
-        },
-      },
+      select: assignmentSelect,
     });
-    page = rows.map((r) => ({
-      meterId: r.meterId,
-      meterNumber: r.meter.meterNumber,
-      agreementNumber: r.servicePoint?.serviceAgreement?.agreementNumber ?? "—",
-      accountNumber: r.servicePoint?.serviceAgreement?.account?.accountNumber ?? "—",
-      premise: r.servicePoint?.premise
-        ? `${r.servicePoint.premise.addressLine1}, ${r.servicePoint.premise.city}`
-        : null,
-    }));
+    page = rows.map(candidateFromAssignment);
   } else {
     const units =
       route.origin === "EXTERNAL"
@@ -235,8 +213,18 @@ export async function getReadingProgress(
     expected,
     read: expected - outstanding,
     outstanding,
+    /*
+     * Named key by key rather than spread: a route's rows carry
+     * `registerId` internally, and spreading would put an undeclared
+     * field on the wire that no type check and no non-strict schema sees.
+     */
     data: page.map((r): OutstandingRead => ({
-      ...r,
+      meterId: r.meterId,
+      meterNumber: r.meterNumber,
+      registerNumber: r.registerNumber,
+      agreementNumber: r.agreementNumber,
+      accountNumber: r.accountNumber,
+      premise: r.premise,
       lastReadDate: lastByMeter.get(r.meterId)?.toISOString() ?? null,
       // The cycle-wide answer does not know a meter's route; see the schema.
       routeCode: route?.code ?? null,
@@ -261,12 +249,70 @@ interface ExpectedUnit extends Candidate {
 
 const oneDay = 86_400_000;
 
-function address(p: { addressLine1: string; city: string } | undefined): string | null {
-  return p ? `${p.addressLine1}, ${p.city}` : null;
+/**
+ * Reads in a window, bounded on `read_datetime` as well as `read_date`:
+ * only the former prunes the hypertable's chunks, and stating both keeps
+ * every path that asks "was it read in this window" agreeing at the edge.
+ */
+function readsIn(start: Date, end: Date) {
+  return {
+    readDate: { gte: start, lte: end },
+    readDatetime: { gte: start, lt: new Date(end.getTime() + oneDay) },
+  };
 }
 
-function byMeterNumber(a: ExpectedUnit, b: ExpectedUnit): number {
-  return a.meterNumber.localeCompare(b.meterNumber);
+/**
+ * The one place a row the screen names is put together, so the fallbacks
+ * and the address format cannot drift between the three ways an expected
+ * meter is found - the same reason `agreementInWindow` is shared.
+ */
+function candidate(p: {
+  meterId: string;
+  meterNumber: string;
+  registerNumber?: string | null;
+  agreementNumber?: string | null;
+  accountNumber?: string | null;
+  premise?: { addressLine1: string; city: string } | null;
+}): Candidate {
+  return {
+    meterId: p.meterId,
+    meterNumber: p.meterNumber,
+    registerNumber: p.registerNumber ?? null,
+    agreementNumber: p.agreementNumber ?? "—",
+    accountNumber: p.accountNumber ?? "—",
+    premise: p.premise ? `${p.premise.addressLine1}, ${p.premise.city}` : null,
+  };
+}
+
+/** What both assignment-based finders select, and `candidateFromAssignment` reads. */
+const assignmentSelect = {
+  meterId: true,
+  meter: { select: { meterNumber: true } },
+  servicePoint: {
+    select: {
+      premise: { select: { addressLine1: true, city: true } },
+      serviceAgreement: {
+        select: { agreementNumber: true, account: { select: { accountNumber: true } } },
+      },
+    },
+  },
+} as const;
+
+function candidateFromAssignment(a: {
+  meterId: string;
+  meter: { meterNumber: string };
+  servicePoint: {
+    premise: { addressLine1: string; city: string } | null;
+    serviceAgreement: { agreementNumber: string; account: { accountNumber: string } | null } | null;
+  } | null;
+}): Candidate {
+  return candidate({
+    meterId: a.meterId,
+    meterNumber: a.meter.meterNumber,
+    agreementNumber: a.servicePoint?.serviceAgreement?.agreementNumber,
+    accountNumber: a.servicePoint?.serviceAgreement?.account?.accountNumber,
+    premise: a.servicePoint?.premise,
+  });
 }
 
 /**
@@ -290,7 +336,7 @@ async function stopUnits(
 ): Promise<ExpectedUnit[]> {
   const stops = await prisma.readRouteStop.findMany({
     where: { utilityId, readRouteId: routeId },
-    select: { premiseId: true },
+    select: { premiseId: true, sequence: true },
   });
   const rows = await readableRowsForPremises(
     utilityId,
@@ -312,17 +358,28 @@ async function stopUnits(
   const agreementNumber = new Map(agreements.map((a) => [a.id, a.agreementNumber]));
   const premise = new Map(premises.map((p) => [p.id, p]));
 
+  /*
+   * In the order the route is walked: stop sequence, and within a stop
+   * the order `readableRowsForPremises` already gave (meter, register).
+   * `sort` is stable, so that inner order survives. Paging this list by
+   * meter number instead would make page 2 something other than "the
+   * rest of the walk".
+   */
+  const sequence = new Map(stops.map((s) => [s.premiseId, s.sequence]));
   return rows
     .filter((r) => agreementNumber.has(r.serviceAgreementId))
+    .sort((x, y) => sequence.get(x.premiseId)! - sequence.get(y.premiseId)!)
     .map((r) => ({
-      meterId: r.meterId,
-      meterNumber: r.meterNumber,
+      ...candidate({
+        meterId: r.meterId,
+        meterNumber: r.meterNumber,
+        registerNumber: r.registerNumber,
+        agreementNumber: agreementNumber.get(r.serviceAgreementId),
+        accountNumber: r.accountNumber,
+        premise: premise.get(r.premiseId),
+      }),
       registerId: r.registerId,
-      agreementNumber: agreementNumber.get(r.serviceAgreementId)!,
-      accountNumber: r.accountNumber,
-      premise: address(premise.get(r.premiseId)),
-    }))
-    .sort(byMeterNumber);
+    }));
 }
 
 /**
@@ -339,8 +396,14 @@ async function stopUnits(
  * exactly one. The window is bounded on `read_datetime` as well as
  * `read_date`, because only the former prunes chunks.
  *
- * A route with no reads in that window - a first-ever one - expects
- * nothing, and says so rather than inventing a list.
+ * **A route with no reads in that window at all** - a first-ever one -
+ * has nothing to learn from, so it is learned from the current window
+ * instead: what has been received is the whole list, `expected` equals
+ * `read` and nothing is outstanding. That is received-only, and it keeps
+ * `read = expected - outstanding` honest. It is confined to exactly that
+ * case: as a fallback on every window, a vendor file arriving mid-window
+ * would make `expected` climb as reads landed, and the column would stop
+ * meaning work remaining.
  */
 async function learnedUnits(
   utilityId: string,
@@ -354,33 +417,35 @@ async function learnedUnits(
     { createdAt: new Date(0), billingCycle: cycle },
     new Date(window.periodStart.getTime() - oneDay),
   );
-  const inPrevious = {
-    readDate: { gte: previous.periodStart, lte: previous.periodEnd },
-    readDatetime: {
-      gte: previous.periodStart,
-      lt: new Date(previous.periodEnd.getTime() + oneDay),
-    },
-  };
+  const inPrevious = readsIn(previous.periodStart, previous.periodEnd);
 
   const onRoute = await prisma.meterRead.findMany({
     where: { utilityId, routeId, ...inPrevious },
     distinct: ["meterId"],
     select: { meterId: true },
   });
-  if (onRoute.length === 0) return [];
 
-  // Most recent first, so the first row seen for a meter is its latest.
-  const latest = await prisma.meterRead.findMany({
-    where: { utilityId, meterId: { in: onRoute.map((r) => r.meterId) }, ...inPrevious },
-    orderBy: [{ readDatetime: "desc" }],
-    select: { meterId: true, routeId: true },
-  });
-  const seen = new Set<string>();
   const stillOnRoute: string[] = [];
-  for (const r of latest) {
-    if (seen.has(r.meterId)) continue;
-    seen.add(r.meterId);
-    if (r.routeId === routeId) stillOnRoute.push(r.meterId);
+  if (onRoute.length === 0) {
+    const received = await prisma.meterRead.findMany({
+      where: { utilityId, routeId, ...readsIn(window.periodStart, window.periodEnd) },
+      distinct: ["meterId"],
+      select: { meterId: true },
+    });
+    stillOnRoute.push(...received.map((r) => r.meterId));
+  } else {
+    // Most recent first, so the first row seen for a meter is its latest.
+    const latest = await prisma.meterRead.findMany({
+      where: { utilityId, meterId: { in: onRoute.map((r) => r.meterId) }, ...inPrevious },
+      orderBy: [{ readDatetime: "desc" }],
+      select: { meterId: true, routeId: true },
+    });
+    const seen = new Set<string>();
+    for (const r of latest) {
+      if (seen.has(r.meterId)) continue;
+      seen.add(r.meterId);
+      if (r.routeId === routeId) stillOnRoute.push(r.meterId);
+    }
   }
   if (stillOnRoute.length === 0) return [];
 
@@ -392,30 +457,12 @@ async function learnedUnits(
       servicePoint: { serviceAgreement: inWindow },
     },
     orderBy: [{ meter: { meterNumber: "asc" } }],
-    select: {
-      meterId: true,
-      meter: { select: { meterNumber: true } },
-      servicePoint: {
-        select: {
-          premise: { select: { addressLine1: true, city: true } },
-          serviceAgreement: {
-            select: { agreementNumber: true, account: { select: { accountNumber: true } } },
-          },
-        },
-      },
-    },
+    select: assignmentSelect,
   });
   const byMeter = new Map<string, ExpectedUnit>();
   for (const a of assignments) {
     if (byMeter.has(a.meterId)) continue;
-    byMeter.set(a.meterId, {
-      meterId: a.meterId,
-      meterNumber: a.meter.meterNumber,
-      registerId: null,
-      agreementNumber: a.servicePoint?.serviceAgreement?.agreementNumber ?? "—",
-      accountNumber: a.servicePoint?.serviceAgreement?.account?.accountNumber ?? "—",
-      premise: address(a.servicePoint?.premise),
-    });
+    byMeter.set(a.meterId, { ...candidateFromAssignment(a), registerId: null });
   }
   return [...byMeter.values()];
 }
@@ -436,7 +483,7 @@ async function withoutAReadInWindow(
   const meterIds = [...new Set(units.map((u) => u.meterId))];
   const [reads, intervals] = await Promise.all([
     prisma.meterRead.findMany({
-      where: { utilityId, meterId: { in: meterIds }, readDate: { gte: windowStart, lte: windowEnd } },
+      where: { utilityId, meterId: { in: meterIds }, ...readsIn(windowStart, windowEnd) },
       select: { meterId: true, registerId: true },
     }),
     prisma.meterReadInterval.findMany({
@@ -456,6 +503,15 @@ async function withoutAReadInWindow(
     if (hasIntervals.has(u.meterId)) return false;
     const held = registersRead.get(u.meterId);
     if (!held) return true;
+    /*
+     * A read that names no register satisfies the meter. That is safe
+     * because `createMeterRead` refuses a null register on a meter with
+     * two or more active registers, so a meter-level read cannot hide an
+     * unread second register - and it is necessary because a meter with
+     * exactly one register is allowed to omit it, and would otherwise be
+     * outstanding for ever.
+     */
+    if (held.has(null)) return false;
     return u.registerId === null ? false : !held.has(u.registerId);
   });
 }

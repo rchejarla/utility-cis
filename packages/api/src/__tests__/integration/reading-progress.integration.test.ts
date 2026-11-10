@@ -342,6 +342,7 @@ async function route(opts: {
   code: string;
   origin?: "LOCAL" | "EXTERNAL";
   stops?: string[];
+  billingCycleId?: string;
 }): Promise<string> {
   return seedAsPlatform(async () => {
     const r = await prismaImports.prisma.readRoute.create({
@@ -349,7 +350,7 @@ async function route(opts: {
         utilityId: TENANT_A,
         code: opts.code,
         name: opts.code,
-        billingCycleId: fixA.billingCycleId,
+        billingCycleId: opts.billingCycleId ?? fixA.billingCycleId,
         origin: opts.origin ?? "LOCAL",
       },
     });
@@ -480,9 +481,90 @@ describe("progress for one LOCAL route", () => {
 
     expect(p).toMatchObject({ expected: 2, read: 1, outstanding: 1 });
     expect((await progress()).expected).toBe(1);
+    // The unread register is named, so two rows are not identical on screen
+    // (fails if registerNumber is not forwarded), and the internal
+    // registerId is not on the wire (fails if the row is spread outward).
+    expect(p.data.map((d) => d.registerNumber)).toEqual(["2"]);
+    expect(Object.keys(p.data[0]!)).not.toContain("registerId");
   });
 
-  it("refuses a route that does not exist for this cycle", async () => {
+  it("clears a one-register meter's row with a read that names no register", async () => {
+    /*
+     * `createMeterRead` allows a null register on a meter with exactly
+     * one active register. Fails if `held.has(null)` is not honoured: the
+     * row would stay outstanding for ever.
+     */
+    const sa = await service({ agreementNumber: "SA-ONE", meterId: fixA.meterId });
+    await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const measureType = await prisma.measureTypeDef.findFirstOrThrow({
+        where: { OR: [{ utilityId: TENANT_A }, { utilityId: null }] },
+        orderBy: { id: "asc" },
+      });
+      await prisma.meterRegister.create({
+        data: {
+          utilityId: TENANT_A,
+          meterId: fixA.meterId,
+          registerNumber: 1,
+          uomId: fixA.uomId,
+          measureTypeId: measureType.id,
+          isActive: true,
+        },
+      });
+    });
+    const r = await route({ code: "R-ONE", stops: [fixA.premiseId] });
+    expect(await progress({ readRouteId: r })).toMatchObject({ expected: 1, outstanding: 1 });
+    // The cycle-wide row is the meter itself: no register named.
+    expect((await progress()).data[0]!.registerNumber).toBeNull();
+
+    await seedRead(fixA.meterId, sa, "2026-02-08");
+
+    expect(await progress({ readRouteId: r })).toMatchObject({
+      expected: 1,
+      read: 1,
+      outstanding: 0,
+    });
+  });
+
+  it("lists outstanding rows in the order the route is walked", async () => {
+    /*
+     * Stop 1's meter has the HIGHER meter number. Fails if the list is
+     * sorted by meter number instead of stop sequence.
+     */
+    const second = await extraPremise("Second");
+    await service({ agreementNumber: "SA-FIRST", meterId: fixA.meterId2 });
+    await service({ agreementNumber: "SA-SECOND", meterId: fixA.meterId, premiseId: second });
+    const r = await route({ code: "R-ORD", stops: [fixA.premiseId, second] });
+
+    const p = await progress({ readRouteId: r });
+
+    expect(p.data.map((d) => d.agreementNumber)).toEqual(["SA-FIRST", "SA-SECOND"]);
+  });
+
+  it("refuses a route that exists but belongs to another cycle", async () => {
+    /*
+     * Fails if `billingCycleId: cycle.id` is deleted from the route
+     * lookup: this route is real and this tenant's.
+     */
+    const otherCycleId = await seedAsPlatform(async () => {
+      const c = await prismaImports.prisma.billingCycle.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Cycle-elsewhere",
+          cycleCode: "C-ELSE",
+          readDayOfMonth: 1,
+          billDayOfMonth: 20,
+          frequency: "MONTHLY",
+        },
+      });
+      return c.id;
+    });
+    const r = await route({ code: "R-ELSE", billingCycleId: otherCycleId });
+
+    await expect(progress({ readRouteId: r })).rejects.toMatchObject({
+      statusCode: 404,
+      code: "ROUTE_NOT_FOUND",
+    });
     await expect(
       progress({ readRouteId: "00000000-0000-4000-8000-0000000000aa" }),
     ).rejects.toMatchObject({ statusCode: 404, code: "ROUTE_NOT_FOUND" });
@@ -516,6 +598,10 @@ describe("progress for an EXTERNAL route", () => {
 
     // And it is read once the vendor's file lands inside this window.
     await seedRead(fixA.meterId, sa1, "2026-02-08", { routeId: ext });
+    // A meter first seen on the route this window does NOT raise expected:
+    // the current-window fallback is for a route with no prior window only
+    // (fails if it is applied on every window).
+    await seedRead(fixA.meterId2, sa2, "2026-02-08", { routeId: ext });
     expect(await progress({ readRouteId: ext })).toMatchObject({
       expected: 1,
       read: 1,
@@ -525,20 +611,24 @@ describe("progress for an EXTERNAL route", () => {
 
   it("reports received-only for a route with no prior reads", async () => {
     /*
-     * A first-ever route has nothing to learn from. The read already
-     * received on it this window is deliberately not an expectation
-     * (fails if expected were derived from the current window).
+     * A first-ever route has nothing to learn from, so what has been
+     * received is the whole list: expected = read, nothing outstanding.
+     * Fails if the current-window fallback is deleted (it would report
+     * 0 expected and 0 read with a read in hand).
      */
     const sa = await service({ agreementNumber: "SA-NEW", meterId: fixA.meterId });
     const ext = await route({ code: "VENDOR-NEW", origin: "EXTERNAL" });
     await seedRead(fixA.meterId, sa, "2026-02-08", { routeId: ext });
 
     expect(await progress({ readRouteId: ext })).toMatchObject({
-      expected: 0,
-      read: 0,
+      expected: 1,
+      read: 1,
       outstanding: 0,
       data: [],
     });
+    // Truly nothing received and nothing prior: nothing to say.
+    const empty = await route({ code: "VENDOR-EMPTY", origin: "EXTERNAL" });
+    expect(await progress({ readRouteId: empty })).toMatchObject({ expected: 0, read: 0 });
   });
 });
 

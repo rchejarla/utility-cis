@@ -331,6 +331,13 @@ export const outstandingReadSchema = z.object({
   agreementNumber: z.string(),
   accountNumber: z.string(),
   premise: z.string().nullable(),
+  /**
+   * Which register a per-route row is for. A meter with two registers is
+   * two rows, and without this they render identically. Null where the
+   * row is the meter itself: the cycle-wide answer, an EXTERNAL route, or
+   * a meter with no active register.
+   */
+  registerNumber: z.string().nullable(),
   /** Null when the meter has never been read at all. */
   lastReadDate: z.string().nullable(),
   /**
