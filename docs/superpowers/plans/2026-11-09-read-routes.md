@@ -499,6 +499,24 @@ git commit -m "feat(read-routes): a sheet a reader can carry"
 - Modify: `packages/api/src/app.ts`
 - Test: `packages/api/src/__tests__/integration/read-route-entry.integration.test.ts`
 
+> **2026-11-17 — step 4 was skipped and is being finished separately.**
+> Commits `f0a4466..99bc0f5` delivered steps 1–3 (the service and its
+> tests) but never created `routes/read-routes.ts` or registered it in
+> `app.ts`, so none of this task's HTTP surface existed on any branch.
+> The `ui` stream found it while starting Task 10 — which cannot consume
+> an API that was never routed — and is building the whole step 4
+> surface on `feat/read-routes-ui`.
+>
+> One endpoint is added to the list below, for
+> `reopenEntryForCorrections` (shipped in `99bc0f5`, unrouted):
+> `POST /api/v1/read-routes/:id/entry/reopen`, body `{ readDate }`,
+> CREATE. It takes a date and **not** a `:batchId`, because the service
+> locates the batch from `(routeId, readDate)` itself under the
+> `read_route` row lock; a `:batchId` segment the service ignores would
+> be a lie in the URL. Answers 404 `ENTRY_NOT_FOUND` when no entry was
+> opened for that day and 409 `ENTRY_NOTHING_TO_CORRECT` when the sheet
+> posted with nothing refused.
+
 **Interfaces:**
 - Consumes: Tasks 2, 3, 4, 6, 8.
 - Produces:
