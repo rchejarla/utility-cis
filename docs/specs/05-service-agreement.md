@@ -33,7 +33,6 @@ The core billing unit linking account, premise, commodity, rate schedule, billin
 | start_date | DATE | Required; when service begins |
 | end_date | DATE | Null = currently active; populated when service ends |
 | status | ENUM | `PENDING`, `ACTIVE`, `FINAL`, `CLOSED` |
-| read_sequence | INTEGER | Optional; order within a meter reading route |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -121,7 +120,6 @@ All endpoints require JWT authentication with `utility_id` claim.
 | startDate | Yes | ISO date string |
 | endDate | No | ISO date string |
 | status | No | Default PENDING |
-| readSequence | No | integer |
 | meters | Yes | Array of meter assignments, min 1 |
 
 **Meter assignment object (within `meters` array):**
@@ -137,7 +135,6 @@ All endpoints require JWT authentication with `utility_id` claim.
 |-------|---------|
 | rateScheduleId | Yes |
 | billingCycleId | Yes |
-| readSequence | Yes |
 | customFields | Yes |
 
 The PATCH input schema is `.strict()` — passing any field not in the table above returns 422 with a Zod error. Lifecycle fields (`startDate`, `endDate`, `status`) are intentionally rejected: they go through the dedicated `POST /:id/close` endpoint, which cascades onto meter assignments atomically. Generic UPDATE setting `status=FINAL` without `endDate` (or vice versa) is also rejected at the database layer by the `enforce_sa_lifecycle_invariants` trigger (migration `20260427144400`). Fields that cannot be changed after creation under any path: `agreementNumber`, `accountId`, `premiseId`, `commodityId`.
@@ -207,9 +204,11 @@ The `createServiceAgreementSchema` requires `meters` array with `min(1)`. An agr
 
 `start_date` and `end_date` define the period of service. The rate schedule and billing cycle in effect at billing time are resolved from the agreement's rate/cycle FKs. Rate schedule version history (effective dates on RateSchedule) allows the system to bill at the correct rate for a given period even if the rate changes mid-cycle.
 
-### Read Sequence
+### Read order lives on the route, not here
 
-`read_sequence` is an integer that places this agreement in order within its billing cycle's meter reading route. Lower numbers are read first. This field supports route optimization for manual meter reading.
+**`read_sequence` was removed on 2026-11-17** (spec 30), and this section used to claim it placed an agreement in order within its billing cycle's reading route. It never did. The column was write-only: settable through the importer, the API, this page and carried through transfer, and nothing in the codebase ordered or grouped by it. A column named `read_sequence` that does nothing reads as if sequencing works, which is exactly what a builder would reach for when asked to order a route.
+
+It was also pointed at the wrong entity. A reader walks to a house, so the thing with an order is the **place**, and two meters at one address are one visit. An agreement is a contract — it ends when somebody moves out, which would renumber the route. Read order is now `read_route_stop.sequence`, keyed on `premise_id`. See [30 — Read Routes](30-read-routes.md).
 
 ### Structural Immutability
 
@@ -304,7 +303,7 @@ Note: There is no transition to or from INACTIVE. The INACTIVE status is not val
 | 15 | Transfer of service | Planned (Phase 2) — move-in/move-out workflow |
 | 58 | Future-dated rate/policy changes | Covered — RateSchedule effective dating; new version auto-expires predecessor |
 | 62 | Effective-dated enrollment with proration | Planned (Phase 3) — `start_date` exists; proration logic is Phase 3 |
-| 78 | Read cycle scheduling, route grouping | Covered — BillingCycle + `read_sequence` |
+| 78 | Read cycle scheduling, route grouping | Covered by [30 — Read Routes](30-read-routes.md) — `read_route` + `read_route_stop`, keyed on premise. **This row used to read "Covered — BillingCycle + `read_sequence`", which was never true**; that column was write-only and is gone |
 | 80 | Associate reads to meters | Covered — `MeterRead.service_agreement_id` FK |
 | 90 | New/replacement meters attached any time | Covered — ServiceAgreementMeter with `added_date`/`removed_date` |
 | 111 | Effective-dated meter/property/account associations | Covered — ServiceAgreementMeter dates |
