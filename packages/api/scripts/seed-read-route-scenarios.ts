@@ -45,18 +45,26 @@
  * premises that already exist, and inventing a parallel set of addresses
  * would make the demo data lie about what a route is.
  *
- * **742 Evergreen Terrace is deliberately not a stop**, though it is the
- * obvious candidate — two register-less meters at one address and twelve
- * months of reads on one of them. `seed/tou-service.js` also puts
- * `TOU-REG-001` and `TOU-REG-002` there, both `AMR` with four active
- * registers each, so the predicate yields **ten** rows at that one
- * address: eight of them TOU dials. Two things follow and both are bad
- * here. The sheet becomes ten lines at one stop out of nineteen, which
- * buries every other row shape this fixture exists to show. And typing
- * numbers into those dials through route entry would write new reads over
- * the TOU reconciliation fixture, whose whole point is that one meter's
- * dials sum to its total and the other's fall 15 kWh short. A fixture for
- * one feature must not quietly rewrite another's.
+ * **The tenant's first-created premise is deliberately not a stop**, which
+ * on a base-seeded database is 742 Evergreen Terrace — the obvious
+ * candidate, with two register-less meters at one address and twelve
+ * months of reads on one of them. `seed/tou-service.js:138` attaches
+ * `TOU-REG-001` and `TOU-REG-002` to `orderBy: { createdAt: "asc" }`,
+ * whichever premise that is, and both are `AMR` with four active registers
+ * each. So the predicate yields **ten** rows at that one address, eight of
+ * them TOU dials, and the rule is about creation order rather than about
+ * the address: change the seed's premise order and the hazard moves with
+ * it.
+ *
+ * Two things follow and both are bad here. The sheet becomes ten lines at
+ * one stop out of nineteen, which buries every other row shape this
+ * fixture exists to show. And typing numbers into those dials through
+ * route entry would write new reads over the TOU reconciliation fixture,
+ * whose whole point is that one meter's dials sum to its total and the
+ * other's fall 15 kWh short. A fixture for one feature must not quietly
+ * rewrite another's. The sheet itself would be right — a reader standing
+ * at an address with two four-dial meters really must read eight dials —
+ * so this is a rule about fixtures, not a limitation of routes.
  *
  * **It flips EM-003 from AMI to AMR, and that is the only existing row it
  * changes outside stop 400.** `EM-003` is the base seed's only
@@ -67,12 +75,20 @@
  * could never appear on one. AMR is the honest fix rather than a
  * workaround: design §5.12 puts AMR on routes explicitly ("drive-by and
  * does belong on a route"), and an industrial electric meter with an
- * energy and a demand register read from the kerb is an ordinary thing.
- * Nothing else in `packages/api/src` branches on `meterType` —
- * `readable-rows.ts:77` is its only reader outside the importer — so the
- * flip changes what prints on a sheet and nothing else. Cycle-wide reading
- * progress is unmoved: it excludes meters that have *intervals*, never a
- * type, and EM-003 has none either way.
+ * energy and a demand register read from the kerb is an ordinary thing. It
+ * also makes the base seed match its own stated purpose: `seed.js:814`
+ * calls EM-003 "the multi-register test fixture", and a fixture that can
+ * never appear on a sheet is not one.
+ *
+ * `readable-rows.ts:77` is the only place in `packages/api/src` that
+ * *filters* on `meterType`, so the flip changes what prints on a sheet and
+ * no behaviour anywhere else. Three other readers display it and will now
+ * say AMR for this meter: `notification.service.ts:167` (as the template
+ * variable `meter.meterType`), `customer-graph.service.ts:319` (node
+ * subtext) and `portal-api.ts:154`. Cycle-wide reading progress is
+ * unmoved: it excludes meters that have *intervals*, never a type, and
+ * EM-003 has none either way. Six AMI meters remain in the seed, WM-003
+ * among them — which is the one stop 600 leans on.
  *
  * **Dates come from the window, not from a constant.** Every date-bound
  * fact here — the off-route read, the billed read, the closed assignment,
