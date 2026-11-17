@@ -149,7 +149,6 @@ export async function transferService(
         commodityId: source.commodityId,
         startDate: transferDate,
         status: "ACTIVE",
-        readSequence: source.readSequence,
       },
     });
 

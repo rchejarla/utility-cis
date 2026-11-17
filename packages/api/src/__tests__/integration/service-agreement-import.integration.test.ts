@@ -427,7 +427,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
   /** Header and mapping carrying the legacy id. */
   const LK_HEADER =
     "legacy_id,account_number,commodity_code,premise_address,premise_zip," +
-    "start_date,status,read_sequence\n";
+    "start_date,status\n";
   const LK_MAPPING = {
     legacy_id: "legacyKey",
     account_number: "accountNumber",
@@ -436,7 +436,6 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
     premise_zip: "premiseZip",
     start_date: "startDate",
     status: "status",
-    read_sequence: "readSequence",
   };
 
   function post(csv: string, mapping: Record<string, string> = LK_MAPPING) {
@@ -455,9 +454,9 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
     });
   }
 
-  const row = (over: { key?: string; start?: string; status?: string; seq?: string } = {}) =>
+  const row = (over: { key?: string; start?: string; status?: string } = {}) =>
     `${over.key ?? "LEG-1"},${accountNumber},${commodityCode},${premiseAddress},${premiseZip},` +
-    `${over.start ?? "2026-01-01"},${over.status ?? "PENDING"},${over.seq ?? "10"}\n`;
+    `${over.start ?? "2026-01-01"},${over.status ?? "PENDING"}\n`;
 
   it("updates in place the second time, instead of reporting a duplicate", () =>
     seedAsPlatform(async () => {
@@ -479,7 +478,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
 
       // The next cycle's export: same legacy id, service has started.
       const second = JSON.parse(
-        (await post(LK_HEADER + row({ status: "ACTIVE", seq: "25" }))).body,
+        (await post(LK_HEADER + row({ status: "ACTIVE" }))).body,
       );
       expect(second.errorCount).toBe(0);
       expect(second.importedCount).toBe(1);
@@ -490,7 +489,6 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
       expect(all).toHaveLength(1);
       expect(all[0].id).toBe(created.id);
       expect(all[0].status).toBe("ACTIVE");
-      expect(all[0].readSequence).toBe(25);
       // The number it was generated with is untouched — the legacy id
       // is the handle, not the agreement number.
       expect(all[0].agreementNumber).toBe(created.agreementNumber);
@@ -560,7 +558,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
 
       const csv =
         LK_HEADER +
-        `LEG-1,OTHER-ACCT,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,10\n`;
+        `LEG-1,OTHER-ACCT,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE\n`;
       const result = JSON.parse((await post(csv)).body);
       expect(codesOf(result)).toEqual([{ rowIndex: 1, code: "LEGACY_KEY_CONFLICT" }]);
 
