@@ -10,6 +10,37 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-08-read-routes-and-reading-system-design.md`
 
+## Fixture rules discovered while building (2026-11-17)
+
+Two facts about the dev seed that any route, fixture or browser test has
+to respect. The second is not specific to one fixture.
+
+- **A route must not include the first-created premise.**
+  `seed/tou-service.js:138` attaches `TOU-REG-001` and `TOU-REG-002` to
+  `premise.findFirst({ orderBy: { createdAt: "asc" } })` — 742 Evergreen
+  Terrace in the dev seed, but it follows premise creation order, not
+  that address. Both are `AMR` with four dials each, and
+  `VISITED_METER_TYPES` is `["MANUAL", "AMR"]`, so with the two
+  register-less meters already there `readableRowsForPremises` yields
+  **ten rows at one stop**. That part is correct — a reader at an
+  address with two four-dial TOU meters does read eight dials. The
+  hazard is that typing numbers into them through route entry writes
+  `meter_read` rows over the TOU reconciliation fixture, whose invariant
+  is that one meter's dials sum to its total while the other's fall
+  15 kWh short. Goes into `docs/specs/30-read-routes.md` at Task 13.
+
+- **`EM-003` is `AMR`, not `AMI`.** The base seed called it "the
+  multi-register demo" (`seed.js:814`) while making it `AMI`, which is
+  excluded from every sheet by design — so the only two-register meter
+  in the seed could never appear on one. `seed-read-route-scenarios.ts`
+  flips it. Six AMI meters remain, `WM-003` among them at the same
+  premise, which makes that premise the fixture for the rule the sheet
+  rests on: the AMR meter's two registers print, the AMI meter prints
+  nothing. `readable-rows.ts:77` is the only behavioural reader of
+  `meterType` outside the meter importer; `notification.service.ts:167`,
+  `customer-graph.service.ts:319` and `portal-api.ts:154` only display
+  it.
+
 ## Global Constraints
 
 - **Never run `prisma migrate dev`.** Write migration SQL by hand; apply with `migrate deploy`. (CLAUDE.md)
