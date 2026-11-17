@@ -22,10 +22,19 @@ import type { FinalBillResult } from "./final-bill.service.js";
  * Transfer of service: reassigns an active service agreement from one
  * account to another as of `transferDate`. The source agreement is
  * closed with an end_date and an optional FINAL meter read; a new
- * agreement is created on the target account with identical
- * premise/commodity/rateSchedule/billingCycle and an optional ACTUAL
- * meter read. Meter-read history stays linked to whichever agreement
- * owned the meter at the time.
+ * agreement is created on the target account, and an optional ACTUAL
+ * read is recorded against it. Meter-read history stays linked to
+ * whichever agreement owned the meter at the time.
+ *
+ * **Only `commodity_id` is carried onto the new agreement.** This
+ * comment claimed "identical premise/commodity/rateSchedule/
+ * billingCycle" until 2026-11-17 and three of the four were wrong: the
+ * premise is not an agreement field (it arrives on the service point
+ * created below), `billingCycleId` left the SA in slice 5b.1 — see the
+ * note at the create — and no rate-schedule assignment is made here at
+ * all, so a transferred service carries no `SAScheduleAssignment` until
+ * one is created. `readSequence` was the fourth, and its column is gone
+ * (spec 30).
  */
 export async function transferService(
   utilityId: string,
