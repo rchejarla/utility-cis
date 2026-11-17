@@ -48,13 +48,13 @@ rem   --allow-dirty     create worktrees from a dirty main checkout
 rem   --drop-databases  (down) drop each stream's database too
 rem   --force           (down) remove a worktree holding unmerged work
 rem
-rem ENVIRONMENT
+rem ENVIRONMENT (both have defaults; set them only to override)
 rem   DW_ROOT         where worktrees live   (default C:\development\ucis-wt)
-rem   DW_COORDINATOR  this session's name, written into each brief
+rem   DW_COORDINATOR  the coordinator session's name, written into each
+rem                   brief  (default utility-cis-22 - see the note below)
 rem
 rem EXAMPLES
 rem   dev_worktrees.bat status
-rem   set DW_COORDINATOR=utility-cis-22
 rem   dev_worktrees.bat up
 rem   dev_worktrees.bat up e2e --skip-seed
 rem   dev_worktrees.bat down --drop-databases
@@ -64,7 +64,18 @@ cd /d "%~dp0"
 set "REPO=%CD%"
 
 if not defined DW_ROOT set "DW_ROOT=C:\development\ucis-wt"
-if not defined DW_COORDINATOR set "DW_COORDINATOR=the coordinator session (find it with ListAgents - it is the one running in %REPO%)"
+
+rem The coordinator's Claude session name - the window driving the main
+rem checkout, which the streams report to with SendMessage. A session prints
+rem its own name at the top of ListAgents ("This session is <name>").
+rem
+rem It is NOT derivable: the environment carries CLAUDE_CODE_SESSION_ID, a
+rem UUID, while SendMessage addresses by name. And it changes when the
+rem session restarts, so the value below goes stale - which is why each
+rem brief also tells the stream to fall back to whichever session is running
+rem in the main checkout. Override without editing this file:
+rem   set DW_COORDINATOR=<name>
+if not defined DW_COORDINATOR set "DW_COORDINATOR=utility-cis-22"
 
 rem ---------------------------------------------------------------------
 rem The streams. This table is the only thing to edit when the work

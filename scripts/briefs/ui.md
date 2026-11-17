@@ -45,10 +45,13 @@ parallel, each in its own git worktree. Yours is **{{STREAM}}**, on branch
 
 ## Talking to the others
 
-Run `ListAgents` to see the live sessions. Report to {{COORDINATOR}} with
+Run `ListAgents` to see the live sessions. Report to **{{COORDINATOR}}** with
 `SendMessage`: when you finish a task, when you need a migration applied, and
 when you are blocked. Pass `notify_when_idle` instead of asking another session
 whether it is done yet.
+
+If no session by that name is listed, the name went stale when the coordinator
+restarted — it is whichever session is running in `C:\development\utility-cis`.
 
 Your plain output is not visible to the other sessions. If it needs to reach
 them, send it.
