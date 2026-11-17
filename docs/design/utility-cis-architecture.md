@@ -545,7 +545,6 @@ The core billing unit. Links account + premise + commodity + rate schedule + bil
 | start_date | DATE | |
 | end_date | DATE | Null = active |
 | status | ENUM | PENDING, ACTIVE, FINAL, CLOSED |
-| read_sequence | INTEGER | Order in reading route |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -1100,7 +1099,7 @@ Two of those queues carry a **progress row**, not just a job: `import_batch` / `
 
 Phase 2 adds three multi-entity operations that don't fit any single CRUD shape and therefore have their own endpoints. Each wraps its work in a single PostgreSQL transaction so partial state is impossible — every row lands or none do — and each emits a dedicated audit event (`workflow.transfer_service`, `workflow.move_in`, `workflow.move_out`) so the audit log shows the logical operation rather than a fan-out of per-entity updates.
 
-**Transfer of service** (`POST /api/v1/service-agreements/:id/transfer`): reassigns an active service agreement from the source account to a target account as of the transfer date. Flow inside the transaction: optionally record a FINAL meter read on the source's primary meter → mark the source agreement `status=FINAL` with `end_date=transferDate` → create a new agreement on the target account cloning `premise/commodity/rateSchedule/billingCycle/readSequence` with `start_date=transferDate` → copy over the active meter assignments → optionally record an ACTUAL read on the new side. The source account must be different from the target and the source agreement must not already be closed.
+**Transfer of service** (`POST /api/v1/service-agreements/:id/transfer`): reassigns an active service agreement from the source account to a target account as of the transfer date. Flow inside the transaction: optionally record a FINAL meter read on the source's primary meter → mark the source agreement `status=FINAL` with `end_date=transferDate` → create a new agreement on the target account cloning `premise/commodity/rateSchedule/billingCycle` with `start_date=transferDate` → copy over the active meter assignments → optionally record an ACTUAL read on the new side. The source account must be different from the target and the source agreement must not already be closed.
 
 **Move-in** (`POST /api/v1/workflows/move-in`): coordinated setup of a new customer (or reference to existing) + account + one-or-more service agreements + optional initial meter reads at a premise. The request body's `existingCustomerId` and `newCustomer` are mutually exclusive — exactly one must be present, enforced by the Zod schema's refine rule. All rows land in a single transaction keyed on `move_in_date`.
 

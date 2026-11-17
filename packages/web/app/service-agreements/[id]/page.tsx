@@ -310,6 +310,18 @@ export default function ServiceAgreementDetailPage({
         changes.customFields = editCustomFields;
       }
 
+      // Nothing changed, so nothing is sent. An empty PATCH is not inert:
+      // `updated_at` moves, so it writes a ServiceAgreement UPDATE into
+      // the audit log, and the toast below would report a change that
+      // never happened. Reachable by two clicks now that custom fields
+      // are the only thing this panel edits — a tenant that has declared
+      // none sees no input at all between Edit and Save.
+      if (Object.keys(changes).length === 0) {
+        setEditing(false);
+        toast("No changes to save", "info");
+        return;
+      }
+
       await apiClient.patch(`/api/v1/service-agreements/${id}`, changes);
       await loadSA();
       setEditing(false);

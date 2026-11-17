@@ -5,24 +5,31 @@
 --
 -- It was spec 05's answer to route ordering: "an integer that places
 -- this agreement in order within its billing cycle's meter reading
--- route. Lower numbers are read first." Nothing read it. Seven sites
--- touched the column and six of them wrote it:
+-- route. Lower numbers are read first." **Nothing ordered, grouped or
+-- filtered by it.** Seven sites touched the column:
 --
---   * the create and PATCH validators, and the two service functions
---     behind them;
---   * the transfer workflow, copying a source agreement's value onto
---     the new one;
---   * the service-agreement import, as a `readSequence` canonical field
---     with the aliases `readsequence`, `readseq`, `routesequence` and
---     `sequence`, a rejection for a non-integer, and a column in the
---     generated template;
---   * the agreement detail page, which rendered it as "Read Sequence"
---     and offered a number input for it in edit mode.
+--   * `validators/service-agreement.ts` — the create and the PATCH
+--     schema;
+--   * `services/service-agreement.service.ts` — the create and the
+--     update behind them;
+--   * `services/workflows.service.ts` — the transfer workflow, copying
+--     a source agreement's value onto the new one;
+--   * `imports/handlers/service-agreement.ts` — a `readSequence`
+--     canonical field with the aliases `readsequence`, `readseq`,
+--     `routesequence` and `sequence`, a rejection for a non-integer,
+--     and a column in the generated template;
+--   * `lib/custom-fields.ts` — the key, reserved so a tenant could not
+--     declare a custom field that collided with it;
+--   * `web/app/service-agreements/[id]/page.tsx` — a "Read Sequence"
+--     row and, in edit mode, a number input;
+--   * the import's own integration test, asserting back the value it
+--     had just written.
 --
--- The seventh was the import's own integration test, asserting back the
--- value it had just written. No `ORDER BY`, no `WHERE`, no index, no
--- constraint, no view: checked in the code and then against the
--- database, which reports no dependent object of any kind on the
+-- Two of those read the value: the detail page rendered it, and the
+-- transfer copied an agreement's own number forward. Neither is a
+-- reader in the sense that matters — no `ORDER BY`, no `WHERE`, no
+-- index, no constraint, no view, checked in the code and then against
+-- the database, which reports no dependent object of any kind on the
 -- column. A CSR could type a number into it and no screen, sheet,
 -- query or report would ever order anything by it.
 --
@@ -41,9 +48,9 @@
 --   * It belonged to the wrong record. An itinerary changes when a
 --     reader's round is rearranged; an agreement changes when service
 --     does. `read_route_stop` carries `(utility_id, read_route_id,
---     sequence)` UNIQUE, and `origin` says whether the itinerary is
---     ours to edit or a vendor's to mirror — three facts one nullable
---     column on `service_agreement` had nowhere to put.
+--     sequence)` UNIQUE, and `read_route.origin` says whether the
+--     itinerary is ours to edit or a vendor's to mirror — three facts
+--     one nullable column on `service_agreement` had nowhere to put.
 --
 -- NOTHING IS LOST
 --
@@ -58,16 +65,38 @@
 --
 -- WHAT CHANGES FOR SOMEBODY USING THE SYSTEM
 --
--- A file that still carries a read-sequence column now leaves it
--- unmapped and ignored, instead of writing into a field nothing reads.
--- A client still sending `readSequence` to
--- `PATCH /api/v1/service-agreements/:id` gets a 422, because that
--- schema is `.strict()` — the removal is visible rather than silently
--- stripped. And `read_sequence` is no longer a reserved custom-field
--- key on `service_agreement`, so a tenant may now declare a custom
--- field by that name.
+-- **Two callers break, and both break loudly.** Both schemas are
+-- `.strict()` and both routes `.parse()` the body, so `readSequence` in
+-- a request to `POST /api/v1/service-agreements` or
+-- `PATCH /api/v1/service-agreements/:id` is a **400
+-- `VALIDATION_ERROR`** (`middleware/error-handler.ts` maps every
+-- `ZodError` that way). That is the intended trade: a removal a client
+-- can see beats one that silently drops a field it still thinks it is
+-- setting. A script that has been creating agreements with a read
+-- sequence — a body `docs/specs/05-service-agreement.md` documented as
+-- valid — must stop sending it.
+--
+-- **An import mapping that still names it is refused outright**, not
+-- ignored: `validateMapping` (`services/imports.service.ts`) rejects
+-- any mapped value that is not a known canonical field with a 400
+-- `INVALID_MAPPING`, and no batch is created at all. So a scheduled
+-- export posting a stored mapping — the overlay mirror of spec 28,
+-- OVL-IN-5 — fails its whole file on the first cycle after this
+-- applies, until that mapping drops the column or points it at
+-- `"ignore"`, which `validateMapping` admits by design. In the wizard
+-- there is nothing to do: the `readsequence` / `readseq` /
+-- `routesequence` / `sequence` aliases are gone with the field, so the
+-- header simply does not auto-map, and an unmapped column is ignored.
+-- Refusing rather than quietly skipping is the framework's choice, and
+-- the right one — a mapping naming a field that does not exist is
+-- usually a typo, and a deprecated-name list to keep this one working
+-- would be the start of an alias table nobody maintains.
+--
+-- And `read_sequence` is no longer a reserved custom-field key on
+-- `service_agreement`, so a tenant may now declare a custom field by
+-- that name.
 
 ALTER TABLE "service_agreement" DROP COLUMN "read_sequence";
 
 COMMENT ON COLUMN "read_route_stop"."sequence" IS
-  'Where this premise falls in the reader''s walk: a sort key, unique per route, assigned in steps of 100 so a stop can be inserted between two others without rewriting the rest. Neither contiguous nor 1-based. The order of a round is the route''s fact, not an agreement''s: service_agreement.read_sequence held an integer of the same name until 2026-11-09, with no reader anywhere.';
+  'Where this premise falls in the reader''s walk: a sort key, unique per route, assigned in steps of 100 so a stop can be inserted between two others without rewriting the rest. Neither contiguous nor 1-based. The order of a round is the route''s fact, not an agreement''s: service_agreement.read_sequence held an integer of the same name until this migration dropped it, with nothing ordering by it anywhere.';
