@@ -52,11 +52,13 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from "@
  * unused day of the window, and a failure that says what to do when they
  * are gone.
  *
- * ## The page contract this assumes
+ * ## The page contract
  *
- * Written before the screens existed, against the paths the coordinator
- * settled. Everything the spec reaches for is listed here, so a mismatch
- * is a short conversation rather than a hunt:
+ * Drafted before the screens existed, against the paths the coordinator
+ * settled, then agreed with the UI stream on 2026-11-17 — the three points
+ * marked *(corrected)* are where the screens were right and this was
+ * wrong. Everything the spec reaches for is listed here, so a later
+ * mismatch is a short conversation rather than a hunt:
  *
  *  1. `/read-routes` lists routes; each row links to the route by its
  *     **code** as the link text (`W-04`).
@@ -67,29 +69,52 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from "@
  *     endpoint wants the bearer token the browser would not send. For an
  *     `EXTERNAL` route the same page renders **no** such control and says
  *     somewhere that the route is the vendor's.
- *  3. `/read-routes/:id/entry?date=YYYY-MM-DD` is the entry screen for one
- *     day, defaulting to today when the parameter is absent. The spec's
- *     own calls assume `?date=` on the sheet endpoint and `{ readDate }`
- *     in the entry and reopen bodies — the two parameter names appear once
- *     each, in `Api.sheet` and `entryFor`, so a different spelling is a
- *     one-line correction.
+ *  3. The sheet endpoint takes **`?onDate=YYYY-MM-DD`** *(corrected: this
+ *     spec asked for `?date=`)*, with `&format=json` for the data instead
+ *     of the PDF. `onDate` is the parameter's name all the way through
+ *     `buildRouteSheet` and `readableRowsForPremises`, and `date` would be
+ *     a third word for one thing. The entry *page* URL is
+ *     `/read-routes/:id/entry?date=YYYY-MM-DD`, defaulting to today when
+ *     absent — that one is human-facing, so it stays short. The entry and
+ *     reopen bodies take `{ readDate }`. Each name appears once here, in
+ *     `Api.sheet` and `entryFor`.
  *  4. Each entry row carries `data-testid="entry-row-<rowIndex>"`, where
  *     `rowIndex` is the 1-based index `openEntry` returns — the route's
  *     walking order. The spec learns which meter is on which row from the
  *     API rather than assuming, so only the attribute is contractual.
- *  5. Within a row: the reading field is the only `spinbutton`/`textbox`,
- *     and the skip reason the only `combobox`, whose option values are the
- *     `SKIP_REASONS` strings (`LOCKED_GATE`, `DOG`, …).
- *  6. `Enter` in the reading field saves that row.
- *  7. A row the server refused shows the refusal as text in the row.
- *  8. A control named **"Submit"** posts the sheet, and one named
- *     **"Correct"** reopens it for the rows that were refused.
+ *  5. Within a row the reading field is the only **`spinbutton`** — an
+ *     `<input type="number">` *(corrected: this spec accepted a `textbox`
+ *     too, which is now wrong and would be ambiguous)*. A **notes**
+ *     textbox appears in a row once a skip reason is set on it, offered
+ *     only then because forty always-visible note fields are forty
+ *     controls nobody uses. So a row that has been coded holds a textbox,
+ *     and the reading field must never be reached as one.
+ *  6. The skip reason is the only `combobox` in a row, and its option
+ *     **values** are the `SKIP_REASONS` strings (`LOCKED_GATE`, `DOG`, …)
+ *     while its labels are words.
+ *  7. `Enter` in the reading field saves that row. There is no
+ *     save-on-blur for readings at all, so `Enter` is the only path.
+ *  8. A row the server refused shows the refusal as text **in** the row.
+ *     Both cases this asserts: `READ_BILLED` the moment a number is typed
+ *     into the billed row, and `METER_ALREADY_READ` after Submit, which
+ *     the page reads back by re-opening the batch.
+ *  9. The buttons are **"Post the route"** and **"Correct the refused
+ *     rows"** *(corrected: this spec asked for "Submit" and "Correct")*.
+ *     Neither is shortened on purpose — "Submit" says nothing about
+ *     posting a whole route, and the correction button has to say what it
+ *     corrects.
+ * 10. The entry page names the stops with nothing to read above the grid,
+ *     from the sheet's `stopsWithNothingToRead`.
  *
  * Row addressing is by `data-testid` rather than by reading the table,
  * because a reading sheet is a grid of numbers: nothing in a row is unique
  * text, two rows carry the same meter number when it has two registers,
  * and `nth()` over `getByRole("row")` breaks the first time a header or a
- * group row is added.
+ * group row is added. (The fields also carry accessible names — `Reading
+ * for <meterNumber>[ register <n>]` and `Why <meterNumber> was not
+ * read` — which would address a row too; the index is kept because the
+ * row-level assertions need the row itself, and one addressing scheme
+ * beats two.)
  */
 
 const ADMIN = "System Admin";
@@ -117,6 +142,17 @@ const BEHIND_THE_GATE = ["WM-105", "WM-106"];
 const TWO_REGISTER = "EM-003";
 /** Ordinary rows at the reused premises, which the sheet must also carry. */
 const PLAIN_ROWS = ["WM-005", "WM-004"];
+
+/**
+ * The two buttons, spelled out once.
+ *
+ * Neither is shortened: "Submit" says nothing about posting a whole
+ * route, and the correction button has to say what it corrects. Anchored
+ * both ends, so a second button whose name merely contains one of these
+ * cannot be clicked by accident.
+ */
+const POST_THE_ROUTE = /^Post the route$/i;
+const CORRECT_REFUSED = /^Correct the refused rows$/i;
 
 /** Every row the sheet should have for the scenario route. */
 const EXPECTED_ROWS = 9;
@@ -183,10 +219,14 @@ class Api {
     return (await response.json()) as T;
   }
 
-  /** The sheet's bytes, so "it rendered a PDF" is checked against the file and not the page. */
-  async sheet(routeId: string, date: string): Promise<Buffer> {
+  /**
+   * The sheet's bytes, so "it rendered a PDF" is checked against the file
+   * and not the page. `onDate`, not `date`: that is the parameter's name
+   * all the way through `buildRouteSheet`.
+   */
+  async sheet(routeId: string, onDate: string): Promise<Buffer> {
     const response = await this.request.get(
-      `${API_URL}/api/v1/read-routes/${routeId}/sheet?date=${date}`,
+      `${API_URL}/api/v1/read-routes/${routeId}/sheet?onDate=${onDate}`,
       { headers: { authorization: this.authorization } },
     );
     expect(response.ok(), `sheet -> ${response.status()}`).toBe(true);
@@ -299,9 +339,17 @@ function rowFor(page: Page, rows: EntryRow[], meterNumber: string, registerNumbe
   return page.getByTestId(`entry-row-${row!.rowIndex}`);
 }
 
-/** The reading field, whether the page made it a number input or a text one. */
+/**
+ * The reading field: a `spinbutton` and only that.
+ *
+ * Never also a `textbox`. A row that has been given a skip reason grows a
+ * **notes** textbox, so accepting either role would match the wrong
+ * control on a coded row — or two controls, and fail strict mode. The
+ * correction step types a number into a row that still carries its code,
+ * which is exactly where that would have bitten.
+ */
 function readingField(row: Locator): Locator {
-  return row.getByRole("spinbutton").or(row.getByRole("textbox"));
+  return row.getByRole("spinbutton");
 }
 
 /** Type a reading and commit it with the key a clerk would use. */
@@ -398,6 +446,16 @@ test("a day's sheet is typed in, two stops are coded, and the one refused stop i
     page.getByTestId(`entry-row-${rows.length}`),
     "every row of the sheet should be on the screen",
   ).toBeVisible();
+  /*
+   * The stop whose service closed mid-window produces no row at all, and
+   * the screen has to say so. A stop that vanishes from a sheet without a
+   * trace is the silent failure design §5.1 forbids — the one outcome
+   * here that nothing else reports.
+   */
+  await expect(
+    page.getByText(/nothing to read/i),
+    "the stop whose service ended should be named, not silently absent",
+  ).toBeVisible();
 
   // ── 1. The frozen period refuses a number at the keyboard ──────────
   /*
@@ -445,7 +503,7 @@ test("a day's sheet is typed in, two stops are coded, and the one refused stop i
   );
 
   // ── 4. Submit ──────────────────────────────────────────────────────
-  await page.getByRole("button", { name: /^Submit/i }).click();
+  await page.getByRole("button", { name: POST_THE_ROUTE }).click();
 
   const refusedRow = rowFor(page, rows, READ_OFF_ROUTE);
   await expect(
@@ -508,9 +566,18 @@ test("a day's sheet is typed in, two stops are coded, and the one refused stop i
    * which is the whole reason `reopenEntryForCorrections` exists — and the
    * five rows that already posted must not post a second time.
    */
-  await page.getByRole("button", { name: /^Correct/i }).click();
+  await page.getByRole("button", { name: CORRECT_REFUSED }).click();
+  /*
+   * The number is typed over a row that still carries its `DOG` code:
+   * reopening clears a row's error, not its staged `skipReason`. So the
+   * row must send the reading **alone** — `saveEntryRow` then clears the
+   * code, and refuses the pair with `ENTRY_ROW_AMBIGUOUS` if both are
+   * sent. Nothing else in this spec covers that, and the only symptom
+   * would be this row coming back SKIPPED instead of IMPORTED, which the
+   * assertion below is.
+   */
   await typeReading(rowFor(page, rows, READ_OFF_ROUTE), 188_400);
-  await page.getByRole("button", { name: /^Submit/i }).click();
+  await page.getByRole("button", { name: POST_THE_ROUTE }).click();
 
   await expect(
     refusedRow,
