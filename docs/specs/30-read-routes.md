@@ -230,7 +230,7 @@ in this spec where that is true.
 | POST | `/api/v1/read-routes/:id/stops` | EDIT |
 | DELETE | `/api/v1/read-routes/:id/stops/:stopId` | EDIT |
 | GET | `/api/v1/read-routes/:id/unsequenced` | VIEW |
-| GET | `/api/v1/read-routes/:id/sheet` | VIEW — streams a PDF |
+| GET | `/api/v1/read-routes/:id/sheet?onDate=YYYY-MM-DD[&format=json]` | VIEW — streams a PDF, or the sheet's data |
 | GET | `/api/v1/read-routes/:id/progress` | VIEW |
 | POST | `/api/v1/read-routes/:id/entry` | CREATE — opens or re-opens the day's sheet |
 | PATCH | `/api/v1/read-routes/:id/entry/:batchId/rows` | CREATE |
@@ -241,6 +241,14 @@ in this spec where that is true.
 `reopenEntryForCorrections` finds the batch from `(routeId, readDate)`
 itself, and a caller that had to know the batch id would have to open the
 entry to learn it.
+
+**`onDate`, not `date`** — the parameter keeps the name it has all the way
+through `buildRouteSheet` and `readableRowsForPremises`, because a third
+word for one thing is how two of them come to disagree. `format=json`
+returns the sheet's data instead of the PDF, which is how the entry screen
+gets `stopsWithNothingToRead` (rule 17) without rendering a document to
+read three addresses out of it. The entry *page's* URL carries `?date=`,
+which is a human-facing address and stays short.
 
 **There is no resequence endpoint.** `SEQUENCE_FULL` tells a caller to
 resequence the route and nothing offers a way to; see open item 6.
