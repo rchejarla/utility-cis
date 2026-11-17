@@ -42,13 +42,13 @@ rem DATABASE_URL defaulted to "" (see packages/api/src/config.ts).
 echo [2/3] Starting API (port 3001)...
 start "CIS API" cmd /c "pnpm --filter @utility-cis/api exec tsx --env-file=.env src/server.ts"
 
-echo [3/3] Starting Web (port 3000)...
+echo [3/3] Starting Web (port 4000)...
 start "CIS Web" cmd /c "pnpm --filter @utility-cis/web start"
 
 echo.
 echo Both services starting:
-echo   API: http://localhost:3001
-echo   Web: http://localhost:3000
+echo   API: http://localhost:4001
+echo   Web: http://localhost:4000
 echo.
 echo Note: background workers are not started here. Run them with
 echo   pnpm --filter @utility-cis/api start:worker

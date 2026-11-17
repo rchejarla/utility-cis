@@ -84,8 +84,8 @@ Single overarching architecture and data model reference for the entire system (
 ## Tech Stack
 
 - **Monorepo:** Turborepo + pnpm
-- **API:** Fastify (TypeScript) on port 3001
-- **Web:** Next.js 14+ on port 3000
+- **API:** Fastify (TypeScript) on port 4001
+- **Web:** Next.js 14+ on port 4000 (both moved off 3000/3001 on 2026-11-17, which another application on this machine serves — and `stop_services.bat` kills by port, so it would have killed it)
 - **Database:** PostgreSQL 16+ with TimescaleDB, Prisma ORM, Row-Level Security
 - **UI:** Tailwind CSS, Font Awesome Pro icons
 - **Auth:** NextAuth.js with JWT

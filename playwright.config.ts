@@ -54,7 +54,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: [["list"]],
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
+    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:4000",
     headless: true,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
@@ -64,13 +64,13 @@ export default defineConfig({
     {
       // Already running in normal use; started here when it is not.
       command: "pnpm --filter @utility-cis/api dev",
-      url: "http://localhost:3001/health",
+      url: "http://localhost:4001/health",
       reuseExistingServer: true,
       timeout: 120_000,
     },
     {
       command: "pnpm --filter @utility-cis/web dev",
-      url: "http://localhost:3000/login",
+      url: "http://localhost:4000/login",
       reuseExistingServer: true,
       timeout: 180_000,
     },

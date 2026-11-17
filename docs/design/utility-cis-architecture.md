@@ -39,8 +39,8 @@ The Utility CIS (Customer Information System) is a multi-tenant SaaS platform fo
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | Monorepo | Turborepo + pnpm | Build orchestration, shared types |
-| API | Fastify (TypeScript) | REST API on port 3001 |
-| Admin UI | Next.js 14+ App Router | Admin UI on port 3000 |
+| API | Fastify (TypeScript) | REST API on port 4001 |
+| Admin UI | Next.js 14+ App Router | Admin UI on port 4000 |
 | UI Components | Tailwind CSS + Font Awesome Pro | Styling and icons |
 | ORM | Prisma | Type-safe DB client, migrations |
 | Database | PostgreSQL 16+ | Relational data, RLS multi-tenancy |
@@ -63,8 +63,8 @@ The Utility CIS (Customer Information System) is a multi-tenant SaaS platform fo
 utility-cis/
 ├── packages/
 │   ├── shared/              — Prisma schema, Zod validators, types, events
-│   ├── api/                 — Fastify REST API (port 3001)
-│   └── web/                 — Next.js Admin UI (port 3000)
+│   ├── api/                 — Fastify REST API (port 4001)
+│   └── web/                 — Next.js Admin UI (port 4000)
 ├── docs/
 │   ├── design/              — This document
 │   └── specs/               — Module-level functional specs

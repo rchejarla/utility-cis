@@ -327,7 +327,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       description:
         "Customer Information System for utilities. Every request/response shape is derived from Zod validators in `@utility-cis/shared`; this document is the machine-verifiable contract.",
     },
-    servers: [{ url: "http://localhost:3001", description: "Local development" }],
+    servers: [{ url: "http://localhost:4001", description: "Local development" }],
     tags: [
       { name: "Accounts" },
       { name: "Billing" },
