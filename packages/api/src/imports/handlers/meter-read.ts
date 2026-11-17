@@ -291,8 +291,11 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       };
     }
 
-    // An id, unlike a code, is only ever written by route entry's staging,
-    // so it may name a LOCAL route: that is the one door a read gets onto one.
+    // An id, unlike a code, is only ever written by route entry's staging —
+    // `validateMapping` rejects a mapping value that is not a canonical
+    // field, so no file can name it. The lookup below checks that the route
+    // exists on this tenant and nothing else: an id is trusted to name any
+    // route, LOCAL included, which is the one door a read gets onto one.
     let entryRouteId: string | null = null;
     if (row.routeId) {
       const route = await ctx.tx.readRoute.findFirst({

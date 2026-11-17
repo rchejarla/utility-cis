@@ -71,6 +71,8 @@ const open = (routeId: string, day = DAY) => asA(() => entry.openEntry(TENANT_A,
 const save = (batchId: string, input: Parameters<typeof entry.saveEntryRow>[3]) =>
   asA(() => entry.saveEntryRow(TENANT_A, actor, batchId, input));
 const submit = (batchId: string) => asA(() => entry.submitEntry(TENANT_A, actor, batchId));
+const reopen = (routeId: string, day = DAY) =>
+  asA(() => entry.reopenEntryForCorrections(TENANT_A, actor, routeId, day));
 
 const readCount = () => seed((p) => p.meterRead.count());
 const skipCount = (meterId?: string) => seed((p) => p.readSkip.count({ where: meterId ? { meterId } : {} }));
@@ -238,6 +240,20 @@ describe("opening entry", () => {
     expect(await seed((p) => p.importRow.count())).toBe(1);
   });
 
+  it("opens one batch when two callers open the same route and date at once", async () => {
+    const routeId = await makeRoute();
+    await makeStop(routeId);
+
+    // The `FOR UPDATE` on the route row is the only thing enforcing this:
+    // there is no unique index, and none is expressible over jsonb in
+    // `schema.prisma`.
+    const [first, second] = await Promise.all([open(routeId), open(routeId)]);
+
+    expect(second.batchId).toBe(first.batchId);
+    expect(await seed((p) => p.importBatch.count())).toBe(1);
+    expect(await seed((p) => p.importRow.count())).toBe(1);
+  });
+
   it("opens a different batch for a different date", async () => {
     const routeId = await makeRoute();
     await makeStop(routeId);
@@ -397,6 +413,47 @@ describe("submitting", () => {
     expect(result).toMatchObject({ importedCount: 1, errorCount: 0, skipsRecorded: 0 });
     expect(await seed((p) => p.meterRead.count({ where: { meterId: s.meterId } }))).toBe(1);
     expect(await skipCount(s.meterId)).toBe(0);
+    // The rule, not only its outcome: the coded register's row stays SKIPPED
+    // with no error, and its reason is kept on the row — that is where the
+    // reason for an unread register lives when the meter itself was read.
+    // Without the mixed-register branch `recordSkips` refuses this meter
+    // (it has a read in the window, posted moments earlier) and the row
+    // lands as ERROR / METER_ALREADY_READ instead.
+    const stored = await seed((p) => p.importRow.findMany({ where: { importBatchId: batchId } }));
+    const coded = stored.find(
+      (r) => (r.rawData as Record<string, string>).registerId === s.registerIds[1],
+    )!;
+    expect(coded.status).toBe("SKIPPED");
+    expect(coded.errorCode).toBeNull();
+    expect((coded.rawData as Record<string, string>).skipReason).toBe("UNREADABLE");
+    expect(coded.errorMessage).toContain("UNREADABLE");
+  });
+
+  it("one meter already read does not cost the other skips sharing its reason", async () => {
+    const routeId = await makeRoute();
+    const a = await makeStop(routeId);
+    const b = await makeStop(routeId);
+    const offender = await makeStop(routeId);
+    // Unbilled, so the skip is refused with METER_ALREADY_READ rather than
+    // the row being frozen by the billed-period check.
+    await priorRead(offender, false);
+    const { batchId } = await open(routeId);
+    for (const s of [a, b, offender]) {
+      await save(batchId, { meterId: s.meterId, registerId: null, skipReason: "LOCKED_GATE" });
+    }
+
+    const result = await submit(batchId);
+
+    expect(result).toMatchObject({ importedCount: 0, skipsRecorded: 2, errorCount: 1 });
+    expect(await skipCount(a.meterId)).toBe(1);
+    expect(await skipCount(b.meterId)).toBe(1);
+    expect(await skipCount(offender.meterId)).toBe(0);
+    const rows = await seed((p) => p.importRow.findMany({ where: { importBatchId: batchId } }));
+    const bad = rows.filter((r) => r.status === "ERROR");
+    expect(bad).toHaveLength(1);
+    expect((bad[0].rawData as Record<string, string>).meterId).toBe(offender.meterId);
+    expect(bad[0].errorCode).toBe("METER_ALREADY_READ");
+    expect(rows.filter((r) => r.status === "SKIPPED")).toHaveLength(2);
   });
 
   it("a stop with every register coded is a skipped meter: one skip however many rows", async () => {
@@ -534,5 +591,100 @@ describe("submitting", () => {
     const result = await submit(batchId);
     expect(result).toMatchObject({ status: "COMPLETE", importedCount: 0, skipsRecorded: 1 });
     expect(await submit(batchId)).toMatchObject({ alreadySubmitted: true, skipsRecorded: 1 });
+  });
+});
+
+describe("reopening for corrections", () => {
+  it("takes the refused row back to PENDING, and the correction posts without re-posting the rest", async () => {
+    const routeId = await makeRoute();
+    const posted = await makeStop(routeId);
+    const refused = await makeStop(routeId);
+    // A read already in the window, so the coded row's skip is refused.
+    await priorRead(refused, false);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: posted.meterId, registerId: null, reading: 150 });
+    await save(batchId, { meterId: refused.meterId, registerId: null, skipReason: "DOG" });
+    const first = await submit(batchId);
+    expect(first).toMatchObject({ status: "PARTIAL", importedCount: 1, errorCount: 1 });
+    const readsAfterFirst = await readCount();
+
+    const reopened = await reopen(routeId);
+
+    expect(reopened.batchId).toBe(batchId);
+    const batch = await seed((p) => p.importBatch.findUniqueOrThrow({ where: { id: batchId } }));
+    expect(batch.status).toBe("PENDING");
+    expect(rowFor(reopened.rows, refused.meterId)).toMatchObject({
+      status: "PENDING",
+      errorCode: null,
+      errorMessage: null,
+    });
+
+    // The reader came back with the number.
+    await save(batchId, { meterId: refused.meterId, registerId: null, reading: 160 });
+    const again = await submit(batchId);
+
+    expect(again).toMatchObject({
+      status: "COMPLETE",
+      importedCount: 2,
+      errorCount: 0,
+      alreadySubmitted: false,
+    });
+    // Counted, not taken from the result: the already-IMPORTED row must not
+    // post a second read.
+    expect(await readCount()).toBe(readsAfterFirst + 1);
+    expect(await seed((p) => p.meterRead.count({ where: { meterId: posted.meterId } }))).toBe(1);
+    const corrected = await seed((p) =>
+      p.meterRead.findMany({ where: { meterId: refused.meterId }, orderBy: { readDate: "asc" } }),
+    );
+    expect(corrected.map((r) => Number(r.reading))).toEqual([100, 160]);
+    const rows = await seed((p) => p.importRow.findMany({ where: { importBatchId: batchId } }));
+    expect(rows.every((r) => r.status === "IMPORTED")).toBe(true);
+  });
+
+  it("refuses a sheet with nothing to correct, and a route with no entry at all", async () => {
+    const routeId = await makeRoute();
+    const s = await makeStop(routeId);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: s.meterId, registerId: null, reading: 150 });
+    expect((await submit(batchId)).status).toBe("COMPLETE");
+
+    await expect(reopen(routeId)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "ENTRY_NOTHING_TO_CORRECT",
+    });
+    // Refused whole: the batch is not left half-reopened.
+    const batch = await seed((p) => p.importBatch.findUniqueOrThrow({ where: { id: batchId } }));
+    expect(batch.status).toBe("COMPLETE");
+
+    const never = await makeRoute();
+    await expect(reopen(never)).rejects.toMatchObject({ statusCode: 404, code: "ENTRY_NOT_FOUND" });
+  });
+
+  it("leaves the skipped rows alone: a recorded skip and an untyped row both survive it", async () => {
+    const routeId = await makeRoute();
+    const skipped = await makeStop(routeId);
+    const refused = await makeStop(routeId);
+    await priorRead(refused, false);
+    const untyped = await makeStop(routeId);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: skipped.meterId, registerId: null, skipReason: "DOG" });
+    await save(batchId, { meterId: refused.meterId, registerId: null, skipReason: "DOG" });
+    const first = await submit(batchId);
+    expect(first).toMatchObject({ status: "PARTIAL", skipsRecorded: 1, errorCount: 1, notEntered: 1 });
+
+    const reopened = await reopen(routeId);
+
+    expect(rowFor(reopened.rows, skipped.meterId)).toMatchObject({
+      status: "SKIPPED",
+      skipReason: "DOG",
+      errorCode: null,
+    });
+    expect(rowFor(reopened.rows, untyped.meterId)).toMatchObject({
+      status: "SKIPPED",
+      errorCode: "NOT_ENTERED",
+    });
+    expect(rowFor(reopened.rows, refused.meterId).status).toBe("PENDING");
+    expect(await skipCount(skipped.meterId)).toBe(1);
+    expect(await skipCount()).toBe(1);
   });
 });

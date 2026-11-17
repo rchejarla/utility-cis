@@ -34,6 +34,17 @@ import { recordSkips } from "./read-skip.service.js";
  * **Submit is idempotent on the batch's own status.** One conditional
  * `UPDATE` claims a `PENDING` batch; whoever loses it, and every later
  * call, is handed the stored counts and writes nothing.
+ *
+ * **A refused stop is corrected, not retyped.**
+ * `reopenEntryForCorrections` puts the batch and its `ERROR` rows back to
+ * `PENDING` and leaves `IMPORTED` and `SKIPPED` rows alone, which is also
+ * what stops the second submit re-posting what already posted.
+ *
+ * **A batch of this kind must never be run through the generic imports
+ * paths.** Every guard here — the billed-period refusal, holding coded and
+ * blank rows back, recording the skips — sits above `processBatch`, so the
+ * imports Retry button and the zombie sweep's re-enqueue would post the
+ * readings with none of it. `entrySheetOf` is how those two recognise one.
  */
 
 type Tx = Prisma.TransactionClient;
@@ -126,15 +137,61 @@ function toEntryRow(row: {
   };
 }
 
+/**
+ * The route and day a batch is a typed-in sheet for, or null when it is
+ * an ordinary file import.
+ *
+ * Exported because the generic imports machinery has to tell the two
+ * apart: every guard this feature has sits above `processBatch`, so a
+ * batch of this kind driven through the framework's own re-run paths
+ * posts readings with none of them.
+ */
+export function entrySheetOf(batch: { mapping: Prisma.JsonValue | null }): {
+  routeId: string;
+  readDate: string;
+} | null {
+  const mapping = batch.mapping as { kind?: string; routeId?: string; readDate?: string } | null;
+  if (mapping?.kind !== ENTRY_KIND || !mapping.routeId || !mapping.readDate) return null;
+  return { routeId: mapping.routeId, readDate: mapping.readDate };
+}
+
 async function entryBatch(utilityId: string, batchId: string) {
   const batch = await prisma.importBatch.findFirst({
     where: { id: batchId, utilityId, entityKind: "meter_read", source: "API" },
   });
-  const mapping = batch?.mapping as { kind?: string; routeId?: string; readDate?: string } | null;
-  if (!batch || mapping?.kind !== ENTRY_KIND || !mapping.routeId || !mapping.readDate) {
+  const sheet = batch && entrySheetOf(batch);
+  if (!batch || !sheet) {
     throw httpError(404, "ENTRY_NOT_FOUND", `Entry batch ${batchId} not found`);
   }
-  return { batch, routeId: mapping.routeId, readDate: new Date(mapping.readDate) };
+  return { batch, routeId: sheet.routeId, readDate: new Date(sheet.readDate) };
+}
+
+/**
+ * The batch opened for this `(route, day)`, in whatever state it is in.
+ * Takes the caller's `tx` because both callers read it under the
+ * `read_route` row lock that makes "find or create" and "find and
+ * reopen" one decision.
+ */
+async function openedBatch(
+  tx: Tx,
+  utilityId: string,
+  routeId: string,
+  dayText: string,
+): Promise<{ id: string } | null> {
+  return tx.importBatch.findFirst({
+    where: {
+      utilityId,
+      entityKind: "meter_read",
+      source: "API",
+      AND: [
+        { mapping: { path: ["kind"], equals: ENTRY_KIND } },
+        { mapping: { path: ["routeId"], equals: routeId } },
+        { mapping: { path: ["readDate"], equals: dayText } },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
 }
 
 /**
@@ -208,20 +265,7 @@ export async function openEntry(
   const batchId = await prisma.$transaction(async (tx) => {
     // Serialises two openers of one route: without it both find nothing and both create.
     await tx.$queryRaw`SELECT id FROM read_route WHERE id = ${routeId}::uuid AND utility_id = ${utilityId}::uuid FOR UPDATE`;
-    const existing = await tx.importBatch.findFirst({
-      where: {
-        utilityId,
-        entityKind: "meter_read",
-        source: "API",
-        AND: [
-          { mapping: { path: ["kind"], equals: ENTRY_KIND } },
-          { mapping: { path: ["routeId"], equals: routeId } },
-          { mapping: { path: ["readDate"], equals: dayText } },
-        ],
-      },
-      orderBy: { createdAt: "desc" },
-      select: { id: true },
-    });
+    const existing = await openedBatch(tx, utilityId, routeId, dayText);
     if (existing) return existing.id;
 
     const stops = await listStops(utilityId, routeId);
@@ -378,6 +422,9 @@ export async function submitEntry(
   });
   if (claimed.count === 0) return storedResult(utilityId, batchId, true);
 
+  // A throw from here on leaves the batch PROCESSING on purpose: past the
+  // first write, which rows posted is not something to guess at, and the
+  // imports zombie sweep owns a batch that stopped reporting progress.
   const rows = await prisma.importRow.findMany({
     where: { importBatchId: batchId },
     orderBy: { rowIndex: "asc" },
@@ -387,140 +434,206 @@ export async function submitEntry(
   const codedRows = staged.filter((s) => s.raw.reading === "" && s.raw.skipReason !== "");
   const blankRows = staged.filter((s) => s.raw.reading === "" && s.raw.skipReason === "");
 
-  try {
-    // Held back from processBatch, which would reject each for having no number.
-    if (blankRows.length) {
-      await prisma.importRow.updateMany({
-        where: { id: { in: blankRows.map((s) => s.row.id) } },
-        data: {
-          status: "SKIPPED",
-          errorCode: NOT_ENTERED,
-          errorMessage: "Nothing was entered for this row",
-          processedAt: new Date(),
-        },
-      });
-    }
-    if (codedRows.length) {
-      await prisma.importRow.updateMany({
-        where: { id: { in: codedRows.map((s) => s.row.id) } },
-        data: { status: "SKIPPED", processedAt: new Date() },
-      });
-    }
-
-    // A period billed since the row was typed: refused here, per row, as an
-    // import row would be, so its neighbours still post.
-    const billed = await metersBilledInWindow(utilityId, routeId, readDate, [
-      ...new Set(readingRows.map((s) => s.raw.meterId)),
-    ]);
-    const frozen = readingRows.filter((s) => billed.has(s.raw.meterId));
-    if (frozen.length) {
-      await prisma.importRow.updateMany({
-        where: { id: { in: frozen.map((s) => s.row.id) } },
-        data: {
-          status: "ERROR",
-          errorCode: "READ_BILLED",
-          errorMessage: "The meter already has a billed read in this period; nothing was posted for this row",
-          processedAt: new Date(),
-        },
-      });
-    }
-    // The batch's records are the rows that are posted as readings.
-    await prisma.importBatch.update({ where: { id: batchId }, data: { recordCount: readingRows.length } });
-
-    let status: string;
-    let importedCount = 0;
-    let errorCount = frozen.length;
-    if (readingRows.length - frozen.length > 0) {
-      const result = await processBatch({
-        batchId,
-        utilityId,
-        actorId: actor.id,
-        actorName: actor.name,
-      });
-      status = result.status;
-      importedCount = result.importedCount;
-      errorCount = result.errorCount;
-    } else {
-      status = frozen.length > 0 ? "FAILED" : "COMPLETE";
-    }
-
-    // Skips: a meter is skipped only if no row of it, in any register, carries a number.
-    const readMeters = new Set(readingRows.map((s) => s.raw.meterId));
-    // One entry per meter, set by its first coded row; later rows of the
-    // same meter ride along with it.
-    const skippedMeters = new Map<string, { reason: SkipReason; notes: string; rowIds: string[] }>();
-    for (const s of codedRows) {
-      if (readMeters.has(s.raw.meterId)) {
-        await prisma.importRow.update({
-          where: { id: s.row.id },
-          data: {
-            errorMessage: `Register not read (${s.raw.skipReason}); the meter's other register was read, so no skip was recorded`,
-          },
-        });
-        continue;
-      }
-      const held = skippedMeters.get(s.raw.meterId);
-      if (held) held.rowIds.push(s.row.id);
-      else {
-        skippedMeters.set(s.raw.meterId, {
-          reason: s.raw.skipReason as SkipReason,
-          notes: s.raw.notes,
-          rowIds: [s.row.id],
-        });
-      }
-    }
-    // `recordSkips` takes one reason and one note for the lot.
-    const byReason = new Map<string, { reason: SkipReason; notes: string; meters: Map<string, string[]> }>();
-    for (const [meterId, m] of skippedMeters) {
-      const key = `${m.reason} ${m.notes}`;
-      const group = byReason.get(key) ?? { reason: m.reason, notes: m.notes, meters: new Map() };
-      group.meters.set(meterId, m.rowIds);
-      byReason.set(key, group);
-    }
-
-    let skipsRecorded = 0;
-    let skipErrors = 0;
-    for (const group of byReason.values()) {
-      try {
-        skipsRecorded += await prisma.$transaction((tx) =>
-          recordSkips(tx, utilityId, actor, {
-            routeId,
-            readDate,
-            meterIds: [...group.meters.keys()],
-            skipReason: group.reason,
-            notes: group.notes || undefined,
-          }),
-        );
-      } catch (err) {
-        const e = err as { code?: string; message?: string; statusCode?: number };
-        if (!e.statusCode) throw err;
-        const ids = [...group.meters.values()].flat();
-        await prisma.importRow.updateMany({
-          where: { id: { in: ids } },
-          data: { status: "ERROR", errorCode: e.code ?? "SKIP_REFUSED", errorMessage: e.message ?? "Skip refused" },
-        });
-        skipErrors += ids.length;
-      }
-    }
-
-    errorCount += skipErrors;
-    if (skipErrors > 0 && status === "COMPLETE") status = "PARTIAL";
-    await prisma.importBatch.update({
-      where: { id: batchId },
+  // Held back from processBatch, which would reject each for having no number.
+  if (blankRows.length) {
+    await prisma.importRow.updateMany({
+      where: { id: { in: blankRows.map((s) => s.row.id) } },
       data: {
-        status: status as "COMPLETE" | "PARTIAL" | "FAILED" | "CANCELLED",
-        importedCount,
-        errorCount,
-        exceptionCount: skipsRecorded,
-        completedAt: new Date(),
-        lastProgressAt: new Date(),
+        status: "SKIPPED",
+        errorCode: NOT_ENTERED,
+        errorMessage: "Nothing was entered for this row",
+        processedAt: new Date(),
       },
     });
-    return storedResult(utilityId, batchId, false);
-  } catch (err) {
-    // Left PROCESSING on purpose: past the first write, which rows posted is
-    // not something to guess at here, and the imports zombie sweep owns a
-    // batch that stopped reporting progress.
-    throw err;
   }
+  if (codedRows.length) {
+    await prisma.importRow.updateMany({
+      where: { id: { in: codedRows.map((s) => s.row.id) } },
+      data: { status: "SKIPPED", processedAt: new Date() },
+    });
+  }
+
+  // A period billed since the row was typed: refused here, per row, as an
+  // import row would be, so its neighbours still post.
+  const billed = await metersBilledInWindow(utilityId, routeId, readDate, [
+    ...new Set(readingRows.map((s) => s.raw.meterId)),
+  ]);
+  const frozen = readingRows.filter((s) => billed.has(s.raw.meterId));
+  if (frozen.length) {
+    await prisma.importRow.updateMany({
+      where: { id: { in: frozen.map((s) => s.row.id) } },
+      data: {
+        status: "ERROR",
+        errorCode: "READ_BILLED",
+        errorMessage: "The meter already has a billed read in this period; nothing was posted for this row",
+        processedAt: new Date(),
+      },
+    });
+  }
+  // The batch's records are the rows that are posted as readings.
+  await prisma.importBatch.update({ where: { id: batchId }, data: { recordCount: readingRows.length } });
+
+  let status: string;
+  let importedCount = 0;
+  let errorCount = frozen.length;
+  if (readingRows.length - frozen.length > 0) {
+    const result = await processBatch({
+      batchId,
+      utilityId,
+      actorId: actor.id,
+      actorName: actor.name,
+    });
+    status = result.status;
+    importedCount = result.importedCount;
+    /*
+     * This *replaces* `frozen.length` rather than adding to it, and that
+     * is right only because `processBatch` derives its own baseline from
+     * a `groupBy` over every row of the batch
+     * (`process-batch.service.ts:112-118`): the rows just set to ERROR
+     * above are already counted in what it returns. Narrow that baseline
+     * to the rows it actually processed and this line silently
+     * undercounts.
+     */
+    errorCount = result.errorCount;
+  } else {
+    status = frozen.length > 0 ? "FAILED" : "COMPLETE";
+  }
+
+  // Skips: a meter is skipped only if no row of it, in any register, carries a number.
+  const readMeters = new Set(readingRows.map((s) => s.raw.meterId));
+  // One entry per meter, set by its first coded row; later rows of the
+  // same meter ride along with it.
+  const skippedMeters = new Map<string, { reason: SkipReason; notes: string; rowIds: string[] }>();
+  for (const s of codedRows) {
+    if (readMeters.has(s.raw.meterId)) {
+      await prisma.importRow.update({
+        where: { id: s.row.id },
+        data: {
+          errorMessage: `Register not read (${s.raw.skipReason}); the meter's other register was read, so no skip was recorded`,
+        },
+      });
+      continue;
+    }
+    const held = skippedMeters.get(s.raw.meterId);
+    if (held) held.rowIds.push(s.row.id);
+    else {
+      skippedMeters.set(s.raw.meterId, {
+        reason: s.raw.skipReason as SkipReason,
+        notes: s.raw.notes,
+        rowIds: [s.row.id],
+      });
+    }
+  }
+  /*
+   * One `recordSkips` call per meter, though it takes a list of them.
+   *
+   * It refuses the whole call when any one meter already has a read in
+   * the window, and a real sheet groups naturally — ten `LOCKED_GATE`
+   * codes with no notes are one reason and one note — so a single meter
+   * read off-route earlier in the window would cost every skip batched
+   * with it. One refusal has to cost one stop.
+   */
+  let skipsRecorded = 0;
+  let skipErrors = 0;
+  for (const [meterId, m] of skippedMeters) {
+    try {
+      skipsRecorded += await prisma.$transaction((tx) =>
+        recordSkips(tx, utilityId, actor, {
+          routeId,
+          readDate,
+          meterIds: [meterId],
+          skipReason: m.reason,
+          notes: m.notes || undefined,
+        }),
+      );
+    } catch (err) {
+      const e = err as { code?: string; message?: string; statusCode?: number };
+      if (!e.statusCode) throw err;
+      await prisma.importRow.updateMany({
+        where: { id: { in: m.rowIds } },
+        data: { status: "ERROR", errorCode: e.code ?? "SKIP_REFUSED", errorMessage: e.message ?? "Skip refused" },
+      });
+      skipErrors += m.rowIds.length;
+    }
+  }
+
+  errorCount += skipErrors;
+  if (skipErrors > 0 && status === "COMPLETE") status = "PARTIAL";
+  await prisma.importBatch.update({
+    where: { id: batchId },
+    data: {
+      status: status as "COMPLETE" | "PARTIAL" | "FAILED" | "CANCELLED",
+      importedCount,
+      errorCount,
+      // Added to, not assigned. A resubmit after `reopenEntryForCorrections`
+      // runs the skip loop again over coded rows whose `read_skip` already
+      // exists, and `recordSkips` reports a duplicate as nothing written;
+      // assigning would then report a sheet's recorded skips as zero.
+      exceptionCount: { increment: skipsRecorded },
+      completedAt: new Date(),
+      lastProgressAt: new Date(),
+    },
+  });
+  return storedResult(utilityId, batchId, false);
+}
+
+/**
+ * Reopen a posted sheet so the stops it refused can be corrected. One
+ * rejected row on a 48-stop route otherwise means retyping the route:
+ * `openEntry` hands the posted batch back, `saveEntryRow` refuses it and
+ * `submitEntry` reports it as already submitted.
+ *
+ * Admits only a batch holding at least one `ERROR` row. A sheet that
+ * posted cleanly has nothing to correct, and reopening one could not be
+ * told apart from posting it a second time.
+ *
+ * The `ERROR` rows go back to `PENDING` with their error cleared;
+ * `IMPORTED` and `SKIPPED` rows are left exactly as they are, and that is
+ * what prevents a re-post — `processBatch` selects `PENDING` rows and
+ * nothing else, the same mechanism the double-submit protection already
+ * rests on, so no second guard is added here.
+ */
+export async function reopenEntryForCorrections(
+  utilityId: string,
+  actor: Actor,
+  routeId: string,
+  readDateInput: Date,
+): Promise<{ batchId: string; rows: EntryRow[] }> {
+  void actor;
+  const dayText = isoDay(utcDay(readDateInput));
+
+  const batchId = await prisma.$transaction(async (tx) => {
+    // The lock `openEntry` takes, for the same reason: two callers must not
+    // both find the batch correctable and both reopen it.
+    await tx.$queryRaw`SELECT id FROM read_route WHERE id = ${routeId}::uuid AND utility_id = ${utilityId}::uuid FOR UPDATE`;
+    const batch = await openedBatch(tx, utilityId, routeId, dayText);
+    if (!batch) {
+      throw httpError(404, "ENTRY_NOT_FOUND", `No entry has been opened for route ${routeId} on ${dayText}`);
+    }
+    const refused = await tx.importRow.count({
+      where: { importBatchId: batch.id, status: "ERROR" },
+    });
+    if (refused === 0) {
+      throw httpError(
+        409,
+        "ENTRY_NOTHING_TO_CORRECT",
+        `The entry for route ${routeId} on ${dayText} has no refused row to correct`,
+      );
+    }
+    await tx.importRow.updateMany({
+      where: { importBatchId: batch.id, status: "ERROR" },
+      data: { status: "PENDING", errorCode: null, errorMessage: null },
+    });
+    await tx.importBatch.update({
+      where: { id: batch.id },
+      data: { status: "PENDING", completedAt: null },
+    });
+    return batch.id;
+  });
+
+  const rows = await prisma.importRow.findMany({
+    where: { importBatchId: batchId },
+    orderBy: { rowIndex: "asc" },
+  });
+  return { batchId, rows: rows.map(toEntryRow) };
 }
