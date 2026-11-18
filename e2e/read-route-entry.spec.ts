@@ -74,6 +74,13 @@ import { bearer, signIn } from "./support/dev-stack.js";
  * Which gives one run per unused day of the window, and a failure that says
  * what to do when they are gone.
  *
+ * **So the suite is self-limiting, and that is intended rather than a
+ * bug.** The ui stream ran it eight times and the ninth refused, naming all
+ * eight posted days and printing the two deletes that free them. If you
+ * meet that, read it as the journey declining to post a sheet twice — clear
+ * the typed batches with the SQL it gives you, or come back in the next
+ * window.
+ *
  * ## Two windows, and a route's progress answers the reading one
  *
  * There are two periods in play on any day. The one a billing run will
