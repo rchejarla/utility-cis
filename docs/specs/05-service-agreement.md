@@ -328,3 +328,43 @@ Migrations applied in this slice:
 **Pre-existing data:** the new constraints don't reject existing rows — they only block new violations. However, pre-existing orphaned `service_agreement_meter` rows (parent SA is FINAL/CLOSED but the SAM has `removed_date IS NULL`) will continue to exist until a separate cleanup is run. This is the bug `closeServiceAgreement` fixes prospectively, but historical orphans need a one-time `UPDATE service_agreement_meter SET removed_date = sa.end_date FROM service_agreement sa WHERE service_agreement_id = sa.id AND removed_date IS NULL AND sa.status IN ('FINAL', 'CLOSED')` script. **Tracked as a follow-up task; not in Slice 1.**
 
 **`tsrange` vs. `tstzrange`:** Postgres requires generation expressions to be `IMMUTABLE`. `date::timestamptz` is `STABLE` (timezone-dependent), which Postgres rejects. `date::timestamp` (without time zone) IS immutable. Since `start_date`/`end_date` are `DATE` columns with no time-of-day semantics, `tsrange` is the correct type — calendar-date overlap, no timezone reasoning needed.
+
+## Open items
+
+Transfer of service (`POST /api/v1/service-agreements/:id/transfer`). Found on
+2026-11-17 while correcting the architecture doc's description of this workflow, which
+had claimed it clones four fields when it carries one. Each is a product decision, not
+a defect to patch; the behaviour as it stands is described in
+`docs/design/utility-cis-architecture.md` §5.5.
+
+1. **What should a multi-premise transfer mean?** The workflow creates one service
+   point on the new agreement, at the premise of the source's *first* open service
+   point, and copies every open meter from *every* source point onto it. So an
+   agreement serving two premises comes out of a transfer serving one, with the second
+   premise's meters attached at the first. Either the workflow mirrors every open
+   service point, or it refuses an agreement that has more than one and says why —
+   silently flattening is the one option that should not stay.
+2. **Should a same-account transfer be refused?** There is no guard: neither
+   `transferServiceSchema` nor `transferService` compares `targetAccountId` with the
+   account that already holds the agreement, so a transfer to the same account is
+   accepted and closes and reopens the service. The three guards that do exist are
+   `AGREEMENT_NOT_TRANSFERABLE` (source already FINAL or CLOSED),
+   `TARGET_ACCOUNT_INACTIVE` and `SOURCE_AGREEMENT_NO_PREMISE`.
+3. **When does a new service get its rate-schedule assignment?** No agreement-creating
+   path writes one except the service-agreement import, which takes a
+   `rate_schedule_code` column: not `createServiceAgreement`, not move-in, not
+   transfer. So every service created through the API or the UI is unrated until the
+   assignment endpoint is called for it. That may well be deliberate — an assignment is
+   its own effective-dated artifact, and inventing one on create would be a guess at a
+   tariff — but it should be a stated rule rather than an absence, because of where it
+   surfaces: a billing run's **planner** blocks and names these agreements
+   (`NO_ACTIVE_ASSIGNMENTS`, with an account count and sample accounts), while the
+   **executor** classifies the same code into its skip set, where
+   `billing-run/window.ts` records that filing it as noise had already let days be
+   billed by nothing once. An agreement that gets past planning and meets the condition
+   during execution is therefore reported quietly.
+4. **`transferService` has no test of any kind.** Not thin coverage — zero: no test
+   file in either vitest config references it. That is why all three items above went
+   unnoticed, and why the doc could describe four cloned fields for as long as it did.
+   A test asserting what a transfer carries would have failed on the day the comment
+   stopped being true.
