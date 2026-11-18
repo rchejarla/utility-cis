@@ -5,7 +5,7 @@ import type {
 } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { computeBillPeriod } from "./bill.service.js";
-import { agreementInWindow } from "./billing-run/window.js";
+import { agreementInWindow, windowContaining } from "./billing-run/window.js";
 import { readableRowsForPremises } from "./read-route/readable-rows.js";
 
 /**
@@ -80,10 +80,38 @@ export async function getReadingProgress(
     });
   }
 
-  const window = computeBillPeriod(
-    { createdAt: new Date(0), billingCycle: cycle },
-    query.asOf ? new Date(query.asOf) : new Date(),
-  );
+  const onDate = query.asOf ? new Date(query.asOf) : new Date();
+  /*
+   * **Two questions, one function, and the caller says which.**
+   *
+   * `billing` (the default) is the window a **run** will bill: the last
+   * period already closed on `onDate`, from `computeBillPeriod` with the
+   * epoch as the creation date — the identical call `planBillingRun`
+   * makes (`planning.ts:100`), so this screen and the run cannot
+   * disagree about "the October window". Design §5.9 requires that
+   * sharing and says so twice, and the mid-window-closed case in
+   * `reading-progress.integration.test.ts` is what it buys.
+   *
+   * `reading` is the window **containing** `onDate`, which is where the
+   * reads somebody is taking right now land. A sheet typed today belongs
+   * to the period that has not closed yet, so against the billing window
+   * it is invisible — which is what a route's own progress reported until
+   * 2026-11-17: a period that had already been billed.
+   *
+   * Nothing else in this function branches. The window is an argument to
+   * everything below it, which is why one parameter buys the second
+   * question without a second implementation.
+   *
+   * Added because the window containing a day was otherwise **unaskable**:
+   * `asOf` names a period only by that period's own bill day, so a caller
+   * had to do the bill-day arithmetic to ask about the day in front of
+   * them. The read-routes Playwright spec got exactly that wrong — it
+   * passed the day it was reading for and was handed the previous window.
+   */
+  const window =
+    query.window === "reading"
+      ? windowContaining(cycle, onDate)
+      : computeBillPeriod({ createdAt: new Date(0), billingCycle: cycle }, onDate);
   const { periodStart: windowStart, periodEnd: windowEnd } = window;
   /** Intervals are instants; the window's last day runs to its end. */
   const intervalEnd = new Date(windowEnd.getTime() + 86_400_000);
@@ -160,7 +188,26 @@ export async function getReadingProgress(
     const units =
       route.origin === "EXTERNAL"
         ? await learnedUnits(utilityId, route.id, cycle, window, inWindow)
-        : await stopUnits(utilityId, route.id, window, inWindow);
+        : await stopUnits(
+            utilityId,
+            route.id,
+            window,
+            inWindow,
+            /*
+             * The day the route's rows are asked for, which is not always
+             * the window's last day.
+             *
+             * For `billing` it is: the window ends on the bill day, and
+             * those are the reads the run is waiting on. For `reading` the
+             * window's last day is the *next* bill day, weeks ahead, while
+             * the sheet in the reader's hand was printed for today — so
+             * asking at `periodEnd` would count a meter whose assignment
+             * closes next week as not-expected while the paper still
+             * prints it. §5.12 requires the count and the sheet to be the
+             * same set, so the date has to be the same date.
+             */
+            query.window === "reading" ? onDate : window.periodEnd,
+          );
     const unread = await withoutAReadInWindow(utilityId, units, window.periodStart, windowEnd, intervalEnd);
     expected = units.length;
     outstanding = unread.length;
@@ -324,15 +371,20 @@ function candidateFromAssignment(a: {
  * count. The agreement still has to be in the window, by the run's own
  * filter.
  *
- * `onDate` is the window's last day, because that is the day the reads
- * being waited on are for; `readableRowsForPremises` normalises it to the
- * UTC midnight its `@db.Date` columns compare against.
+ * `onDate` is the day the sheet would be printed for, and the caller
+ * passes it rather than this deriving it from the window: for a billing
+ * question it is the window's last day, the day the reads being waited on
+ * are for, but for a reading-week question the window's last day is the
+ * next bill day and the paper in the reader's hand was printed for today.
+ * `readableRowsForPremises` normalises it to the UTC midnight its
+ * `@db.Date` columns compare against.
  */
 async function stopUnits(
   utilityId: string,
   routeId: string,
   window: { periodStart: Date; periodEnd: Date },
   inWindow: ReturnType<typeof agreementInWindow>,
+  onDate: Date,
 ): Promise<ExpectedUnit[]> {
   const stops = await prisma.readRouteStop.findMany({
     where: { utilityId, readRouteId: routeId },
@@ -341,7 +393,7 @@ async function stopUnits(
   const rows = await readableRowsForPremises(
     utilityId,
     stops.map((s) => s.premiseId),
-    window.periodEnd,
+    onDate,
   );
   if (rows.length === 0) return [];
 

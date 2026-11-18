@@ -235,11 +235,19 @@ export const meterReadQuerySchema = z.object({
 /**
  * Asking how far along a cycle's reading is.
  *
- * `asOf` exists so the answer can be asked of a date rather than only
- * of today — a biller checking on the 9th wants the window that is
- * about to close, and a test wants a window it chose. It names the
- * *window*, not a filter on reads: `computeBillPeriod` derives the
- * period in force on that date from the cycle's own bill day.
+ * `asOf` exists so the answer can be asked of a date rather than only of
+ * today — a biller checking before the run wants the window it is about
+ * to bill, and a test wants a window it chose. It names the *window*,
+ * not a filter on reads.
+ *
+ * **Pass the bill day to name the period a run will bill.** Until
+ * 2026-11-17 this comment said "a biller checking on the 9th", and the
+ * 9th is the one day that does not work: with `window: "billing"` the
+ * period comes from `computeBillPeriod`, which returns the last period
+ * already *closed* on the date given, so the 9th yields the period that
+ * closed a month earlier. The 10th yields the one about to be billed,
+ * because `periodEnd` is inclusive. The mechanism was right and the
+ * comment named the wrong day.
  */
 export const meterReadingProgressQuerySchema = z
   .object({
@@ -254,6 +262,26 @@ export const meterReadingProgressQuerySchema = z
      * refuse rather than answer.
      */
     readRouteId: z.string().uuid().optional(),
+    /**
+     * Which of two windows the answer is about.
+     *
+     * `billing` — the default, and what this endpoint has always done —
+     * is the window a **run** will bill: the last period already closed
+     * on `asOf`. Design §5.9 requires that this screen share the run's
+     * own call so the two cannot disagree about a named window, and
+     * `/meter-reads/progress` is that screen: its own copy says it asks
+     * "of the same window the run will use".
+     *
+     * `reading` is the window **containing** `asOf` — where the reads
+     * somebody is taking today land. A reading week's progress is
+     * otherwise unaskable, because `asOf` can only name a period by that
+     * period's own bill day.
+     *
+     * Defaulted rather than required so the shipped endpoint's answer
+     * does not move. The read-route endpoint defaults the other way; see
+     * `readRouteProgressQuerySchema`.
+     */
+    window: z.enum(["billing", "reading"]).default("billing"),
   })
   .strict();
 

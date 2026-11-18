@@ -298,6 +298,10 @@ export async function readRouteRoutes(app: FastifyInstance) {
         await getReadingProgress(utilityId, {
           billingCycleId: route.billingCycleId,
           readRouteId: id,
+          // `reading` by default here, `billing` on /meter-reads/progress:
+          // a route is a walk somebody is doing, so its progress is about
+          // the window the reads land in, not the one a run will bill.
+          window: query.window,
           page: query.page,
           limit: query.limit,
           ...(query.asOf ? { asOf: query.asOf } : {}),
