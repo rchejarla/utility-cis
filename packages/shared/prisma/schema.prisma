@@ -597,7 +597,6 @@ model ServiceAgreement {
   startDate       DateTime               @map("start_date") @db.Date
   endDate         DateTime?              @map("end_date") @db.Date
   status          ServiceAgreementStatus @default(PENDING) @map("status")
-  readSequence    Int?                   @map("read_sequence")
   rateServiceClassId String?             @map("rate_service_class_id") @db.Uuid
   customFields    Json                   @default("{}") @map("custom_fields")
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz

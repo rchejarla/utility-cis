@@ -88,7 +88,6 @@ interface ServiceAgreementRow {
   startDate: Date;
   endDate?: Date;
   status: SaStatus;
-  readSequence?: number;
   servicePointType: ServicePointTypeCode;
   meterNumber?: string;
   rateScheduleCode?: string;
@@ -217,14 +216,6 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       aliases: ["^status$", "^state$"],
     },
     {
-      name: "readSequence",
-      label: "Read sequence",
-      required: false,
-      description: "The meter reader's route order, if the legacy system carries one.",
-      example: "140",
-      aliases: ["^readsequence$", "^readseq$", "^routesequence$", "^sequence$"],
-    },
-    {
       name: "servicePointType",
       label: "Service point type",
       required: false,
@@ -272,7 +263,6 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       startDate: "2026-01-01",
       endDate: "",
       status: "ACTIVE",
-      readSequence: "140",
       servicePointType: "METERED",
       meterNumber: "WM-1001",
       rateScheduleCode: "RES-WATER",
@@ -355,19 +345,6 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       status = stRaw as SaStatus;
     }
 
-    let readSequence: number | undefined;
-    if ((raw.readSequence ?? "").trim()) {
-      const n = Number(raw.readSequence);
-      if (!Number.isInteger(n) || n < 0) {
-        return {
-          ok: false,
-          code: "INVALID_READ_SEQUENCE",
-          message: `read_sequence "${raw.readSequence}" must be a non-negative whole number`,
-        };
-      }
-      readSequence = n;
-    }
-
     const sptRaw = (raw.servicePointType ?? "").trim().toUpperCase();
     let servicePointType: ServicePointTypeCode = "METERED";
     if (sptRaw) {
@@ -403,7 +380,6 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
         startDate,
         endDate,
         status,
-        readSequence,
         servicePointType,
         meterNumber: ((raw.meterNumber ?? "").trim()) || undefined,
         rateScheduleCode: ((raw.rateScheduleCode ?? "").trim()) || undefined,
@@ -684,7 +660,6 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
           startDate: row.startDate,
           endDate: row.endDate ?? null,
           status: row.status,
-          readSequence: row.readSequence,
         },
       });
 
@@ -785,7 +760,6 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
           startDate: row.startDate,
           endDate: row.endDate ?? null,
           status: row.status,
-          readSequence: row.readSequence,
         },
       });
 

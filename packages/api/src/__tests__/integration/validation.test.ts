@@ -270,6 +270,50 @@ describe("Request validation", () => {
       expect(body.error.code).toBe("VALIDATION_ERROR");
     });
 
+    /*
+     * `readSequence` was a settable field on both of these until spec
+     * 30 took the column (migration 20261109093000). Both schemas are
+     * `.strict()`, so a client that still sends it is refused rather
+     * than quietly stripped — and the refusal is a 400
+     * `VALIDATION_ERROR`, not a 422, because the route `.parse()`s and
+     * `errorHandler` maps every `ZodError` that way. The migration's
+     * own note tells an operator that status code, so it is pinned
+     * here: the two statements must not drift apart.
+     */
+    it("rejects POST that still sends readSequence, with a 400", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/service-agreements",
+        headers,
+        payload: {
+          agreementNumber: "SA-001",
+          accountId: "550e8400-e29b-41d4-a716-446655440000",
+          premiseId: "550e8400-e29b-41d4-a716-446655440001",
+          commodityId: "550e8400-e29b-41d4-a716-446655440002",
+          startDate: "2026-04-01",
+          readSequence: 140,
+          meters: [{ meterId: "550e8400-e29b-41d4-a716-446655440005", isPrimary: true }],
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("rejects PATCH that still sends readSequence, with a 400", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/service-agreements/550e8400-e29b-41d4-a716-446655440000",
+        headers,
+        payload: { readSequence: 140 },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
+
     it("rejects POST /:id/close without endDate", async () => {
       const app = await createTestApp();
       const response = await app.inject({

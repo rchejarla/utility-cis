@@ -144,7 +144,6 @@ export async function createServiceAgreement(
           startDate,
           endDate: data.endDate ? new Date(data.endDate) : null,
           status,
-          readSequence: data.readSequence,
           customFields: validatedCustom as object,
         },
       });
@@ -259,7 +258,6 @@ export async function updateServiceAgreement(
   // effective-dating.service.ts) which cascades onto child meter
   // assignments — see FR-EFF-006.
   const updateData: Record<string, unknown> = {};
-  if (data.readSequence !== undefined) updateData.readSequence = data.readSequence;
 
   // Custom fields: validate against tenant schema and merge with
   // existing stored values (preserving deprecated keys).
