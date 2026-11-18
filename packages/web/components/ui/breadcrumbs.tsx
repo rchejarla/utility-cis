@@ -16,8 +16,31 @@ import { usePathname } from "next/navigation";
  * than by arithmetic — and the logo and the account controls stay at the
  * window's edges where they belong.
  */
+/**
+ * A record's id, which is a uuid everywhere in this app.
+ *
+ * Matched exactly rather than by position: `/meter-reads/exceptions` and
+ * `/read-routes/new` put a literal word where an id would go, and a rule
+ * that dropped "the segment after a section" would eat those.
+ */
+const IS_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function getBreadcrumbs(pathname: string): string[] {
-  const segments = pathname.split("/").filter(Boolean);
+  /*
+   * **An id segment is dropped, not title-cased.** Every detail page in
+   * the app is `/<thing>/[id]`, and title-casing a uuid rendered
+   * `Read Routes / Ef6e9cf6 1ae3 4062 9876 7a0270ff10b6` two lines above
+   * a heading that said "W-04 — North Willson". It was reported against
+   * one page and belonged to all 18 of them, since this function is the
+   * only breadcrumb there is.
+   *
+   * Dropping it rather than shortening it, because a shorter uuid is a
+   * shorter meaningless string; and rather than looking the record up,
+   * because that would mean every page feeding a label into the chrome
+   * to restate what its own heading already says. What is left is the
+   * trail that helps: "Read Routes / Entry".
+   */
+  const segments = pathname.split("/").filter(Boolean).filter((seg) => !IS_ID.test(seg));
   if (segments.length === 0) return ["Home"];
   return segments.map((seg) => seg.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()));
 }

@@ -851,6 +851,45 @@ describe("GET /api/v1/read-routes/:id/progress", () => {
     expect(progress.data.map((r) => r.meterId)).toEqual([premise.meterId]);
     expect(progress.data[0]!.routeCode).toBe(route.code);
   });
+
+  /**
+   * **This endpoint reports the window containing the day, not the one a
+   * run will bill** — the opposite default from
+   * `/api/v1/meter-reads/progress`, and the difference is the question.
+   *
+   * A route is a walk somebody is doing, so its progress is about the
+   * window the reads being taken land in. The cycle-wide screen asks
+   * whether a run can bill, which is the last period already closed.
+   * Asking this one the cycle-wide way reported a period that had
+   * already been billed on the page a supervisor opens during the
+   * reading week — "2 of 10" beside a route whose sheet has 9 rows
+   * today, which is a figure somebody acts on wrongly.
+   *
+   * The fixture cycle bills on the 10th, so for 2026-06-05 the two
+   * windows are 2026-05-11..2026-06-10 and 2026-04-11..2026-05-10.
+   */
+  it("reports the window containing the day, and the billing one when asked", async () => {
+    const { route } = await routeWithStop();
+
+    const reading = readingProgressSchema.parse(
+      body(await get(`/api/v1/read-routes/${route.id}/progress?asOf=${DAY}`)),
+    );
+    expect(reading.windowStart.slice(0, 10)).toBe("2026-05-11");
+    expect(reading.windowEnd.slice(0, 10)).toBe("2026-06-10");
+
+    const billing = readingProgressSchema.parse(
+      body(await get(`/api/v1/read-routes/${route.id}/progress?asOf=${DAY}&window=billing`)),
+    );
+    expect(billing.windowStart.slice(0, 10)).toBe("2026-04-11");
+    expect(billing.windowEnd.slice(0, 10)).toBe("2026-05-10");
+  });
+
+  it("refuses a window that is neither", async () => {
+    const { route } = await routeWithStop();
+    expect(
+      (await get(`/api/v1/read-routes/${route.id}/progress?window=whenever`)).statusCode,
+    ).toBe(400);
+  });
 });
 
 /**

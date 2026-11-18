@@ -313,6 +313,21 @@ export type RouteSheetQuery = z.infer<typeof routeSheetQuerySchema>;
 export const readRouteProgressQuerySchema = z
   .object({
     asOf: z.string().date().optional(),
+    /**
+     * **Defaults to `reading`, where `/meter-reads/progress` defaults to
+     * `billing`** — the one place the two endpoints differ, and the
+     * difference is the question, not an oversight.
+     *
+     * A route is a walk somebody is doing: asking how far along *this
+     * route* is means the window the reads being taken land in. The
+     * cycle-wide screen asks whether a run can bill, which is the last
+     * period already closed. Both are the same function and the same
+     * window code; only the day being asked about differs.
+     *
+     * Overridable, because "was this route finished before the period we
+     * billed" is a fair question on an audit.
+     */
+    window: z.enum(["billing", "reading"]).default("reading"),
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(500).default(50),
   })

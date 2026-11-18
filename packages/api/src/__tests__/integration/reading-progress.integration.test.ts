@@ -660,3 +660,94 @@ describe("why an outstanding row is outstanding", () => {
     expect(cycleWide.data.every((d) => d.routeCode === null)).toBe(true);
   });
 });
+
+/**
+ * Which window the answer is about.
+ *
+ * Two different questions share this function, and until 2026-11-17 only
+ * one of them could be asked.
+ *
+ * **`billing` (the default) is the window a run will bill**, which is the
+ * last period already *closed* on the day — `computeBillPeriod`, the
+ * identical call `planBillingRun` makes (`planning.ts:100`). Design §5.9
+ * requires that sharing and says so twice; the case above at "closed
+ * mid-window" is what it buys, and neither moves.
+ *
+ * **`reading` is the window containing the day**, which is where the
+ * reads somebody is taking *now* land. A sheet typed today belongs to the
+ * period that has not closed yet, so against the billing window it is
+ * invisible — which is what a route's own progress screen was reporting
+ * before this existed, a period already billed.
+ *
+ * The fixture cycle bills on the 10th and `AS_OF` is 2026-02-15, so the
+ * two windows are 2026-01-11..2026-02-10 and 2026-02-11..2026-03-10. A
+ * day between two bill days is the whole point: on a bill day itself the
+ * two agree, because `periodEnd` is inclusive.
+ */
+describe("which window the progress is about", () => {
+  it("reports the window a run will bill, by default", async () => {
+    await service({ agreementNumber: "SA-WIN-1", meterId: fixA.meterId });
+
+    const p = await progress();
+
+    expect(p.windowStart.slice(0, 10)).toBe("2026-01-11");
+    expect(p.windowEnd.slice(0, 10)).toBe("2026-02-10");
+  });
+
+  it("reports the window containing the day when asked for the reading week", async () => {
+    await service({ agreementNumber: "SA-WIN-2", meterId: fixA.meterId });
+
+    const p = await progress({ window: "reading" });
+
+    expect(p.windowStart.slice(0, 10)).toBe("2026-02-11");
+    expect(p.windowEnd.slice(0, 10)).toBe("2026-03-10");
+  });
+
+  /*
+   * The fact that made this worth a parameter: the same read is outstanding
+   * in one window and read in the other, and a reading screen that asks the
+   * wrong one tells a reader their morning's work never happened.
+   */
+  it("counts a read taken on the day as read in the reading window and absent from the billing one", async () => {
+    const sa = await service({ agreementNumber: "SA-WIN-3", meterId: fixA.meterId });
+    await seedRead(fixA.meterId, sa, AS_OF);
+
+    expect(await progress({ window: "reading" })).toMatchObject({
+      expected: 1,
+      read: 1,
+      outstanding: 0,
+    });
+    expect(await progress()).toMatchObject({ expected: 1, read: 0, outstanding: 1 });
+  });
+
+  /*
+   * §5.12, per route: the expected figure is the row set the printed sheet
+   * prints, so the count in front of the person and the paper in their hand
+   * cannot disagree. Proven until now only by a browser run.
+   */
+  it("per route, the reading window expects exactly the rows the sheet would print", async () => {
+    const sa = await service({ agreementNumber: "SA-WIN-4", meterId: fixA.meterId });
+    const r = await route({ code: "RT-WIN", stops: [fixA.premiseId] });
+
+    const p = await progress({ readRouteId: r, window: "reading" });
+
+    expect(p.expected).toBe(1);
+    expect(p.data.map((d) => d.meterNumber)).toEqual([
+      await seedAsPlatform(async () => {
+        const m = await prismaImports.prisma.meter.findFirstOrThrow({
+          where: { id: fixA.meterId },
+          select: { meterNumber: true },
+        });
+        return m.meterNumber;
+      }),
+    ]);
+    expect(p.data[0]!.routeCode).toBe("RT-WIN");
+    // Read it on the day, and the route is done — in this window.
+    await seedRead(fixA.meterId, sa, AS_OF, { routeId: r });
+    expect(await progress({ readRouteId: r, window: "reading" })).toMatchObject({
+      expected: 1,
+      read: 1,
+      outstanding: 0,
+    });
+  });
+});
