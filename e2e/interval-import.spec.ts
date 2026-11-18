@@ -85,6 +85,34 @@ test("a file too big to import inline waits for a worker, and lands when one sta
   browser,
 }) => {
   /*
+   * **The one test with its own budget, and an exception rather than a
+   * correction.** The global 120s in `playwright.config.ts` is
+   * deliberately low so a hang reports fast; do not tidy it up to match
+   * this. No other test's declared waits exceed it — this one's do, and
+   * by a long way.
+   *
+   * It permits, in sequence: 30s for a worker to stop, 30s for the queued
+   * notice, a fixed 5s, 60s for a started pid, 90s for the batch to
+   * drain, and up to 30s more stopping the worker again in `finally`,
+   * which is inside the budget too. Plus two `signIn`s, whose inner
+   * ceiling lives in `support/dev-stack.ts`.
+   *
+   * Sized so **the longest single inner wait can elapse and say what it
+   * saw**, not so every wait can max out at once — that only happens on a
+   * path already failing in several ways, and sizing for it would buy a
+   * four-minute wait on a hang. Reaching the drain wait costs about 60-85s
+   * of the measured 1.2-1.6m success path, plus its own 90s, plus the
+   * cleanup: roughly 205s. 240s is that with honest headroom.
+   *
+   * Why it matters that the drain wait can fire at all: the success path
+   * already runs at 60-80% of the global budget warm, so this test is one
+   * busy machine from failing — and when it did, it said "Test timeout of
+   * 120000ms exceeded", naming nothing, where "the worker did not drain in
+   * 90s" was the sentence somebody needed.
+   */
+  test.setTimeout(240_000);
+
+  /*
    * Two contexts, because the token lives in `localStorage` and the
    * platform actor is a different identity — not a role a tenant user
    * can hold. One context cannot be both.

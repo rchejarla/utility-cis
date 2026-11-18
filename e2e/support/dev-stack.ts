@@ -50,6 +50,12 @@ import { expect, type Page } from "@playwright/test";
  *   cold route compile, not just a navigation. The outer budget is three
  *   times that, which is room for a swallowed click plus a cold compile and
  *   no more — the suite's own per-test timeout is 120s.
+ *
+ *   **Both numbers are ceilings a caller's own budget has to
+ *   accommodate**, not costs it pays: on the success path a login is one
+ *   click and one navigation. But a change here lands in a caller's
+ *   arithmetic, and `interval-import.spec.ts` sizes its `test.setTimeout`
+ *   partly on two of these. Raising the outer 60s means raising that.
  * - **The guard is the token, not the URL.** `setAuthToken` writes
  *   `cis_token` before the page navigates, and `page.url()` keeps saying
  *   `/login` until the new document commits, so a URL check cannot tell a
