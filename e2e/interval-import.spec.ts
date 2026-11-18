@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { signIn } from "./support/dev-stack.js";
 
 /**
  * Importing a day of interval data, end to end, with the worker started
@@ -57,14 +58,6 @@ function intervalCsv(): string {
     lines.push(`${METER},${at},60,${quantity},actual`);
   }
   return lines.join("\n");
-}
-
-async function signIn(page: Page, who: string): Promise<void> {
-  await page.goto("/login");
-  await page.getByRole("button", { name: who, exact: true }).click();
-  // The login does a full navigation rather than a router push, so the
-  // permission provider remounts with the new token.
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 30_000 });
 }
 
 /**

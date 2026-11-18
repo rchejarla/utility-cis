@@ -34,6 +34,45 @@ import { defineConfig } from "@playwright/test";
  * optimisation to argue about — it is the only one that works. It is
  * also what the runner is tested against, which is the better default
  * anyway.
+ *
+ * ## An unhydrated page impersonates a broken one
+ *
+ * **Playwright's actionability checks do not cover "React has attached
+ * the handler."** They cover visible, enabled, stable and
+ * receives-events, and a server-rendered control passes all four before
+ * any of its JavaScript has run. A click delivered in that gap is
+ * swallowed in total silence: no request, no error, nothing in the
+ * console, nothing different on the page. Whatever the click was supposed
+ * to cause then times out tens of seconds later, pointing nowhere near
+ * the cause — a swallowed sign-in reads as a broken login or a CORS
+ * problem.
+ *
+ * **On an idle machine the handler always wins the race**, so a spec with
+ * this bug passes indefinitely and starts failing the day something else
+ * is using the CPU. That is the worst available shape for a flake: it
+ * arrives long after the code that caused it, and it arrives as a
+ * different problem.
+ *
+ * Measured rather than inferred, on 2026-11-18 with the machine down to
+ * ~7 GB free and 18 node processes: a click issued immediately after
+ * `goto` produced **no POST to `/auth/dev-login` at all**, left
+ * `cis_token` null and stayed on `/login`, with React's own DevTools
+ * console banner arriving *after* the click; the same script with a
+ * six-second wait signed in. `support/dev-stack.ts`'s `signIn` therefore
+ * **retries the click until it takes** rather than waiting a fixed time,
+ * which would be wasted on a fast machine and still a guess on a slow
+ * one.
+ *
+ * **It is not specific to sign-in, and not specific to automation.** Any
+ * spec here that clicks a React control straight after navigating has the
+ * same latent flake. And it caught a second session the same day from the
+ * other direction: driving the merged tree by hand, three screenshots in
+ * a row came back blank, were reported as a page that "renders chrome but
+ * the content area is empty", and a diagnosis was begun — on a page that
+ * had simply not hydrated yet. The accessibility tree showed the content
+ * was all there. So before concluding a page is broken, confirm it has
+ * hydrated: read the tree, or wait for something only the client could
+ * have produced.
  */
 export default defineConfig({
   testDir: "./e2e",

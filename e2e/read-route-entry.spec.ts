@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { bearer, signIn } from "./support/dev-stack.js";
 
 /**
  * A reading week, end to end: print the sheet, type the day in, code two
@@ -32,6 +33,13 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from "@
  *
  * No worker process is needed: `submitEntry` runs `processBatch` inline,
  * which is the point of the route posting as a whole.
+ *
+ * **If the stack is not on 4000/4001**, three things have to agree, not
+ * two: `E2E_BASE_URL`, `E2E_API_URL`, and the web app's own
+ * `NEXT_PUBLIC_API_URL` — which Next inlines at **compile** time and
+ * re-reads from `.env.local` on every recompile, so a shell variable does
+ * not survive and the browser goes quietly back to calling 4001. The
+ * symptom is `ERR_CONNECTION_REFUSED` against a port nobody meant to use.
  *
  * ## Why it can be run more than once
  *
@@ -256,28 +264,6 @@ interface Progress {
   read: number;
   outstanding: number;
   data: { meterNumber: string; skipReason: string | null }[];
-}
-
-async function signIn(page: Page, who: string): Promise<void> {
-  await page.goto("/login");
-  await page.getByRole("button", { name: who, exact: true }).click();
-  // A full navigation rather than a router push, so the permission
-  // provider remounts with the new token.
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 30_000 });
-}
-
-/**
- * The page's own token, for the spec's own calls.
- *
- * The journey is in the browser; these calls are setup and verification —
- * which day is free, and what actually landed in the database. Reading the
- * result off the screen that just wrote it would let a page that renders
- * its own optimistic guess pass a test about what posted.
- */
-async function bearer(page: Page): Promise<string> {
-  const token = await page.evaluate(() => window.localStorage.getItem("cis_token"));
-  expect(token, "signing in should leave a token in localStorage").toBeTruthy();
-  return `Bearer ${token}`;
 }
 
 class Api {

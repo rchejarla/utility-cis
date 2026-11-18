@@ -231,7 +231,7 @@ in this spec where that is true.
 | DELETE | `/api/v1/read-routes/:id/stops/:stopId` | EDIT |
 | GET | `/api/v1/read-routes/:id/unsequenced` | VIEW |
 | GET | `/api/v1/read-routes/:id/sheet?onDate=YYYY-MM-DD[&format=json]` | VIEW — streams a PDF, or the sheet's data |
-| GET | `/api/v1/read-routes/:id/progress` | VIEW |
+| GET | `/api/v1/read-routes/:id/progress?asOf=YYYY-MM-DD&window=reading\|billing` | VIEW — `window` defaults to `reading` here, `billing` on `/meter-reads/progress` (rule 1) |
 | POST | `/api/v1/read-routes/:id/entry` | CREATE — opens or re-opens the day's sheet |
 | PATCH | `/api/v1/read-routes/:id/entry/:batchId/rows` | CREATE |
 | POST | `/api/v1/read-routes/:id/entry/:batchId/submit` | CREATE |
@@ -299,29 +299,37 @@ importer is audited with `actorName: "Import"` and a null actor.
    not a span**: the day reads are due complete. There is no five-day read
    window anywhere in this system.
 
-   **Per-route progress is the exception, and it is deliberate.**
-   `getReadingProgress` derives its window from
-   `computeBillPeriod(asOf ?? now)`, which is the last period already
-   **closed** on that day, and the per-route branch inherits it rather than
-   introducing a second answer. That is what §5.9 means by "no second
-   implementation": the screen is worth having only if it predicts what a
-   billing run will do, and the run asks the same question. So on the 17th
-   of a month for a cycle billing on the 10th, a skip recorded today sits
-   in the window 11th–10th-of-next-month while the default progress answer
-   is about last month's — and **a sheet typed today is invisible to the
-   default call**. `asOf` reaches the reading week's own window today
-   (`asOf` = that period's bill day), which is how the browser journey
-   asserts against it.
+   **Progress can be asked about either, and the two endpoints default
+   differently.** `getReadingProgress` takes `window: "billing" |
+   "reading"`. `billing`, the function's default, is the last period
+   already **closed** on the day — `computeBillPeriod` with the epoch, the
+   identical call `planBillingRun` makes — because a screen predicting what
+   a run will do has to ask the run's question. `reading` is
+   `windowContaining`, the period the day falls in.
 
-   Whether progress should be *askable* for the reading window by name —
-   proposed additively as `window: "billing" | "reading"` rather than by
-   moving the default, which three places depend on — is **open with the
-   coordinator** as of 2026-11-17. Do not change the default without
-   settling it: design §5.9 twice says progress mirrors the run,
-   `reading-progress.service.ts`'s header says sharing the call is what
-   stops the screen and the run disagreeing about "the October window", and
-   `reading-progress.integration.test.ts` pins a mid-window-closed service
-   as outstanding *because* the run bills it.
+   `/meter-reads/progress` keeps `billing`. **`/api/v1/read-routes/:id/progress`
+   defaults to `reading`**, and that is the one place the two differ: a
+   route is a walk somebody is doing, so its progress is about the window
+   the reads land in. Overridable both ways, because "was this route
+   finished before the period we are about to bill closed" is also a fair
+   question.
+
+   Why a parameter rather than moving the default: design §5.9 says twice
+   that progress mirrors the run, `reading-progress.service.ts`'s header
+   says sharing the call is what stops the screen and the run disagreeing
+   about "the October window", and `reading-progress.integration.test.ts`
+   pins a mid-window-closed service as outstanding *because* the run bills
+   it. Moving it would break a named test today, not hypothetically.
+
+   **The stops are expanded at the day for a `reading` question**, not at
+   the window's last day. For a billing question those are the same thing —
+   the window ends on the bill day, and those are the reads the run is
+   waiting on. For a reading question the window's last day is the *next*
+   bill day, weeks ahead, so asking there would count a meter whose
+   assignment closes mid-window and break the §5.12 property that the
+   count and the sheet are the same set. Found from the other side, by a
+   browser journey asserting a route's `expected` against the sheet it had
+   just typed.
 
 2. **Sequences are gapped integers, step 100.** An append is `max + 100`;
    an insert between `a` and `b` takes `floor((a + b) / 2)`, so placing a
