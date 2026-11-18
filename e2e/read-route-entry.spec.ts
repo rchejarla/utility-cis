@@ -259,6 +259,16 @@ interface EntryRow {
   reading: string | null;
   /** What the sheet prints beside the row: the last reading before this date. */
   lastReading: string | null;
+  /** `YYYY-MM-DD`, and the date the held-row message names. */
+  lastReadDate: string | null;
+  /**
+   * The bounds the screen judges a typed number against. **Null when the
+   * meter has too little history to judge one**, which is every row on a
+   * freshly seeded database except the two the seeder gave three months
+   * to — so the outlier test below asserts it is present rather than
+   * assuming it, and says what to run when it is not.
+   */
+  band: { low: string; high: string; typicalLow: string; typicalHigh: string } | null;
   skipReason: string | null;
   status: "PENDING" | "IMPORTED" | "ERROR" | "SKIPPED";
   errorCode: string | null;
@@ -739,4 +749,119 @@ test("a day's sheet is typed in, two stops are coded, and the one refused stop i
     "the correction should add one posted row, not re-post the five that already landed",
   ).toBe(READINGS.length + 1);
   expect(corrected.filter((r) => r.status === "ERROR").length).toBe(0);
+});
+
+/**
+ * A number the meter's own history argues with.
+ *
+ * **This test posts nothing, and that is what makes it safe to run beside
+ * the journey above.** A hold is the screen declining to save: the first
+ * `Enter` on a wild number sets the hold and returns without a write, so
+ * every step here leaves the batch exactly as it found it. Only a
+ * *confirmation* — a second `Enter` on the same number — writes, and that
+ * is deliberately the one branch this does not take. It would stage a
+ * reading into the day the journey picks, and a fixture for one test must
+ * not quietly rewrite another's.
+ *
+ * It opens the same batch the journey does, which is idempotent: a sheet
+ * is one batch per `(route, day)`.
+ *
+ * **Why it is here rather than in a mocked suite.** `entry.test.tsx` has
+ * six tests on this behaviour and they are worth keeping, but a mock is
+ * handed the band it then renders — so it cannot be caught disagreeing
+ * with the server about what a band is, and it cannot show that a held
+ * row really wrote nothing. Both of those are checked here against a real
+ * meter with real history: the band comes from
+ * `services/read-route/reading-band.ts` over `WM-101`'s three months of
+ * reads, and "nothing staged" is read back out of the database.
+ */
+test("a wild number is held against the meter's own history, and a changed one is held afresh", async ({
+  page,
+}) => {
+  await signIn(page, ADMIN);
+  const api = new Api(page.request, await bearer(page));
+  const route = await scenarioRoute(api);
+  const readWindow = await readingWindow(api, route.id);
+  const readDate = await firstUnpostedDay(api, route.id, readWindow);
+
+  const rows = await entryFor(api, route.id, readDate);
+  const target = staged(rows, ONE_REGISTER);
+  const band = target.band;
+  expect(
+    band,
+    `${ONE_REGISTER} should have a band to judge a reading against — it is the stop the seeder ` +
+      `gives three months of history to. A null band means that history is missing, so there is ` +
+      `nothing for this test to be about. Run:\n  ${SEEDER}`,
+  ).not.toBeNull();
+  const last = Number(target.lastReading);
+  expect(
+    last,
+    `${ONE_REGISTER} should have a last reading; the band is computed from the reads behind it`,
+  ).toBeGreaterThan(0);
+
+  await page.goto(`/read-routes/${route.id}/entry?date=${readDate}`);
+  const row = rowFor(page, rows, ONE_REGISTER);
+  const heldBar = page.getByTestId(`held-row-${target.rowIndex}`);
+  await expect(row).toBeVisible();
+
+  // ── 1. Far above the band: held, and told why in the meter's terms ──
+  /*
+   * Ten times the top of the band, so this is wild by any arithmetic and
+   * not a fixture that happens to sit near an edge.
+   */
+  const wild = Math.ceil(Number(band!.high) + 10 * (Number(band!.high) - last) + 1_000);
+  await typeReading(row, wild);
+  await expect(
+    heldBar,
+    "a reading far outside the meter's band should hold the row, not save it",
+  ).toBeVisible();
+  await expect(
+    heldBar,
+    "the hold has to say what this meter usually does — that is the whole reason to hold it " +
+      "rather than refuse it",
+  ).toContainText(/in its recent reads/i);
+  await expect(heldBar, "and how to accept it anyway").toContainText(/press\s+enter\s+again/i);
+
+  /*
+   * The hold wrote nothing. This is the half a mocked test cannot show:
+   * there, the save not happening is the mock's own doing.
+   */
+  expect(
+    staged(await entryFor(api, route.id, readDate), ONE_REGISTER).reading,
+    "a held row must stage nothing — a hold is a question, not a save",
+  ).toBeNull();
+
+  // ── 2. A different wild number is held afresh, not confirmed ────────
+  /*
+   * The hold is keyed on the number, not on the row (`Held.reading`). If
+   * it were keyed on the row alone, this second `Enter` would read as the
+   * confirmation of the first and save a figure nobody confirmed — which
+   * is the dangerous direction for this bug to fail in, and is invisible
+   * on screen because the bar looks the same either way.
+   */
+  await typeReading(row, wild + 1);
+  await expect(heldBar, "a changed number is a new question").toBeVisible();
+  expect(
+    staged(await entryFor(api, route.id, readDate), ONE_REGISTER).reading,
+    "pressing Enter on a *different* number must not be taken as confirming the previous one",
+  ).toBeNull();
+
+  // ── 3. A dial that has gone backwards is its own message ────────────
+  /*
+   * Checked before the band, and worded differently on purpose: a number
+   * below the last reading is a rollover, a replaced meter or a dropped
+   * digit, and the band has nothing useful to say about any of those.
+   */
+  await typeReading(row, Math.max(0, last - 1));
+  await expect(heldBar, "a reading below the last one should hold the row").toContainText(
+    /below the last reading/i,
+  );
+  await expect(
+    heldBar,
+    "and name the three things that actually cause it, rather than quoting the band",
+  ).toContainText(/does not go backwards/i);
+  expect(
+    staged(await entryFor(api, route.id, readDate), ONE_REGISTER).reading,
+    "a backwards dial must stage nothing either",
+  ).toBeNull();
 });
