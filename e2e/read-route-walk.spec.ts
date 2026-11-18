@@ -62,6 +62,22 @@ import { bearer, signIn } from "./support/dev-stack.js";
  * than the UI on purpose: a cleanup that needs the screen to work cannot
  * clean up after the screen failing.
  *
+ * **What guarantees three unrouted addresses is nothing, and that is
+ * worth knowing before trusting this file.** The walk test needs
+ * `PREMISES_NEEDED` of them; the seeder guarantees exactly *one*
+ * deliberately, and the rest are there because the base seed creates many
+ * more premises than the scenario routes. ui-01 confirmed it holds on an
+ * independently seeded database and across two consecutive runs, so the
+ * margin is real — but it is a margin, not an invariant, and the only
+ * thing maintaining it across runs is the `afterEach` below. A run killed
+ * part-way (Ctrl-C, a crashed worker, a closed terminal) skips that
+ * teardown and leaks up to three stops, which shrinks the tray *and*
+ * takes those addresses off every other route's. Two of those and this
+ * file starts failing on its own leftovers. The assertion in the test
+ * names the condition so the failure says so rather than looking like a
+ * product bug; if it ever fires, the fix is to give the seeder the
+ * guarantee rather than to widen the margin by hand.
+ *
  * Needs the scenario seeder for `W-04` and `V-12`:
  *
  *     cd packages/api && npx tsx --env-file=.env scripts/seed-read-route-scenarios.ts
@@ -428,6 +444,21 @@ async function expectWalkOnScreen(page: Page, walk: Premise[]): Promise<void> {
  * wrote the wrong sequence, the list would still render in *some* order
  * and look plausible; only reading the rows back in sequence order says
  * which walk a reader would actually be sent on.
+ *
+ * **What this does not rule out, said rather than fixed.** The read path
+ * is now inside the trust chain: if `listRouteStopDetails` were wrong in
+ * the same way the page is, both would agree and this would pass. It is
+ * not an independent oracle, it is a second path that happens to have 41
+ * integration tests behind it where the screen has none that touch a
+ * database. That asymmetry is the whole reason to prefer it, and it is
+ * also the reason to say out loud that a bug in `addStop`'s sequencing
+ * which *both* the page and the stops endpoint read back faithfully would
+ * survive this test. Catching that needs a third path — the printed sheet,
+ * whose order comes from `buildRouteSheet`.
+ *
+ * Named by ui-01 reviewing this file, and kept as a caveat because the
+ * alternative — asserting against raw SQL — buys a smaller gap than it
+ * costs in a spec that is supposed to be about the screen.
  */
 async function expectWalkPersisted(api: Api, routeId: string, walk: Premise[]): Promise<void> {
   const stops = await api.stops(routeId);
