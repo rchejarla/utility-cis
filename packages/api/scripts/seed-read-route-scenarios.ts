@@ -28,8 +28,9 @@
  *   200  18 N Willson Ave   read off-route earlier in this window, so a
  *                           skip here is refused and has to be corrected
  *   300  24 N Willson Ave   a read in this window that is already billed
- *   400  30 N Willson Ave   an assignment closed inside this window, so
- *                           the stop prints nothing at all
+ *   400  30 N Willson Ave   an assignment closed the day before this
+ *                           window opened, so the stop prints nothing on
+ *                           any day of it
  *   500  36 N Willson Ave   two meters at one address: one locked gate
  *                           writes two skip rows (design §5.3)
  *   600  350 Fifth Avenue   EM-003's two registers print two lines, and
@@ -258,7 +259,7 @@ const SCENARIO: ScenarioPremise[] = [
     meterNumber: "WM-104",
     registers: 0,
     fact: "AGREEMENT_ENDED",
-    shows: "service closed inside this window: the stop prints nothing and is reported, not dropped",
+    shows: "service closed before this window: the stop prints nothing on every day of it, and is reported",
   },
   {
     n: 5,
@@ -814,14 +815,28 @@ async function ensureHistory(
 }
 
 /**
- * Close the meter's assignment, and the service behind it, inside the
- * window.
+ * Close the meter's assignment, and the service behind it, **the day
+ * before the window opens**.
  *
- * **This converges rather than leaving an existing value alone.** A
- * closure dated in an earlier window still produces the behaviour the stop
- * is here for — nothing to read today — but it no longer demonstrates what
- * the stop is labelled with, so a stored date that has fallen out of the
- * current window is moved into it.
+ * It used to close it inside the window, which is what "ended mid-cycle"
+ * literally asks for, and that made the fixture mean different things on
+ * different days. `readableRowsForPremises` treats removal as **inclusive**
+ * (`removedDate >= onDate` is open), so a stop closed on the 16th still
+ * produces a row on every day up to and including the 16th and only
+ * vanishes from the 17th. The ui stream measured it: ten rows on the 11th
+ * and the 16th, nine on the 17th. A fixture whose row count depends on
+ * which day it is read for cannot carry an assertion about either.
+ *
+ * Closing it the day before the window opens makes "this stop produces no
+ * row" true on **every** day of the window, which is the behaviour the stop
+ * exists to show — a stop on the route that the sheet cannot print and must
+ * report rather than drop (design §5.1). Nothing about the read-route path
+ * distinguishes a service that ended just before the window from one that
+ * ended inside it; both are simply a stop with nothing to read.
+ *
+ * **Converges rather than leaving an existing value alone.** Any stored
+ * date at or after the window's start would put a row back on the sheet, so
+ * it is moved; an earlier one is left exactly where it is.
  */
 async function ensureAssignmentEnded(
   utilityId: string,
@@ -838,11 +853,8 @@ async function ensureAssignmentEnded(
   });
   if (!spm) fail(`${s.meterNumber} has no assignment to end — ensureServiceGraph should have made one`);
 
-  const alreadyInWindow =
-    spm.removedDate !== null &&
-    spm.removedDate >= window.periodStart &&
-    spm.removedDate <= window.periodEnd;
-  if (alreadyInWindow) return;
+  const closedBeforeTheWindow = spm.removedDate !== null && spm.removedDate < window.periodStart;
+  if (closedBeforeTheWindow) return;
 
   await prisma.servicePointMeter.update({ where: { id: spm.id }, data: { removedDate: endedOn } });
   await prisma.servicePoint.update({
@@ -1001,7 +1013,15 @@ async function main(): Promise<void> {
           await ensureReadInWindow(utilityId, s, graph, refs, window, readOn, true, counts);
           break;
         case "AGREEMENT_ENDED":
-          await ensureAssignmentEnded(utilityId, s, graph, window, readOn, counts);
+          // The day before the window opens, not `readOn`: see the function.
+          await ensureAssignmentEnded(
+            utilityId,
+            s,
+            graph,
+            window,
+            addDays(window.periodStart, -1),
+            counts,
+          );
           break;
         case "NONE":
           break;

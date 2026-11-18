@@ -292,13 +292,36 @@ importer is audited with `actorName: "Import"` and a null actor.
 
 ## Business Rules
 
-1. **One window, and it is the cycle's.** Every date question in this
-   module — which window a skip falls in, which reads a route's progress
-   counts, which period a frozen read belongs to — is answered by
-   `windowContaining(cycle, day)` over `computeBillPeriod`, the same
-   definition the billing run plans against. `BillingCycle.read_day_of_month`
-   is a **day, not a span**: the day reads are due complete. There is no
-   five-day read window anywhere in this system.
+1. **One window, and it is the cycle's.** Which window a skip falls in,
+   and which period a frozen read belongs to, are answered by
+   `windowContaining(cycle, day)` over `computeBillPeriod` — the period
+   **containing** that day. `BillingCycle.read_day_of_month` is a **day,
+   not a span**: the day reads are due complete. There is no five-day read
+   window anywhere in this system.
+
+   **Per-route progress is the exception, and it is deliberate.**
+   `getReadingProgress` derives its window from
+   `computeBillPeriod(asOf ?? now)`, which is the last period already
+   **closed** on that day, and the per-route branch inherits it rather than
+   introducing a second answer. That is what §5.9 means by "no second
+   implementation": the screen is worth having only if it predicts what a
+   billing run will do, and the run asks the same question. So on the 17th
+   of a month for a cycle billing on the 10th, a skip recorded today sits
+   in the window 11th–10th-of-next-month while the default progress answer
+   is about last month's — and **a sheet typed today is invisible to the
+   default call**. `asOf` reaches the reading week's own window today
+   (`asOf` = that period's bill day), which is how the browser journey
+   asserts against it.
+
+   Whether progress should be *askable* for the reading window by name —
+   proposed additively as `window: "billing" | "reading"` rather than by
+   moving the default, which three places depend on — is **open with the
+   coordinator** as of 2026-11-17. Do not change the default without
+   settling it: design §5.9 twice says progress mirrors the run,
+   `reading-progress.service.ts`'s header says sharing the call is what
+   stops the screen and the run disagreeing about "the October window", and
+   `reading-progress.integration.test.ts` pins a mid-window-closed service
+   as outstanding *because* the run bills it.
 
 2. **Sequences are gapped integers, step 100.** An append is `max + 100`;
    an insert between `a` and `b` takes `floor((a + b) / 2)`, so placing a
@@ -641,14 +664,29 @@ respect. They are rules about fixtures, not limitations of routes.
   premise into the fixture for the rule the sheet rests on: the AMR meter's
   two registers print, the AMI meter prints nothing.
 
+- **A closed assignment belongs before the window, not inside it, in any
+  fixture that is read for more than one day.** `readableRowsForPremises`
+  treats removal as **inclusive** — `removedDate >= onDate` is still open —
+  so a stop closed on the 16th produces a row on every day up to and
+  including the 16th and only vanishes from the 17th. Measured on the dev
+  seed: ten rows on the 11th and the 16th, nine on the 17th. "The service
+  ended mid-cycle" and "this stop has nothing to read" are therefore not
+  the same fixture, and a test that asserts a row count has to pick one.
+  Nothing in the read-route path distinguishes a service that ended just
+  before the window from one that ended inside it; both are a stop with
+  nothing to read, so the fixture closes it the day before the window
+  opens.
+
 **The scenario seeder** is `packages/api/scripts/seed-read-route-scenarios.ts`,
 run as `cd packages/api && npx tsx --env-file=.env
 scripts/seed-read-route-scenarios.ts`. Additive and idempotent, so it runs
 against a database somebody is already working in. It builds one `LOCAL`
 route of eight stops whose rows cover each shape and refusal above, and one
-`EXTERNAL` route with no stops. Every date-bound fact it writes is placed in
-the window `windowContaining` puts today in, never on a literal date, so the
-fixture keeps meaning what it says whenever it is run.
+`EXTERNAL` route with no stops. Every date-bound fact it writes is placed
+relative to the window `windowContaining` puts today in — inside it for the
+off-route and billed reads, before it for the closed assignment and the
+trailing history — and never on a literal date, so the fixture keeps meaning
+what it says whenever it is run.
 
 ## Phase Roadmap
 
