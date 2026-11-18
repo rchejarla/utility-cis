@@ -98,9 +98,10 @@ export async function getReadingProgress(
    * it is invisible — which is what a route's own progress reported until
    * 2026-11-17: a period that had already been billed.
    *
-   * Nothing else in this function branches. The window is an argument to
-   * everything below it, which is why one parameter buys the second
-   * question without a second implementation.
+   * **The branch is here and only here.** It resolves both things the
+   * question decides — the window, and the day a route's rows are asked
+   * for — so everything below takes them as arguments. One parameter
+   * buys the second question without a second implementation.
    *
    * Added because the window containing a day was otherwise **unaskable**:
    * `asOf` names a period only by that period's own bill day, so a caller
@@ -108,10 +109,18 @@ export async function getReadingProgress(
    * them. The read-routes Playwright spec got exactly that wrong — it
    * passed the day it was reading for and was handed the previous window.
    */
-  const window =
+  const { window, sheetDate } =
     query.window === "reading"
-      ? windowContaining(cycle, onDate)
-      : computeBillPeriod({ createdAt: new Date(0), billingCycle: cycle }, onDate);
+      ? { window: windowContaining(cycle, onDate), sheetDate: onDate }
+      : {
+          window: computeBillPeriod({ createdAt: new Date(0), billingCycle: cycle }, onDate),
+          /*
+           * For a billing question the window's last day *is* the day the
+           * reads being waited on are for: it is the bill day, and the run
+           * will bill what was read by then.
+           */
+          sheetDate: null,
+        };
   const { periodStart: windowStart, periodEnd: windowEnd } = window;
   /** Intervals are instants; the window's last day runs to its end. */
   const intervalEnd = new Date(windowEnd.getTime() + 86_400_000);
@@ -194,19 +203,16 @@ export async function getReadingProgress(
             window,
             inWindow,
             /*
-             * The day the route's rows are asked for, which is not always
-             * the window's last day.
-             *
-             * For `billing` it is: the window ends on the bill day, and
-             * those are the reads the run is waiting on. For `reading` the
-             * window's last day is the *next* bill day, weeks ahead, while
-             * the sheet in the reader's hand was printed for today — so
-             * asking at `periodEnd` would count a meter whose assignment
-             * closes next week as not-expected while the paper still
-             * prints it. §5.12 requires the count and the sheet to be the
-             * same set, so the date has to be the same date.
+             * The day the route's rows are asked for. Decided at the
+             * branch above, not here: for a reading question the window's
+             * last day is the *next* bill day, weeks ahead, while the
+             * sheet in the reader's hand was printed for today — so asking
+             * at `periodEnd` would drop a meter whose assignment closes
+             * next week from a count the paper still prints. §5.12
+             * requires the count and the sheet to be the same set, so it
+             * has to be the same date.
              */
-            query.window === "reading" ? onDate : window.periodEnd,
+            sheetDate ?? window.periodEnd,
           );
     const unread = await withoutAReadInWindow(utilityId, units, window.periodStart, windowEnd, intervalEnd);
     expected = units.length;

@@ -309,9 +309,9 @@ still unread was to start a billing run and read the skips — one
 `NO_READ_IN_WINDOW` per account, after the run had been created and the
 window had closed behind it.
 
-Pick a cycle; the screen states the window it is measuring (the cycle's
-own, from the same `computeBillPeriod` call `planBillingRun` makes, so
-the two cannot disagree about "the October window") and leads with three
+Pick a cycle; the screen states the window it is measuring — **the one a
+run will bill**, from the same `computeBillPeriod` call `planBillingRun`
+makes, so the two cannot disagree about "the October window" — and leads with three
 figures: still to read, read of expected, percent complete — floored,
 because a screen that rounded 93.88% to 94 would claim progress nobody
 has made. Below them, the outstanding services: meter, premise,
@@ -319,7 +319,7 @@ agreement, account, and when that meter was last read at all, because
 "never" is a new service and "last July" is a meter somebody has stopped
 reaching.
 
-`GET /api/v1/meter-reads/progress?billingCycleId=…[&asOf=&page=&limit=&readRouteId=]`,
+`GET /api/v1/meter-reads/progress?billingCycleId=…[&asOf=&window=&page=&limit=&readRouteId=]`,
 gated on `meter_reads:VIEW`. Counted as **meter assignments**, not
 meters: one meter serving two agreements is two readings to take.
 
@@ -334,6 +334,25 @@ cycle-wide answer, which does not know which route a meter is on and must
 not guess. The expected set is the route's stops for a `LOCAL` route and
 the meters its last reads carried for an `EXTERNAL` one; one branch, in one
 place. See [30 — Read Routes](30-read-routes.md).
+
+**`window` names which of two periods the answer is about, and this
+screen's default does not move.** `billing` (the default here) is the
+period a run will bill: the last one already *closed* on `asOf`.
+`reading` is the period **containing** `asOf` — where the reads somebody
+is taking today land — and resolves through `windowContaining` instead.
+Both go through the one function; only the window and the day a route's
+rows are asked for differ.
+
+Two consequences worth knowing before using `asOf`:
+
+- **To name the period a run will bill, pass its bill day.** With
+  `billing`, `asOf` on the 9th of a 10th-bill-day cycle yields the period
+  that closed a month earlier, not the one about to close; the 10th
+  yields the right one, because `periodEnd` is inclusive.
+- **`/api/v1/read-routes/:id/progress` defaults to `reading`**, the
+  opposite way, because a route is a walk somebody is doing and its reads
+  belong to the period that has not closed yet. It is overridable, and
+  that asymmetry is stated in both validators. See spec 30.
 
 **An interval meter counts as read once its intervals are in.** It has
 no `meter_read` row until the roll-up runs inside a billing run, so

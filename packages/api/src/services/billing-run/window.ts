@@ -66,11 +66,30 @@ export function agreementInWindow(window: {
  * Were the end ever made exclusive, this would return the previous
  * window on every bill day; the integration test pins the day before,
  * the day of and the day after the bill day for that reason.
+ *
+ * **`day` is normalised to UTC midnight here, and that is load-bearing.**
+ * `periodEnd` is UTC midnight on the bill day, so a `Date` carrying a
+ * time of day fails `day <= periodEnd` on the bill day itself, takes the
+ * probe below, and returns the window starting *tomorrow* — the one day
+ * a month this function can be wrong, and silently. It was: until
+ * 2026-11-18 `getReadingProgress` handed it `new Date()` for a
+ * reading-week question, so every bill day the route page printed next
+ * month's window and counted that morning's reads as unread.
+ *
+ * Normalised here rather than at the call sites because the parameter is
+ * a *day* and four of the five callers were correct only by accident of
+ * their input — a parsed `YYYY-MM-DD`, or something already through
+ * `utcDay`. Those four are unaffected: midnight normalises to itself.
+ * Nothing wants sub-day precision from a function whose answer is a
+ * pair of dates.
  */
 export function windowContaining(
   cycle: { billDayOfMonth: number; frequency: string },
-  day: Date,
+  dayInput: Date,
 ): { periodStart: Date; periodEnd: Date } {
+  const day = new Date(
+    Date.UTC(dayInput.getUTCFullYear(), dayInput.getUTCMonth(), dayInput.getUTCDate()),
+  );
   const epoch = { createdAt: new Date(0), billingCycle: cycle };
   const closed = computeBillPeriod(epoch, day);
   if (day <= closed.periodEnd) return closed;

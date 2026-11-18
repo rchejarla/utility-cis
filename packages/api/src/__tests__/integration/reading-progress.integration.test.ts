@@ -724,9 +724,23 @@ describe("which window the progress is about", () => {
    * §5.12, per route: the expected figure is the row set the printed sheet
    * prints, so the count in front of the person and the paper in their hand
    * cannot disagree. Proven until now only by a browser run.
+   *
+   * **The assignment closes inside the reading window, and that is the
+   * whole fixture.** A route's rows are asked for at the day the sheet is
+   * printed for, not at the window's last day — which for a reading
+   * question is the *next* bill day, weeks ahead. With `removedDate`
+   * between the two, the two dates give different answers: open on
+   * `AS_OF` (so the sheet prints it and the count must be 1), closed by
+   * `periodEnd` 2026-03-10 (so asking there drops it and the count would
+   * be 0). Without a date in that gap the test passes either way, which
+   * is how the first version of it asserted nothing.
    */
   it("per route, the reading window expects exactly the rows the sheet would print", async () => {
-    const sa = await service({ agreementNumber: "SA-WIN-4", meterId: fixA.meterId });
+    const sa = await service({
+      agreementNumber: "SA-WIN-4",
+      meterId: fixA.meterId,
+      removedDate: new Date("2026-02-20"),
+    });
     const r = await route({ code: "RT-WIN", stops: [fixA.premiseId] });
 
     const p = await progress({ readRouteId: r, window: "reading" });
