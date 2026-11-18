@@ -472,3 +472,89 @@ async function expectWalkPersisted(api: Api, routeId: string, walk: Premise[]): 
     "sequences must stay strictly ascending; an insert that ties them makes the walk ambiguous",
   ).toEqual([...new Set(inSequence.map((s) => s.sequence))].sort((a, b) => a - b));
 }
+
+/**
+ * The server's own refusal, reaching the screen.
+ *
+ * **What is unverified without this is precisely the join.** `new.test.tsx`
+ * has five cases and they mock the rejection, so they prove the page
+ * displays whatever message it is handed. The server side is pinned
+ * separately — `read-route-routes.integration.test.ts` asserts
+ * `error.code === "ROUTE_CODE_TAKEN"`. Neither says the real message
+ * travels: an API client that swallowed the body, or a form that showed a
+ * generic "Failed to save", would satisfy both suites and show the person
+ * nothing they could act on.
+ *
+ * So this asserts the message **names the code it refused**, which is the
+ * part only the server knows and only a real request can carry.
+ *
+ * **It matches on `/already exists/i` and not the whole string on
+ * purpose.** `use-entity-form.ts:73-75` shows `err.message` verbatim and
+ * `api-client.ts:155` throws `API error 409: …`, so what a person actually
+ * reads is:
+ *
+ *     API error 409: A route with code W-04 already exists
+ *
+ * Pinning that prefix would make it intended behaviour. It is app-wide —
+ * every `EntityFormPage` leaks it — so whether a form should print an HTTP
+ * status at somebody is a question about the whole app and not about read
+ * routes. Named here, decided elsewhere. (ui-01, who owns both files, made
+ * the same call.)
+ *
+ * **Idempotent, and that is why it is the creation case this file tests.**
+ * The refusal happens before any write, so the test leaves nothing behind
+ * — which the happy path cannot manage: a code is unique and there is no
+ * `DELETE /api/v1/read-routes/:id`, so a form-driven create would litter a
+ * row on every run or fail on its second.
+ */
+test("the create form reports the server's refusal, naming the code it would not take", async ({
+  page,
+}) => {
+  await signIn(page, ADMIN);
+  const api = new Api(page.request, await bearer(page));
+  const taken = await seededRoute(api, SCENARIO_ROUTE);
+
+  const countBefore = (await api.routes()).data.filter((r) => r.code === SCENARIO_ROUTE).length;
+  expect(countBefore, `${SCENARIO_ROUTE} should exist exactly once to be a taken code`).toBe(1);
+
+  await page.goto("/read-routes/new");
+  await expect(page.getByRole("heading", { name: /new read route/i })).toBeVisible();
+
+  /*
+   * Labels by regex: a required field renders its marker appended, so the
+   * exact string the page gives its form spec is not the label's text.
+   */
+  await page.getByLabel(/^Code/).fill(SCENARIO_ROUTE);
+  await page.getByLabel(/^Name/).fill("A name the server never gets as far as");
+
+  /*
+   * The cycles are fetched, so wait for the option rather than racing it —
+   * `selectOption` waits for the control, not for its contents.
+   */
+  const cycle = page.getByLabel(/^Billing Cycle/);
+  await expect(cycle.locator(`option[value="${taken.billingCycleId}"]`)).toHaveCount(1);
+  await cycle.selectOption(taken.billingCycleId);
+
+  await page.getByRole("button", { name: /^Create Read Route$/ }).click();
+
+  await expect(
+    page.getByText(/already exists/i),
+    "the server's refusal has to reach the screen, not a generic save failure",
+  ).toBeVisible();
+  await expect(
+    page.getByText(new RegExp(SCENARIO_ROUTE)),
+    "and it has to name the code it refused — that is the part only the server knows",
+  ).toBeVisible();
+
+  await expect(page, "a refused create stays on the form with the values typed").toHaveURL(
+    /\/read-routes\/new$/,
+  );
+  await expect(page.getByLabel(/^Code/), "so the code can be corrected rather than retyped").toHaveValue(
+    SCENARIO_ROUTE,
+  );
+
+  expect(
+    (await api.routes()).data.filter((r) => r.code === SCENARIO_ROUTE).length,
+    "a refused create must write nothing",
+  ).toBe(countBefore);
+});
