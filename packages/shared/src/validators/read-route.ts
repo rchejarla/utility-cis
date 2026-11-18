@@ -120,6 +120,38 @@ export type UnsequencedPremiseListResponse = z.infer<typeof unsequencedPremiseLi
  * the database is the arbiter and this is the same list for the callers
  * that would otherwise find out from a constraint error.
  */
+/**
+ * A stop as the route page shows it: the stop, the address a reader
+ * walks to, and the cycles the accounts served there bill on.
+ *
+ * `accountCycles` is a list of facts, not an "off cycle" flag.
+ * `Account.billing_cycle_id` is required and nothing makes it agree with
+ * the route's (§5.1), so a stop billing elsewhere is real and still
+ * prints — it is a data-quality item, not a validation error. Which
+ * means the comparison belongs to the one screen that draws that list,
+ * beside the route's own cycle it is comparing against; a boolean here
+ * would hide the rule in the API and tell the page nothing it could
+ * explain to an operator. Empty when nothing is served at the premise.
+ */
+export const readRouteStopDetailSchema = readRouteStopSchema.extend({
+  premise: premiseSummarySchema,
+  accountCycles: z.array(
+    z.object({ billingCycleId: z.string().uuid(), cycleCode: z.string() }),
+  ),
+});
+export type ReadRouteStopDetail = z.infer<typeof readRouteStopDetailSchema>;
+
+/**
+ * `{ data }` with no `meta`, unlike every list endpoint beside it: a
+ * route's stops are a walk somebody does in a morning, so there is no
+ * page to be on, and a `meta` block would describe a pagination the
+ * endpoint does not do. Same shape as `GET /api/v1/meters/:id/reads`.
+ */
+export const readRouteStopDetailListSchema = z.object({
+  data: z.array(readRouteStopDetailSchema),
+});
+export type ReadRouteStopDetailList = z.infer<typeof readRouteStopDetailListSchema>;
+
 export const SKIP_REASONS = [
   "LOCKED_GATE",
   "DOG",
@@ -131,3 +163,158 @@ export const SKIP_REASONS = [
 ] as const;
 export const skipReasonSchema = z.enum(SKIP_REASONS);
 export type SkipReason = z.infer<typeof skipReasonSchema>;
+
+/**
+ * What each code means in words, for the sheet's legend and the entry
+ * screen's picker. One list, so the paper a reader carries and the
+ * screen somebody types it into cannot drift (plan, Task 8 step 3).
+ */
+export const SKIP_REASON_LABELS: Record<SkipReason, string> = {
+  LOCKED_GATE: "Locked gate",
+  DOG: "Dog",
+  BURIED: "Buried",
+  UNREADABLE: "Unreadable",
+  OBSTRUCTED: "Obstructed",
+  APPEARS_VACANT: "Appears vacant",
+  NO_METER_FOUND: "No meter found",
+};
+
+/*
+ * ─── Entry ─────────────────────────────────────────────────────────────
+ *
+ * The screen is the sheet, so these describe one line of paper: what the
+ * reader is comparing against, what they typed, and what became of it
+ * when the route was posted.
+ */
+
+/** Opening or reopening entry. One screen per `(route, read date)` (§5.7). */
+export const entryOpenSchema = z.object({ readDate: z.string().date() }).strict();
+export type EntryOpenInput = z.infer<typeof entryOpenSchema>;
+
+/**
+ * Staging one row: a reading, **or** a code for why there is none, or
+ * neither — which clears it. Both together is refused by the service
+ * (400 `ENTRY_ROW_AMBIGUOUS`) rather than here, because a row carrying
+ * both is a mistake worth naming, not a malformed request.
+ *
+ * `registerId` is explicitly nullable rather than optional: null is
+ * which row this is — the meter itself, not one of its registers — and
+ * an omitted key would make "the meter's own row" indistinguishable
+ * from "I forgot to say".
+ */
+export const entryRowSaveSchema = z
+  .object({
+    meterId: z.string().uuid(),
+    registerId: z.string().uuid().nullable(),
+    reading: z.number().nonnegative().optional(),
+    skipReason: skipReasonSchema.optional(),
+    notes: z.string().max(2000).optional(),
+  })
+  .strict();
+export type EntryRowSave = z.infer<typeof entryRowSaveSchema>;
+
+/**
+ * The range a meter's next reading is expected to land in, judged from
+ * its own recent consumption.
+ *
+ * **Provisional, and deliberately so** (§5.7). `ExceptionThreshold`
+ * (Req 93) is unbuilt and there is no high-usage detection anywhere in
+ * the API, so without this a 3× read posts in silence while only a
+ * reversed dial stops a row. When Req 93 lands the band comes from
+ * there and the rule behind this is deleted — it lives in one file,
+ * `services/read-route/reading-band.ts`, so that deletion is one file.
+ *
+ * Decimal strings, like every other quantity on the wire.
+ */
+export const entryBandSchema = z.object({
+  low: z.string(),
+  high: z.string(),
+  /** The consumption range the bounds were built from, for "typical 28–34". */
+  typicalLow: z.string(),
+  typicalHigh: z.string(),
+});
+export type EntryBand = z.infer<typeof entryBandSchema>;
+
+/**
+ * One line of the sheet on screen.
+ *
+ * The API service derives its own `EntryRow` from this schema rather
+ * than declaring the shape twice — the two would eventually disagree,
+ * and the place that shows is a column of blanks nobody can explain.
+ */
+export const entryRowSchema = z.object({
+  rowId: z.string().uuid(),
+  /** 1-based, in the route's walking order. */
+  rowIndex: z.number().int().positive(),
+  sequence: z.number().int(),
+  premiseId: z.string().uuid(),
+  /** `addressLine1, city` — what the reader is standing in front of. */
+  address: z.string(),
+  meterId: z.string().uuid(),
+  meterNumber: z.string(),
+  registerId: z.string().uuid().nullable(),
+  /** A label, not a count. */
+  registerNumber: z.string().nullable(),
+  accountNumber: z.string(),
+  /** What this meter last read, before the sheet's date. Null if never read. */
+  lastReading: z.string().nullable(),
+  /** YYYY-MM-DD. */
+  lastReadDate: z.string().nullable(),
+  /** Null when the meter has too little history to judge a band from. */
+  band: entryBandSchema.nullable(),
+  reading: z.string().nullable(),
+  skipReason: z.string().nullable(),
+  notes: z.string().nullable(),
+  status: z.enum(["PENDING", "IMPORTED", "ERROR", "SKIPPED"]),
+  errorCode: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+});
+export type EntryRowWire = z.infer<typeof entryRowSchema>;
+
+export const entryOpenResponseSchema = z.object({
+  batchId: z.string().uuid(),
+  rows: z.array(entryRowSchema),
+});
+export type EntryOpenResponse = z.infer<typeof entryOpenResponseSchema>;
+
+export const entrySubmitResultSchema = z.object({
+  batchId: z.string().uuid(),
+  status: z.string(),
+  importedCount: z.number().int().nonnegative(),
+  errorCount: z.number().int().nonnegative(),
+  skipsRecorded: z.number().int().nonnegative(),
+  /** Rows nobody typed anything against, left out of the post. */
+  notEntered: z.number().int().nonnegative(),
+  /** True when this call wrote nothing because the batch had already posted. */
+  alreadySubmitted: z.boolean(),
+});
+export type EntrySubmitResultWire = z.infer<typeof entrySubmitResultSchema>;
+
+/**
+ * Printing a sheet. `format` exists because `buildRouteSheet` returns
+ * the stops it could **not** print, and a PDF body cannot carry that
+ * warning — a stop that vanishes from a sheet without a trace is the
+ * silent failure §5.1 forbids, so the route page asks for the JSON and
+ * says so before anyone prints.
+ */
+export const routeSheetQuerySchema = z
+  .object({
+    onDate: z.string().date(),
+    format: z.enum(["pdf", "json"]).default("pdf"),
+  })
+  .strict();
+export type RouteSheetQuery = z.infer<typeof routeSheetQuerySchema>;
+
+/**
+ * Per-route progress. No `billingCycleId`: a route has one, it is
+ * required, and asking the caller to repeat it invites the mismatch
+ * `meterReadingProgressQuerySchema` would then have to refuse.
+ */
+export const readRouteProgressQuerySchema = z
+  .object({
+    asOf: z.string().date().optional(),
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(500).default(50),
+  })
+  .strict();
+export type ReadRouteProgressQuery = z.infer<typeof readRouteProgressQuerySchema>;

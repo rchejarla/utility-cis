@@ -5,6 +5,7 @@ import type {
   ReadRouteUpdate,
   ReadRouteSummary,
   ReadRouteStop,
+  ReadRouteStopDetail,
   ReadRouteStopInput,
   UnsequencedPremiseQuery,
   PremiseSummary,
@@ -143,6 +144,23 @@ export async function listReadRoutes(
     cycleCode: r.billingCycle.cycleCode,
   }));
   return paginatedResponse(data, total, { page, limit, sort: "code", order: "asc" });
+}
+
+/**
+ * One route, as its own page shows it — the row plus the two derived
+ * figures the list already carries, so the page does not have to fetch
+ * the list to learn its cycle's code.
+ */
+export async function getReadRoute(utilityId: string, id: string): Promise<ReadRouteSummary> {
+  const row = await prisma.readRoute.findFirst({
+    where: { id, utilityId },
+    include: {
+      billingCycle: { select: { cycleCode: true } },
+      _count: { select: { stops: true } },
+    },
+  });
+  if (!row) throw httpError(404, "ROUTE_NOT_FOUND", `Read route ${id} not found`);
+  return { ...toRoute(row), stopCount: row._count.stops, cycleCode: row.billingCycle.cycleCode };
 }
 
 export async function updateReadRoute(
@@ -453,6 +471,92 @@ export async function listStops(utilityId: string, routeId: string): Promise<Rea
     orderBy: { sequence: "asc" },
   });
   return rows.map(toStop);
+}
+
+/**
+ * The stops with the address a reader walks to, and the cycles the
+ * accounts served there bill on.
+ *
+ * Separate from `listStops` rather than an option on it: `openEntry` and
+ * `buildRouteSheet` call that one for premise ids and sequences alone,
+ * and would pay for two joins they have no use for. An EXTERNAL route
+ * answers `{ data: [] }` here for the same reason `listStops` answers
+ * `[]` — the honest answer to "what is on it" is "the vendor decides".
+ *
+ * **The cycles are returned, not compared.** §5.1 settles that a stop
+ * whose account bills on another cycle still prints and is a
+ * data-quality item rather than an error, so the comparison belongs to
+ * the screen that draws that list beside the route's own cycle. Only
+ * ACTIVE agreements at live service points count: a terminated contract
+ * on another cycle is not a fact about today's walk.
+ */
+export async function listRouteStopDetails(
+  utilityId: string,
+  routeId: string,
+): Promise<ReadRouteStopDetail[]> {
+  const stops = await listStops(utilityId, routeId);
+  if (stops.length === 0) return [];
+  const premiseIds = stops.map((s) => s.premiseId);
+
+  const [premises, points] = await Promise.all([
+    prisma.premise.findMany({
+      where: { utilityId, id: { in: premiseIds } },
+      select: {
+        id: true,
+        addressLine1: true,
+        addressLine2: true,
+        city: true,
+        state: true,
+        zip: true,
+        premiseType: true,
+      },
+    }),
+    prisma.servicePoint.findMany({
+      where: {
+        utilityId,
+        premiseId: { in: premiseIds },
+        status: "ACTIVE",
+        serviceAgreement: { status: "ACTIVE" },
+      },
+      select: {
+        premiseId: true,
+        serviceAgreement: {
+          select: {
+            account: {
+              select: { billingCycleId: true, billingCycle: { select: { cycleCode: true } } },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+
+  const premiseOf = new Map(premises.map((p) => [p.id, p]));
+  // Distinct per premise: two agreements on one cycle are one fact, and
+  // a page listing it twice reads as two problems.
+  const cyclesOf = new Map<string, Map<string, string>>();
+  for (const p of points) {
+    const account = p.serviceAgreement.account;
+    const held = cyclesOf.get(p.premiseId) ?? new Map<string, string>();
+    held.set(account.billingCycleId, account.billingCycle.cycleCode);
+    cyclesOf.set(p.premiseId, held);
+  }
+
+  return stops.flatMap((stop) => {
+    const premise = premiseOf.get(stop.premiseId);
+    /*
+     * A stop whose premise this tenant cannot see would be an RLS
+     * failure or a cross-tenant stop, neither of which the composite
+     * foreign keys permit — so dropping it silently is safe here and
+     * is not the §5.1 case, which is about a premise with nothing to
+     * read rather than a premise that is not there.
+     */
+    if (!premise) return [];
+    const cycles = [...(cyclesOf.get(stop.premiseId) ?? new Map())].map(
+      ([billingCycleId, cycleCode]) => ({ billingCycleId, cycleCode: String(cycleCode) }),
+    );
+    return [{ ...stop, premise, accountCycles: cycles }];
+  });
 }
 
 /**

@@ -1,10 +1,11 @@
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
-import type { SkipReason } from "@utility-cis/shared";
+import type { EntryRowWire, EntrySubmitResultWire, SkipReason } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { processBatch } from "./imports/process-batch.service.js";
 import { windowContaining } from "./billing-run/window.js";
 import { listStops } from "./read-route.service.js";
 import { readableRowsForPremises } from "./read-route/readable-rows.js";
+import { historyForRows, historyKey } from "./read-route/reading-band.js";
 import { recordSkips } from "./read-skip.service.js";
 
 /**
@@ -54,37 +55,15 @@ const ENTRY_KIND = "read-route-entry";
 /** Why a row was left out of the post: nothing was typed against it. */
 const NOT_ENTERED = "NOT_ENTERED";
 
-export interface EntryRow {
-  rowId: string;
-  /** 1-based, in the route's walking order. */
-  rowIndex: number;
-  sequence: number;
-  premiseId: string;
-  meterId: string;
-  meterNumber: string;
-  registerId: string | null;
-  /** A label, not a count. */
-  registerNumber: string | null;
-  accountNumber: string;
-  reading: string | null;
-  skipReason: string | null;
-  notes: string | null;
-  status: "PENDING" | "IMPORTED" | "ERROR" | "SKIPPED";
-  errorCode: string | null;
-  errorMessage: string | null;
-}
-
-export interface EntrySubmitResult {
-  batchId: string;
-  status: string;
-  importedCount: number;
-  errorCount: number;
-  skipsRecorded: number;
-  /** Rows nobody typed anything against, left out of the post. */
-  notEntered: number;
-  /** True when this call wrote nothing because the batch had already been submitted. */
-  alreadySubmitted: boolean;
-}
+/*
+ * Both shapes come from `@utility-cis/shared`, where they are Zod
+ * schemas the routes' integration suite parses a real HTTP body
+ * through. Declared here by hand until 2026-11-17, beside a web page
+ * that would have declared them a third time — and nothing anywhere
+ * compared the three.
+ */
+export type EntryRow = EntryRowWire;
+export type EntrySubmitResult = EntrySubmitResultWire;
 
 function httpError(statusCode: number, code: string, message: string): Error {
   return Object.assign(new Error(message), { statusCode, code });
@@ -109,32 +88,87 @@ interface StagedRaw {
   notes: string;
 }
 
-function toEntryRow(row: {
+interface StagedRow {
   id: string;
   rowIndex: number;
   rawData: Prisma.JsonValue;
   status: EntryRow["status"];
   errorCode: string | null;
   errorMessage: string | null;
-}): EntryRow {
-  const raw = row.rawData as unknown as StagedRaw;
-  return {
-    rowId: row.id,
-    rowIndex: row.rowIndex,
-    sequence: Number(raw.sequence),
-    premiseId: raw.premiseId,
-    meterId: raw.meterId,
-    meterNumber: raw.meterNumber,
-    registerId: raw.registerId || null,
-    registerNumber: raw.registerNumber || null,
-    accountNumber: raw.accountNumber,
-    reading: raw.reading || null,
-    skipReason: raw.skipReason || null,
-    notes: raw.notes || null,
-    status: row.status,
-    errorCode: row.errorCode,
-    errorMessage: row.errorMessage,
-  };
+}
+
+/**
+ * The staged rows as the screen reads them: each one's address, what the
+ * meter last read, and the band §5.7 holds a wild number against.
+ *
+ * None of the three is in `raw_data`, and none belongs there — the
+ * staged row is what will be posted, and these are what the typist is
+ * looking at while deciding what to post. They are resolved on the way
+ * out instead, which also means a sheet opened last week shows today's
+ * address.
+ *
+ * **Always handed the whole batch**, never one row, even when the caller
+ * wants one back: `historyForRows` decides whether a meter's
+ * register-less reads belong to its single register by counting the
+ * registers it was given, so a single-row call would merge them onto a
+ * two-register meter and show the wrong history beside the input.
+ */
+async function decorate(
+  utilityId: string,
+  rows: StagedRow[],
+  onDate: Date,
+): Promise<EntryRow[]> {
+  const staged = rows.map((row) => ({ row, raw: row.rawData as unknown as StagedRaw }));
+  const premiseIds = [...new Set(staged.map((s) => s.raw.premiseId))];
+  const [premises, history] = await Promise.all([
+    premiseIds.length
+      ? prisma.premise.findMany({
+          where: { utilityId, id: { in: premiseIds } },
+          select: { id: true, addressLine1: true, city: true },
+        })
+      : Promise.resolve([]),
+    historyForRows(
+      utilityId,
+      staged.map((s) => ({ meterId: s.raw.meterId, registerId: s.raw.registerId || null })),
+      onDate,
+    ),
+  ]);
+  const address = new Map(premises.map((p) => [p.id, `${p.addressLine1}, ${p.city}`]));
+
+  return staged.map(({ row, raw }) => {
+    const registerId = raw.registerId || null;
+    const past = history.get(historyKey(raw.meterId, registerId));
+    return {
+      rowId: row.id,
+      rowIndex: row.rowIndex,
+      sequence: Number(raw.sequence),
+      premiseId: raw.premiseId,
+      address: address.get(raw.premiseId) ?? "",
+      meterId: raw.meterId,
+      meterNumber: raw.meterNumber,
+      registerId,
+      registerNumber: raw.registerNumber || null,
+      accountNumber: raw.accountNumber,
+      lastReading: past?.lastReading ?? null,
+      lastReadDate: past?.lastReadDate ?? null,
+      band: past?.band ?? null,
+      reading: raw.reading || null,
+      skipReason: raw.skipReason || null,
+      notes: raw.notes || null,
+      status: row.status,
+      errorCode: row.errorCode,
+      errorMessage: row.errorMessage,
+    };
+  });
+}
+
+/** The batch's rows, in walking order, as the screen reads them. */
+async function entryRowsOf(utilityId: string, batchId: string, onDate: Date): Promise<EntryRow[]> {
+  const rows = await prisma.importRow.findMany({
+    where: { importBatchId: batchId },
+    orderBy: { rowIndex: "asc" },
+  });
+  return decorate(utilityId, rows, onDate);
 }
 
 /**
@@ -308,11 +342,7 @@ export async function openEntry(
     return batch.id;
   });
 
-  const rows = await prisma.importRow.findMany({
-    where: { importBatchId: batchId },
-    orderBy: { rowIndex: "asc" },
-  });
-  return { batchId, rows: rows.map(toEntryRow) };
+  return { batchId, rows: await entryRowsOf(utilityId, batchId, day) };
 }
 
 /**
@@ -379,7 +409,14 @@ export async function saveEntryRow(
     where: { id: row.id },
     data: { rawData: next as unknown as Prisma.InputJsonValue },
   });
-  return toEntryRow(updated);
+  /*
+   * Decorated against the whole batch and then picked out, not
+   * decorated alone: see `decorate`'s note on why one row is not enough
+   * to resolve a multi-register meter's history.
+   */
+  const all = rows.map((r) => (r.id === updated.id ? updated : r));
+  const decorated = await decorate(utilityId, all, readDate);
+  return decorated.find((r) => r.rowId === updated.id)!;
 }
 
 async function storedResult(
@@ -600,7 +637,8 @@ export async function reopenEntryForCorrections(
   readDateInput: Date,
 ): Promise<{ batchId: string; rows: EntryRow[] }> {
   void actor;
-  const dayText = isoDay(utcDay(readDateInput));
+  const day = utcDay(readDateInput);
+  const dayText = isoDay(day);
 
   const batchId = await prisma.$transaction(async (tx) => {
     // The lock `openEntry` takes, for the same reason: two callers must not
@@ -631,9 +669,5 @@ export async function reopenEntryForCorrections(
     return batch.id;
   });
 
-  const rows = await prisma.importRow.findMany({
-    where: { importBatchId: batchId },
-    orderBy: { rowIndex: "asc" },
-  });
-  return { batchId, rows: rows.map(toEntryRow) };
+  return { batchId, rows: await entryRowsOf(utilityId, batchId, day) };
 }

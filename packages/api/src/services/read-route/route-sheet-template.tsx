@@ -1,5 +1,5 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
-import { SKIP_REASONS } from "@utility-cis/shared";
+import { SKIP_REASONS, SKIP_REASON_LABELS } from "@utility-cis/shared";
 import type { RouteSheet } from "./route-sheet.js";
 
 /**
@@ -27,15 +27,18 @@ function printedDate(iso: string): string {
   return `${d} ${MONTHS[(m ?? 1) - 1]} ${y}`;
 }
 
-/**
- * "LOCKED_GATE" as "Locked gate". `SKIP_REASONS` carries codes only, and
- * the legend is derived from it rather than keeping a second list, so the
- * sheet cannot name a code the entry screen does not accept.
+/*
+ * The legend's words are `SKIP_REASON_LABELS`, beside `SKIP_REASONS` in
+ * the shared validators, so the paper and the entry screen cannot name
+ * the same code two ways.
+ *
+ * They were derived here instead, by lower-casing the code and
+ * capitalising it — which produced the same seven strings the screen
+ * shows, and so was invisible, but it was still a second source for
+ * them, and one that could only ever say the code back. A label unlike
+ * its code ("NO_METER_FOUND" as "No meter at the address") was not
+ * expressible at all.
  */
-function legendLabel(code: string): string {
-  const words = code.toLowerCase().replace(/_/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
 
 const s = StyleSheet.create({
   page: { fontFamily: FONT, fontSize: 9, paddingTop: 28, paddingBottom: 64, paddingHorizontal: 28, color: "#111827" },
@@ -118,7 +121,7 @@ export function RouteSheetTemplate({ sheet }: { sheet: RouteSheet }) {
             <Text style={s.legendItem}>Could not read? Write the code:</Text>
             {SKIP_REASONS.map((code) => (
               <Text key={code} style={s.legendItem}>
-                {code} = {legendLabel(code)}
+                {code} = {SKIP_REASON_LABELS[code]}
               </Text>
             ))}
           </View>
