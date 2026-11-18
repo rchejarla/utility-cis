@@ -74,6 +74,32 @@ import { defineConfig } from "@playwright/test";
  * hydrated: read the tree, or wait for something only the client could
  * have produced.
  */
+/**
+ * Both halves of the stack, derived once.
+ *
+ * **`webServer` used to name 4001 and 4000 outright while `baseURL` was
+ * overridable**, which made a `reuseExistingServer` health check prove
+ * nothing: a run pointed elsewhere by `E2E_BASE_URL` checked one stack and
+ * tested another, and reported success for finding the wrong one. That is
+ * not hypothetical — every early run of the read-routes journey satisfied
+ * this block from the coordinator's stack on 4000/4001 while testing
+ * against its own on 4010/4011. The outcome was harmless and the evidence
+ * was worthless, which is the problem: ruling out "this passed against a
+ * stack nobody meant to exercise" is most of why a browser suite exists.
+ *
+ * Two stacks on non-default ports is now an ordinary state here —
+ * `dev_worktrees.bat` makes worktrees that expect exactly that — so the
+ * API's health URL comes from its own variable rather than assuming it sits
+ * one port above the web app.
+ *
+ * The `command`s below only ever start a stack on whatever ports the
+ * packages' own env says, so **a run pointed elsewhere must already have
+ * its stack up**. It will now fail naming the URL it waited for instead of
+ * passing against a different one.
+ */
+const WEB_URL = process.env.E2E_BASE_URL ?? "http://localhost:4000";
+const API_URL = process.env.E2E_API_URL ?? "http://localhost:4001";
+
 export default defineConfig({
   testDir: "./e2e",
   /*
@@ -93,7 +119,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: [["list"]],
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:4000",
+    baseURL: WEB_URL,
     headless: true,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
@@ -103,13 +129,13 @@ export default defineConfig({
     {
       // Already running in normal use; started here when it is not.
       command: "pnpm --filter @utility-cis/api dev",
-      url: "http://localhost:4001/health",
+      url: `${API_URL}/health`,
       reuseExistingServer: true,
       timeout: 120_000,
     },
     {
       command: "pnpm --filter @utility-cis/web dev",
-      url: "http://localhost:4000/login",
+      url: `${WEB_URL}/login`,
       reuseExistingServer: true,
       timeout: 180_000,
     },
