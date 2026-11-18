@@ -35,6 +35,31 @@ import { defineConfig } from "@playwright/test";
  * also what the runner is tested against, which is the better default
  * anyway.
  *
+ * ## The suite assumes a warm `.next`
+ *
+ * **From a build cache that does not exist yet, three tests fail — and
+ * none of them at sign-in.** Measured on 2026-11-18 by deleting
+ * `packages/web/.next` and running: `interval-import` exceeded the
+ * per-test 120s, the read-routes list test lost a 15s `expect` on a
+ * heading, and the journey got as far as enumerating days (which needs a
+ * token and eight authenticated calls, so the login path held). Each
+ * failure names its own budget. Warm, `interval-import` runs in 1.2-1.6m
+ * against that 2m budget.
+ *
+ * **Run it once to warm the cache, or build first.** The budgets are
+ * deliberately not raised to cover a first-ever route compile: that
+ * condition happens once per checkout and then never again, while a
+ * longer budget makes every genuine hang slower to report on every run.
+ * Nothing automated meets it — `.github/workflows/ci.yml` runs the
+ * typechecks, the three unit suites and the integration suite, and has no
+ * Playwright step at all.
+ *
+ * **For whoever adds an e2e step to CI later:** a runner is cold every
+ * single time, so warm the build in a prior step. Do not raise these
+ * numbers to absorb it. If it ever needs a real fix, the fix is compiling
+ * the routes outside any test's budget — `globalSetup` machinery — and
+ * not inflating the budget that exists to catch a hang.
+ *
  * ## An unhydrated page impersonates a broken one
  *
  * **Playwright's actionability checks do not cover "React has attached
@@ -115,6 +140,13 @@ export default defineConfig({
    * thing under test.
    */
   retries: 0,
+  /*
+   * **These two stay low on purpose.** A long budget hides a hang: the
+   * only thing a generous per-test timeout buys is a slower report of
+   * every genuine one, on every run. They are the numbers a warm stack
+   * needs, and the cold-cache paragraph above is where the cost of that
+   * choice is written down rather than paid for in silence.
+   */
   timeout: 120_000,
   expect: { timeout: 15_000 },
   reporter: [["list"]],
