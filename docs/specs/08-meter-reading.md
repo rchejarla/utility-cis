@@ -37,6 +37,7 @@ Every reading associated with a meter. Stored in a TimescaleDB hypertable, parti
 | billed_at | TIMESTAMPTZ | Nullable: timestamp when billing used this read |
 | reader_id | UUID | Nullable FK → User (for MANUAL reads) |
 | import_batch_id | UUID | Nullable: groups reads from the same import file |
+| route_id | UUID | Nullable FK → ReadRoute: the read route this reading came off. NULL means "we do not know" — every row written before routes shipped, and every read from a vendor who sends no route code. **No backfill.** One column, two modes: ingesting, the route travels in with the read; reading, it is the route the read came off. Written only by the **import handler**, which both doors go through — a file row names a route by `routeCode`, a route-entry row carries a resolved `routeId` in its staged `raw_data`. `createMeterRead` does not accept a route, so a read entered at `/meter-reads/new` says NULL. See [30 — Read Routes](30-read-routes.md) |
 | corrects_read_id | UUID | Nullable self-reference: for CORRECTED reads, points to original |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
@@ -46,6 +47,33 @@ Every reading associated with a meter. Stored in a TimescaleDB hypertable, parti
 **Indexes:** `[utility_id, meter_id, read_date DESC]`, `[utility_id, service_agreement_id, read_date DESC]`, `[utility_id, exception_code]` (partial: WHERE exception_code IS NOT NULL), `[import_batch_id]`, `[utility_id, read_event_id]` (partial: WHERE read_event_id IS NOT NULL) — so fetching sibling reads for one event is one index lookup.
 
 **Unique constraint:** `[meter_id, register_id, read_datetime, read_source]` — prevents duplicate imports of the same reading.
+
+### ReadSkip — the absence of a read
+
+Lives in [30 — Read Routes](30-read-routes.md) and is noted here because
+this is where somebody looks for it: **a stop that produced no number is its
+own row, not an `exception_code` and not a read of zero.**
+
+`consumption` is NOT NULL and a CHECK binds `reading` to `prior_reading`, so
+"no number" is not representable in `meter_read` at all — and the dishonest
+way, a zero, bills zero and then double next period, which the billing-run
+design explicitly refuses. An `exception_code` cannot carry it either: every
+code in that enum describes a *figure* that looks wrong, and here there is
+no figure.
+
+`read_skip` keys on `(meter_id, read_date)` with one of seven access
+reasons — `LOCKED_GATE`, `DOG`, `BURIED`, `UNREADABLE`, `OBSTRUCTED`,
+`APPEARS_VACANT`, `NO_METER_FOUND` — and resolves itself when a read for
+that meter lands in the same cycle window, inside the read's own
+transaction. It is the input Req 96's estimation will read; a skip does not
+make an account billable, and billing's `NO_READ_IN_WINDOW` refusal is
+unchanged by it.
+
+**Not to be confused with the Phase 2.5 register skip below.** That one is
+`{ registerId, skipReason }` with `OUT_OF_SERVICE | INACCESSIBLE |
+DEFECTIVE`, recorded as a `MeterEvent`, and it is a fact about a device. An
+access skip fails every register at once and says nothing about the meter,
+which is why the two vocabularies share a word and deliberately not a list.
 
 ## Planned Supporting Entities
 
@@ -291,9 +319,21 @@ agreement, account, and when that meter was last read at all, because
 "never" is a new service and "last July" is a meter somebody has stopped
 reaching.
 
-`GET /api/v1/meter-reads/progress?billingCycleId=…[&asOf=&page=&limit=]`,
+`GET /api/v1/meter-reads/progress?billingCycleId=…[&asOf=&page=&limit=&readRouteId=]`,
 gated on `meter_reads:VIEW`. Counted as **meter assignments**, not
 meters: one meter serving two agreements is two readings to take.
+
+**`readRouteId` narrows it to one route**, because a reading week is
+worked route by route and a cycle-wide number is not something anybody can
+work from. The route must belong to `billingCycleId`: a route is worked
+inside one cycle's window, so asking for another cycle's route is a mistake
+to refuse rather than answer. Every row also carries `routeCode` and, where
+one is open, the `skipReason` behind it — so the screen can say *why* a
+read is missing instead of only *that* it is. Both are null on the
+cycle-wide answer, which does not know which route a meter is on and must
+not guess. The expected set is the route's stops for a `LOCAL` route and
+the meters its last reads carried for an `EXTERNAL` one; one branch, in one
+place. See [30 — Read Routes](30-read-routes.md).
 
 **An interval meter counts as read once its intervals are in.** It has
 no `meter_read` row until the roll-up runs inside a billing run, so
@@ -426,14 +466,14 @@ Read history tab with a consumption-over-time chart and a table of recent reads.
 |-----|-------------|----------|
 | 75–76 | Meter reading as authoritative system, API integration | Phase 2: import API, AMI/AMR support |
 | 77 | Incremental and full read imports | Phase 2: import endpoint with batch support |
-| 78 | Read cycle scheduling, route grouping | BillingCycle + ServiceAgreement.read_sequence (Phase 1) |
+| 78 | Read cycle scheduling, route grouping | [30 — Read Routes](30-read-routes.md): `read_route` + `read_route_stop` for grouping, the route's cycle and its `read_day_of_month` for scheduling. **This row used to read "BillingCycle + ServiceAgreement.read_sequence (Phase 1)", which was never true** — that column was write-only and nothing ever ordered or grouped by it; it has been removed |
 | 79 | Unique read IDs, prevent duplicate billing | Unique constraint on [meter, register, datetime, source] |
 | 80 | Associate reads to meters | MeterRead.meter_id FK |
 | 81 | Multi-register meter handling | Phase 2: `register_id` on `MeterRead`, per-register rows; Phase 2.5: end-to-end support (read_event_id grouping, multi-register entry form, import format, rate-schedule validation) |
 | 82 | Label estimated vs actual reads | read_type enum: ACTUAL, ESTIMATED, CORRECTED, FINAL. The interval roll-up writes it **per TOU bucket**, so an estimated on-peak hour leaves the off-peak figure measured (spec 26, TOU-GAP-2) |
 | 83 | Retain raw interval data | TimescaleDB hypertable, raw reading field preserved |
 | 84 | Meter events (leaks, tamper, reverse flow) | exception_code=REVERSE_FLOW; MeterEvent entity Phase 2 |
-| 86 | Freeze validated reads after billing | is_frozen field; Phase 3 implementation |
+| 86 | Freeze validated reads after billing | `billed_at` — a billed read cannot be deleted and its exception cannot be resolved, and route entry refuses a number behind one (`READ_BILLED`). *Corrected 2026-11-17: this row said "is_frozen field; Phase 3 implementation", a column dropped on 2026-11-07 because nothing ever wrote it — see the MeterRead table above and Business Rule 4* |
 | 87 | Before/after for corrected reads | corrects_read_id + AuditLog |
 | 88 | Audit trail for reads | AuditLog entity |
 | 89 | Manual entry/correction with audit | Phase 2: manual create + correction endpoint |

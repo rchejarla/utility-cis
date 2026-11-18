@@ -300,7 +300,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 
 ### 4.1 Entity Summary
 
-**47 core domain entities** across 14 categories (a curated summary, not the full schema: the Prisma schema defines 78 models, and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
+**50 core domain entities** across 15 categories (a curated summary, not the full schema: the Prisma schema defines 78 models, and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
 
 | Category | Entities |
 |----------|----------|
@@ -317,6 +317,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 | **Delinquency** | DelinquencyRule, DelinquencyAction |
 | **Service Requests** | ServiceRequest, Sla, ServiceRequestTypeDef (+ `service_request_counter` plumbing table for per-tenant/year `SR-YYYY-NNNNNN` numbering) |
 | **Accounts Receivable** | LedgerEntry, LedgerApplication, LedgerReasonDef |
+| **Read Routes** | ReadRoute, ReadRouteStop, ReadSkip (spec 30; added 2026-11-17). A route is an ordered list of **premises** a reader visits, tied to a billing cycle, with `origin` saying whether we or a vendor owns the itinerary. `ReadSkip` is the absence of a read — a locked gate or a dog — which `meter_read` cannot represent, since `consumption` is NOT NULL and a zero bills zero and then double. `ServiceAgreement.read_sequence` was removed in the same work: it was write-only and pointed at a contract rather than a place |
 | **Rates** | SeasonSet, Season (every tenant is provisioned with a published `Default` set since 2026-11-06 — the 2026-11-02 migration reached only the tenants alive then, and without a set nothing seasonal rates), TouPeriod (tenant-level since 2026-11-04, and keyed from `meter_register.peak_code` since 2026-11-06), TouCalendar, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidaySet, TouHoliday (spec 26; added 2026-11-02, holidays and peak codes revised 2026-11-04), MeterReadInterval, MeterDataException (the coverage sweep's queue, added 2026-11-06: one open row per meter-day-kind, opened and resolved by the sweep, never accepted or estimated by it) |
 
 **Service Request enums (Phase 4 slice B):**
@@ -628,6 +629,7 @@ Every reading from a meter. TimescaleDB hypertable for interval data at scale.
 | read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM |
 | exception_code | VARCHAR(50) | HIGH_USAGE, ZERO_USAGE, METER_DEFECT |
 | reader_id | UUID | |
+| route_id | UUID | Nullable FK → ReadRoute (spec 30, added 2026-11-17): the read route this reading came off. NULL means "we do not know" — every row written before it existed, and every read from a vendor who sends no route code. No backfill. Written only by the import handler, which both a file and route entry go through |
 | created_at | TIMESTAMPTZ | |
 
 **Multi-register reads (Phase 2.5).** Meters with multiple registers (e.g., a demand+usage commercial meter) produce **one `MeterRead` row per active register per read event**, all sharing one `read_event_id`, one `read_datetime`, and one reader, but distinct `register_id`, `uom_id`, and consumption values. Single-register meters keep writing a single row with `read_event_id = NULL` — no backfill. See `docs/specs/08-meter-reading.md` for the full data-model, API, UI, import, and billing rules.

@@ -65,7 +65,8 @@ docs/specs/
 ├── 26-time-of-use-rates.md          — TOU calendars, seasons, interval data (proposed; nothing built)
 ├── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (slices 1-3 shipped in full; slice 4 waits on spec 24 steps 2-3)
 ├── 28-legacy-cis-overlay.md         — Run a utility's existing CIS alongside this one and shadow-rate it (operating mode, mirrored-record rules and the legacy-key mirror shipped; the connector pack waits on a pilot)
-└── 29-rate-modeling.md              — The rate engine as an independent offer to rate-study consultants (proposed; nothing built)
+├── 29-rate-modeling.md              — The rate engine as an independent offer to rate-study consultants (proposed; nothing built)
+└── 30-read-routes.md                — Read routes, the printed sheet, keyboard entry, skips (schema and services shipped; the screens land with the UI work)
 ```
 
 ### Master Design Document
