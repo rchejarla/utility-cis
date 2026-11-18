@@ -66,28 +66,30 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from "@
  * Which gives one run per unused day of the window, and a failure that says
  * what to do when they are gone.
  *
- * ## Two windows, and this reads the right one
+ * ## Two windows, and a route's progress answers the reading one
  *
- * `GET /:id/progress` reports the **last closed** billing period, not the
- * period containing today — deliberately, because the screen exists to
- * predict what a billing run will do and shares `computeBillPeriod` with
- * the run for that reason (spec 08, and design §5.9's "no second
- * implementation"). Meanwhile `recordSkips` and entry judge a window with
- * `windowContaining`, which is the period containing the day. On
- * 2026-11-17 for cycle R01 those are 2026-10-11..2026-11-10 and
- * 2026-11-11..2026-12-10 — different months.
+ * There are two periods in play on any day. The one a billing run will
+ * bill is the last period already **closed** (`computeBillPeriod`), and the
+ * one a reader is collecting for is the period **containing** the day
+ * (`windowContaining`). For cycle R01 on 2026-11-17 those are
+ * 2026-10-11..2026-11-10 and 2026-11-11..2026-12-10 — different months.
+ * `recordSkips` and entry judge the second; `/meter-reads/progress` judges
+ * the first, deliberately, because that screen exists to predict what a run
+ * will do and shares the run's own call (design §5.9's "no second
+ * implementation").
  *
- * So this file asks for the **reading** window explicitly, by the probe
- * `windowContaining` itself makes: one call for the closed period, and when
- * today is past its end, a second with `asOf` 31 days beyond it, which
- * lands on the next period and not the one after. Both the day scan and the
- * expected/outstanding assertions use it. Reading the default answer was
- * the first version's largest bug — the scan ran over October, where none
- * of the fixture's facts hold.
+ * **`/api/v1/read-routes/:id/progress` answers the reading window**, by
+ * defaulting its `window` parameter to `reading` where the cycle-wide
+ * screen defaults to `billing` — a route is a walk somebody is doing, so
+ * its progress is about the window the reads land in. That is the one place
+ * the two endpoints differ.
  *
- * Whether `/progress` should be *askable* for the reading window at all is
- * an open question with the coordinator; it is not this spec's to settle,
- * and `asOf` already answers it here.
+ * This file used to derive the containing window by arithmetic on the
+ * closed one, because the endpoint could not be asked for it. That was its
+ * largest bug: the day scan ran over October, where none of the fixture's
+ * facts hold, and nothing said so. Now it asks, and **asserts** that the
+ * answer contains today — a default that moves should fail by name rather
+ * than silently relocate the whole journey.
  *
  * ## The page contract
  *
@@ -365,31 +367,33 @@ function utcToday(): Date {
 }
 
 /**
- * The window a read taken today belongs to, and the `asOf` that makes
- * `/progress` report it.
+ * The window a read taken today belongs to.
  *
- * This is `windowContaining`'s own probe, run over HTTP because the only
- * window the endpoint volunteers is the **closed** one (see the header).
- * One call for that; and when today is past its end, a second with `asOf`
- * 31 days beyond it, which lands on the next period and not the one after,
- * because a month is never that long. On a bill day itself the closed
- * period is the containing one and the second call is skipped.
+ * One call, because a **route's** progress answers for `window: "reading"`
+ * by default — the period containing the day, which is the week somebody is
+ * out walking. (`/meter-reads/progress` still defaults to `billing`, the
+ * last period a run closed; that is the one place the two endpoints differ
+ * and it is the question, not an oversight.)
+ *
+ * **Asserted, not assumed.** This file previously derived the containing
+ * window by arithmetic because the endpoint would not answer for it, and
+ * got it wrong: the scan ran over a month in which none of the fixture's
+ * facts hold, and said nothing. One assertion is the difference between
+ * that happening again and a named failure.
  */
-async function readingWindow(
-  api: Api,
-  routeId: string,
-): Promise<{ start: Date; end: Date; asOf: string }> {
-  const closed = await api.get<Progress>(`/api/v1/read-routes/${routeId}/progress`);
-  const closedEnd = new Date(closed.windowEnd);
+async function readingWindow(api: Api, routeId: string): Promise<{ start: Date; end: Date }> {
+  const progress = await api.get<Progress>(`/api/v1/read-routes/${routeId}/progress`);
+  const start = new Date(progress.windowStart);
+  const end = new Date(progress.windowEnd);
   const today = utcToday();
-  if (today <= closedEnd) {
-    return { start: new Date(closed.windowStart), end: closedEnd, asOf: isoDay(today) };
-  }
-  const asOf = isoDay(addDays(closedEnd, 31));
-  const containing = await api.get<Progress>(
-    `/api/v1/read-routes/${routeId}/progress?asOf=${asOf}`,
-  );
-  return { start: new Date(containing.windowStart), end: new Date(containing.windowEnd), asOf };
+  expect(
+    start <= today && today <= end,
+    `a route's progress window should contain today — got ${isoDay(start)}..${isoDay(end)} for ` +
+      `${isoDay(today)}. Either the \`window\` default on ` +
+      `/api/v1/read-routes/:id/progress moved off "reading", or the cycle is not monthly. ` +
+      `Readings placed outside this window do not mean what this spec says they mean.`,
+  ).toBe(true);
+  return { start, end };
 }
 
 /**
@@ -417,22 +421,22 @@ async function entryFor(api: Api, routeId: string, readDate: string): Promise<En
 async function firstUnpostedDay(
   api: Api,
   routeId: string,
-  window: { start: Date; end: Date },
+  readWindow: { start: Date; end: Date },
 ): Promise<string> {
   // Never past today: a reading is something somebody took, and a read
   // dated in the future is not a thing this journey should invent.
-  const last = new Date(Math.min(window.end.getTime(), utcToday().getTime()));
+  const last = new Date(Math.min(readWindow.end.getTime(), utcToday().getTime()));
 
   const tried: string[] = [];
-  for (let day = new Date(window.start); day <= last; day = addDays(day, 1)) {
+  for (let day = new Date(readWindow.start); day <= last; day = addDays(day, 1)) {
     const date = isoDay(day);
     const rows = await entryFor(api, routeId, date);
     if (rows.length > 0 && rows.every((r) => r.status === "PENDING")) return date;
     tried.push(date);
   }
   throw new Error(
-    `Every day from ${isoDay(window.start)} to ${isoDay(last)} already has a posted sheet for ` +
-      `route ${ROUTE_CODE} (${tried.join(", ")}). Nothing posts twice, so this journey needs a ` +
+    `Every day from ${isoDay(readWindow.start)} to ${isoDay(last)} already has a posted sheet ` +
+      `for route ${ROUTE_CODE} (${tried.join(", ")}). Nothing posts twice, so this journey needs a ` +
       `day of its own. Either wait for the next window, or clear the typed sheets on the dev ` +
       `database:\n` +
       `  delete from import_row where import_batch_id in (select id from import_batch where ` +
@@ -676,12 +680,14 @@ test("a day's sheet is typed in, two stops are coded, and the one refused stop i
    * is the whole point of recording one: the screen can say *why* instead
    * of just *missing*.
    *
-   * Asked with `asOf`, so it answers for the window this sheet was read
-   * in. The default answer is the last closed period, where none of these
-   * rows exist — see the header.
+   * Asked with `asOf` the **sheet's own day**, not today's. §5.12's
+   * property is that the count matches the sheet printed for that date, and
+   * the service now expands the stops at the day for a reading question
+   * rather than at the window's last day — which for a reading window is
+   * the next bill day, weeks ahead.
    */
   const afterSubmit = await api.get<Progress>(
-    `/api/v1/read-routes/${route.id}/progress?asOf=${readWindow.asOf}`,
+    `/api/v1/read-routes/${route.id}/progress?asOf=${readDate}`,
   );
   for (const meter of BEHIND_THE_GATE) {
     const row = afterSubmit.data.find((r) => r.meterNumber === meter);
