@@ -8,6 +8,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  adminQuery,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -345,6 +346,53 @@ describe("one live service per premise and commodity (real DB)", () => {
         prisma.servicePoint.update({
           where: { id: pastPoint.id },
           data: { endDate: null },
+        }),
+      ),
+    ).rejects.toThrow(REFUSAL);
+  });
+
+  /*
+   * An overlap that predates the trigger — which is how the dev database
+   * held three live electric agreements at one address. Every edit to one
+   * of those rows met the overlap already there and was refused, even the
+   * edit that ends it. An update that keeps or narrows its own dates at the
+   * same premise cannot add an overlap, so it goes through; widening one is
+   * still judged (20261127110000).
+   */
+  it("lets a pre-existing overlap be narrowed, and still refuses widening it", async () => {
+    const { prisma } = prismaImports;
+    const first = await agreement({ number: "SA-OLD-1" });
+    await openPoint({ agreementId: first.id, premiseId: fixA.premiseId });
+    const second = await agreement({ number: "SA-OLD-2" });
+    // Written around the trigger, as data from before it existed was.
+    await adminQuery("ALTER TABLE service_point DISABLE TRIGGER before_one_live_service_per_premise");
+    let overlapping: { id: string };
+    try {
+      overlapping = await openPoint({
+        agreementId: second.id,
+        premiseId: fixA.premiseId,
+        startDate: "2024-03-01",
+        endDate: "2026-12-31",
+      });
+    } finally {
+      await adminQuery("ALTER TABLE service_point ENABLE TRIGGER before_one_live_service_per_premise");
+    }
+
+    // Ending it earlier — the edit that resolves the overlap — is allowed.
+    await expect(
+      seedAsPlatform(async () =>
+        prisma.servicePoint.update({
+          where: { id: overlapping.id },
+          data: { endDate: new Date("2025-06-30") },
+        }),
+      ),
+    ).resolves.toBeTruthy();
+    // Starting it earlier widens it, and is still judged.
+    await expect(
+      seedAsPlatform(async () =>
+        prisma.servicePoint.update({
+          where: { id: overlapping.id },
+          data: { startDate: new Date("2024-01-01") },
         }),
       ),
     ).rejects.toThrow(REFUSAL);

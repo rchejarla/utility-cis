@@ -91,8 +91,15 @@ export async function transferService(
           },
         },
         /*
-         * The assignments in force on the transfer date — the ones the
-         * new agreement inherits if the tenant's flag says to.
+         * The assignments the new agreement inherits if the tenant's flag
+         * says to: those **in force** on the transfer date, and those
+         * **scheduled to start after it**.
+         *
+         * Only the first until 2026-11-27, so a rate change the source
+         * already had booked for next month — a new tariff year, a move
+         * off an introductory rate — was silently dropped: the premise
+         * was the same, the scheduled change was the utility's decision
+         * about it, and the new agreement stayed on the old rate forever.
          *
          * `expirationDate` is inclusive, matching the rate engine's own
          * window filter in `load-base.ts`: an assignment expiring on the
@@ -100,8 +107,13 @@ export async function transferService(
          */
         rateScheduleAssignments: {
           where: {
-            effectiveDate: { lte: transferDate },
-            OR: [{ expirationDate: null }, { expirationDate: { gte: transferDate } }],
+            OR: [
+              {
+                effectiveDate: { lte: transferDate },
+                OR: [{ expirationDate: null }, { expirationDate: { gte: transferDate } }],
+              },
+              { effectiveDate: { gt: transferDate } },
+            ],
           },
         },
       },
@@ -326,11 +338,13 @@ export async function transferService(
      * cascade is shared with move-out and every other closure path, and
      * widening it from here would change all of them.
      *
-     * `effectiveDate` is the transfer date, not the source
-     * assignment's: the new agreement did not exist before today, so an
-     * assignment dated earlier would claim a period it cannot have
-     * served. `expirationDate` is carried as-is — a tariff that ends in
-     * June still ends in June.
+     * `effectiveDate` is the later of the transfer date and the source
+     * assignment's own: an assignment in force is re-dated to the transfer
+     * date, because the new agreement did not exist before it and an
+     * earlier date would claim a period it cannot have served; one
+     * scheduled for later keeps its own start, which is the point of
+     * carrying it. `expirationDate` is carried as-is — a tariff that ends
+     * in June still ends in June.
      */
     const config = await tx.utilityConfig.findUnique({
       where: { utilityId },
@@ -346,7 +360,7 @@ export async function transferService(
           serviceAgreementId: newAgreementBase.id,
           rateScheduleId: a.rateScheduleId,
           roleCode: a.roleCode,
-          effectiveDate: transferDate,
+          effectiveDate: a.effectiveDate > transferDate ? a.effectiveDate : transferDate,
           expirationDate: a.expirationDate,
         })),
       });

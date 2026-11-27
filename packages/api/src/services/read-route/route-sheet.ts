@@ -120,7 +120,9 @@ async function lastReadings(
     WHERE utility_id = ${utilityId}::uuid
       AND meter_id = ANY(${meterIds}::uuid[])
       AND reading IS NOT NULL
-      AND read_date < ${onDate}::date
+      -- As 'YYYY-MM-DD' text, not a JS Date: a Date binds as timestamptz,
+      -- and its ::date depends on the session's time zone.
+      AND read_date < ${isoDay(onDate)}::date
     ORDER BY meter_id, register_id, read_date DESC, read_datetime DESC`;
   for (const r of rows) {
     out.set(`${r.meter_id}|${r.register_id ?? ""}`, { reading: String(r.reading), readDate: r.read_date });

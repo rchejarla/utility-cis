@@ -147,7 +147,10 @@ export async function historyForRows(
       WHERE mr.utility_id = ${utilityId}::uuid
         AND mr.meter_id = ANY(${meterIds}::uuid[])
         AND mr.reading IS NOT NULL
-        AND mr.read_date < ${onDate}::date
+        -- As 'YYYY-MM-DD' text: a JS Date binds as a timestamptz, whose
+        -- ::date is taken in the session's time zone, so the day judged
+        -- depended on the connection rather than on the sheet.
+        AND mr.read_date < ${isoDay(onDate)}::date
     ) ranked
     WHERE rn <= ${TRAILING_READS}
     ORDER BY meter_id, register_id, read_date DESC`;

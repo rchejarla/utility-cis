@@ -87,3 +87,30 @@ describe("a unique-constraint violation", () => {
     expect(body.error.message).toMatch(/already exists/);
   });
 });
+
+/*
+ * A date-ordering CHECK writes no sentence of its own, only its name, so
+ * a transfer backdated before the service began reached the CSR as a 400
+ * "Database error" naming nothing. The message here is the one built from
+ * the constraint name, in the shape the adapter actually reports it.
+ */
+describe("a date-ordering check violation", () => {
+  it.each([
+    ["chk_sp_end_ge_start", /service point cannot end before it starts/],
+    ["chk_spm_removed_ge_added", /meter cannot be removed .* before the date it was added/],
+    ["chk_sa_end_ge_start", /agreement cannot end before it starts/],
+  ])("names %s in words", (constraint, expected) => {
+    const { reply, sent } = replyDouble();
+    const err = new Prisma.PrismaClientKnownRequestError(
+      `Database error. Code: \`23514\`. Message: \`new row for relation violates check constraint "${constraint}"\``,
+      { code: "P2010", clientVersion: "7.0.0" },
+    );
+
+    errorHandler(err, request, reply);
+
+    expect(reply.status).toHaveBeenCalledWith(400);
+    const body = sent[0] as ErrorBody;
+    expect(body.error.code).toBe("DATE_ORDER_VIOLATION");
+    expect(body.error.message).toMatch(expected);
+  });
+});

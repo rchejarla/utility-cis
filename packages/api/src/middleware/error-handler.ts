@@ -20,6 +20,24 @@ const DATABASE_INVARIANTS = [
 ] as const;
 
 /**
+ * Date-ordering CHECK constraints, and the sentence each one means.
+ *
+ * Unlike a trigger, a CHECK writes no sentence of its own — Postgres says
+ * only `violates check constraint "chk_sp_end_ge_start"` — so the
+ * sentence lives here. These are the ones a person reaches from a screen,
+ * by backdating a transfer or a close to before a service began; without
+ * this they arrived as a 400 "Database error" naming nothing. Add a row
+ * when a migration adds a CHECK a form can trip.
+ */
+const DATE_ORDER_CHECKS: Record<string, string> = {
+  chk_sa_end_ge_start: "A service agreement cannot end before it starts.",
+  chk_sp_end_ge_start:
+    "A service point cannot end before it starts — the date given is earlier than the service began at this premise.",
+  chk_spm_removed_ge_added:
+    "A meter cannot be removed from a service before the date it was added to it.",
+};
+
+/**
  * The trigger's own sentence, without the marker or Postgres's framing.
  *
  * A raised exception arrives wrapped in whatever the client added around
@@ -86,6 +104,15 @@ export function errorHandler(
    * the state of the records, which is what the web client's forms
    * already surface as the server's own message.
    */
+  const check = Object.keys(DATE_ORDER_CHECKS).find((c) => error.message.includes(c));
+  if (check) {
+    request.log.warn({ check }, "date-order check refused a write");
+    reply.status(400).send({
+      error: { code: "DATE_ORDER_VIOLATION", message: DATE_ORDER_CHECKS[check] },
+    });
+    return;
+  }
+
   const marker = DATABASE_INVARIANTS.find((m) => error.message.includes(m));
   if (marker) {
     request.log.warn({ marker }, "database invariant refused a write");

@@ -534,6 +534,25 @@ describe("GET /api/v1/read-routes/:id/sheet", () => {
   });
 
   /*
+   * A route code is free text. Put into the header raw, a `"` ended the
+   * quoted filename early and a character outside Latin-1 made Node refuse
+   * the header — a 500 for printing a sheet.
+   */
+  it("still streams when the route code has a quote and a non-Latin character", async () => {
+    const { route } = await routeWithStop([1000, 1030]);
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.readRoute.update({ where: { id: route.id }, data: { code: 'N "Ост" 7' } }),
+    );
+
+    const res = await get(`/api/v1/read-routes/${route.id}/sheet?onDate=${DAY}`);
+
+    expect(res.statusCode).toBe(200);
+    const disposition = String(res.headers["content-disposition"]);
+    expect(disposition).toMatch(/filename="route-N__+7-[\d-]+\.pdf"/);
+    expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent('route-N "Ост" 7')}`);
+  });
+
+  /*
    * `buildRouteSheet` returns the stops it could not print and its own
    * doc comment says "whoever serves the sheet is expected to surface
    * it" — a stop that vanishes without a trace is the silent failure
@@ -702,6 +721,31 @@ describe("entry over HTTP", () => {
   it("refuses an open with no read date", async () => {
     const { route } = await routeWithStop();
     expect((await post(`/api/v1/read-routes/${route.id}/entry`, {})).statusCode).toBe(400);
+  });
+
+  /*
+   * The path names a route and a batch, and they have to agree. Both
+   * routes used to parse `:id` and ignore it, so another route's id in
+   * the path saved into — and submitted — this route's batch.
+   */
+  it("refuses a batch named under another route's path", async () => {
+    const { route, premise } = await routeWithStop([1000, 1030]);
+    const other = await makeRoute();
+    const opened = body(await post(`/api/v1/read-routes/${route.id}/entry`, { readDate: DAY }));
+
+    const saved = await patch(`/api/v1/read-routes/${other.id}/entry/${opened.batchId}/rows`, {
+      meterId: premise.meterId,
+      registerId: null,
+      reading: 1061,
+    });
+    const submitted = await post(`/api/v1/read-routes/${other.id}/entry/${opened.batchId}/submit`, {});
+
+    expect(saved.statusCode).toBe(404);
+    expect(body(saved).error.code).toBe("ENTRY_NOT_FOUND");
+    expect(submitted.statusCode).toBe(404);
+    // Nothing was staged through the wrong path.
+    const again = body(await post(`/api/v1/read-routes/${route.id}/entry`, { readDate: DAY }));
+    expect(again.rows[0].reading).toBeNull();
   });
 
   it("saves a reading as a staged row, writing no meter read", async () => {

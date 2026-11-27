@@ -348,6 +348,60 @@ describe("transferService (real DB)", () => {
     expect(carried[0].effectiveDate.toISOString().slice(0, 10)).toBe(TRANSFER_DATE);
   });
 
+  /*
+   * A rate change the source already had booked: the in-force tariff ends
+   * in August and the next starts in September. Only the first was carried
+   * until 2026-11-27, so the new agreement lost the booked change and
+   * stayed on the old tariff. The scheduled one keeps its own start date.
+   */
+  it("carries a rate change the source had scheduled for after the transfer", async () => {
+    const { prisma } = prismaImports;
+    const sa = await makeAgreement([{ premiseId: fixA.premiseId, meterId: fixA.meterId }]);
+    await seedAsPlatform(async () => {
+      await prisma.sAScheduleAssignment.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: sa.id,
+          rateScheduleId,
+          roleCode: "primary",
+          effectiveDate: new Date("2024-01-01"),
+          expirationDate: new Date("2024-08-31"),
+        },
+      });
+      await prisma.sAScheduleAssignment.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: sa.id,
+          rateScheduleId,
+          roleCode: "primary",
+          effectiveDate: new Date("2024-09-01"),
+          expirationDate: null,
+        },
+      });
+    });
+
+    const result = await transferService(fixA.utilityId, ACTOR, "Tester", sa.id, {
+      targetAccountId,
+      transferDate: TRANSFER_DATE,
+    });
+
+    const carried = await seedAsPlatform(async () =>
+      prisma.sAScheduleAssignment.findMany({
+        where: { serviceAgreementId: result.target.id },
+        orderBy: { effectiveDate: "asc" },
+      }),
+    );
+    expect(
+      carried.map((a) => [
+        a.effectiveDate.toISOString().slice(0, 10),
+        a.expirationDate?.toISOString().slice(0, 10) ?? null,
+      ]),
+    ).toEqual([
+      [TRANSFER_DATE, "2024-08-31"],
+      ["2024-09-01", null],
+    ]);
+  });
+
   it("carries nothing when the tenant has turned the carry off", async () => {
     const { prisma } = prismaImports;
     const sa = await makeAgreement([{ premiseId: fixA.premiseId, meterId: fixA.meterId }]);

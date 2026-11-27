@@ -27,6 +27,7 @@ import {
   saveEntryRow,
   submitEntry,
   reopenEntryForCorrections,
+  assertEntryOnRoute,
 } from "../services/read-route-entry.service.js";
 import { getReadingProgress } from "../services/reading-progress.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
@@ -194,11 +195,21 @@ export async function readRouteRoutes(app: FastifyInstance) {
       const { onDate, format } = routeSheetQuerySchema.parse(request.query ?? {});
       const sheet = await buildRouteSheet(utilityId, id, utcDay(onDate));
       if (format === "json") return reply.send(sheet);
+      /*
+       * The route code is free text — a vendor's code is whatever their
+       * system calls it — so it is not put in the header raw. A `"` ended
+       * the quoted filename early and a character outside Latin-1 made
+       * Node refuse the header, a 500 for printing a sheet. The quoted
+       * name is an ASCII-safe fallback; `filename*` (RFC 5987) carries the
+       * exact one for every browser that reads it.
+       */
+      const name = `route-${sheet.routeCode}-${sheet.forDate}.pdf`;
+      const ascii = name.replace(/[^A-Za-z0-9._-]/g, "_");
       return reply
         .header("Content-Type", "application/pdf")
         .header(
           "Content-Disposition",
-          `inline; filename="route-${sheet.routeCode}-${sheet.forDate}.pdf"`,
+          `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
         )
         .send(await renderRouteSheetPdf(sheet));
     },
@@ -233,8 +244,9 @@ export async function readRouteRoutes(app: FastifyInstance) {
     { config: { module: "meter_reads", permission: "CREATE" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
-      const { batchId } = batchParamSchema.parse(request.params);
+      const { id, batchId } = batchParamSchema.parse(request.params);
       const input = entryRowSaveSchema.parse(request.body);
+      await assertEntryOnRoute(utilityId, id, batchId);
       const row = await saveEntryRow(utilityId, { id: actorId, name: actorName }, batchId, input);
       return reply.send(row);
     },
@@ -245,7 +257,8 @@ export async function readRouteRoutes(app: FastifyInstance) {
     { config: { module: "meter_reads", permission: "CREATE" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
-      const { batchId } = batchParamSchema.parse(request.params);
+      const { id, batchId } = batchParamSchema.parse(request.params);
+      await assertEntryOnRoute(utilityId, id, batchId);
       return reply.send(await submitEntry(utilityId, { id: actorId, name: actorName }, batchId));
     },
   );

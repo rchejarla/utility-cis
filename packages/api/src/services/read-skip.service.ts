@@ -55,7 +55,7 @@ interface CycleWindow {
  * window", `recordSkips` refuses by name. Only that one code is caught;
  * anything else is a real fault and propagates.
  */
-async function windowsByMeter(
+export async function windowsByMeter(
   tx: Tx,
   utilityId: string,
   meterIds: string[],

@@ -94,7 +94,7 @@ async function makeRoute(origin: "LOCAL" | "EXTERNAL" = "LOCAL"): Promise<string
 /** A premise with an agreement, a service point and one meter (optionally with registers), on the route. */
 async function makeStop(
   routeId: string | null,
-  opts: { registers?: number[] } = {},
+  opts: { registers?: number[]; accountId?: string } = {},
 ): Promise<{ premiseId: string; meterId: string; meterNumber: string; registerIds: string[]; agreementId: string }> {
   const n = ++seq;
   const made = await seed(async (prisma) => {
@@ -114,7 +114,7 @@ async function makeStop(
       data: {
         utilityId: TENANT_A,
         agreementNumber: `SA-EN-${n}`,
-        accountId: fixA.accountId,
+        accountId: opts.accountId ?? fixA.accountId,
         commodityId: fixA.commodityId,
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
@@ -340,6 +340,49 @@ describe("saving a row", () => {
       statusCode: 400,
       code: "READ_BILLED",
     });
+  });
+
+  /*
+   * A stop whose account bills on another cycle (§5.1 prints it anyway).
+   * The route's cycle bills on the 10th, so 5 June is in its 11 May –
+   * 10 June window; this meter's cycle bills on the 2nd, so its window is
+   * 3 June – 2 July. The billed read on 20 May is in the route's window
+   * and not the meter's. Judged on the route's cycle, as it was until
+   * 2026-11-27, the reading was refused READ_BILLED for a bill in a
+   * period that is not this meter's.
+   */
+  it("judges the billed period on the meter's own cycle, not the route's", async () => {
+    const routeId = await makeRoute();
+    const accountId = await seed(async (p) => {
+      const cycle = await p.billingCycle.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Second of the month",
+          cycleCode: "C-2ND",
+          readDayOfMonth: 1,
+          billDayOfMonth: 2,
+          frequency: "MONTHLY",
+        },
+      });
+      const account = await p.account.create({
+        data: {
+          utilityId: TENANT_A,
+          accountNumber: "ACCT-2ND",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: cycle.id,
+          depositAmount: 0,
+        },
+      });
+      return account.id;
+    });
+    const s = await makeStop(routeId, { accountId });
+    await priorRead(s, true); // 20 May, billed
+    const { batchId } = await open(routeId);
+
+    await expect(
+      save(batchId, { meterId: s.meterId, registerId: null, reading: 150 }),
+    ).resolves.toMatchObject({ reading: "150" });
   });
 
   it("accepts the same reading when the prior read is unbilled (the control for the one above)", async () => {
@@ -891,7 +934,7 @@ describe("reopening for corrections", () => {
     await expect(reopen(never)).rejects.toMatchObject({ statusCode: 404, code: "ENTRY_NOT_FOUND" });
   });
 
-  it("leaves the skipped rows alone: a recorded skip and an untyped row both survive it", async () => {
+  it("keeps a recorded skip, and gives back an untyped row so it can be entered", async () => {
     const routeId = await makeRoute();
     const skipped = await makeStop(routeId);
     const refused = await makeStop(routeId);
@@ -910,12 +953,50 @@ describe("reopening for corrections", () => {
       skipReason: "DOG",
       errorCode: null,
     });
+    // Since 2026-11-27: nothing was posted for an untyped row, so a reopen
+    // returns it — a number lost at Post (typed but never Entered, or held
+    // and never confirmed) can still be added.
     expect(rowFor(reopened.rows, untyped.meterId)).toMatchObject({
-      status: "SKIPPED",
-      errorCode: "NOT_ENTERED",
+      status: "PENDING",
+      errorCode: null,
     });
     expect(rowFor(reopened.rows, refused.meterId).status).toBe("PENDING");
     expect(await skipCount(skipped.meterId)).toBe(1);
     expect(await skipCount()).toBe(1);
+
+    // And the number goes in.
+    await save(batchId, { meterId: untyped.meterId, registerId: null, reading: 150 });
+    await submit(batchId);
+    expect(await seed((p) => p.meterRead.count({ where: { meterId: untyped.meterId } }))).toBe(1);
+  });
+
+  /*
+   * A sheet that posted cleanly but left rows untyped can be reopened for
+   * them — there is something to correct — and a fully clean one still
+   * cannot.
+   */
+  it("reopens a clean sheet that left rows untyped, for those rows alone", async () => {
+    const routeId = await makeRoute();
+    const read = await makeStop(routeId);
+    const untyped = await makeStop(routeId);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: read.meterId, registerId: null, reading: 150 });
+    expect(await submit(batchId)).toMatchObject({ status: "COMPLETE", notEntered: 1 });
+
+    const reopened = await reopen(routeId);
+
+    expect(rowFor(reopened.rows, read.meterId).status).toBe("IMPORTED");
+    expect(rowFor(reopened.rows, untyped.meterId).status).toBe("PENDING");
+  });
+
+  it("refuses a future read date", async () => {
+    const routeId = await makeRoute();
+    await makeStop(routeId);
+    const later = new Date(Date.now() + 3 * 86_400_000);
+
+    await expect(open(routeId, later)).rejects.toMatchObject({
+      statusCode: 400,
+      code: "READ_DATE_IN_FUTURE",
+    });
   });
 });
