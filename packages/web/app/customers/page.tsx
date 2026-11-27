@@ -122,7 +122,7 @@ function CustomerStats() {
   }, []);
 
   return (
-    <div style={{ display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" }}>
+    <div style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
       <StatCard label="Total Customers" value={stats.total} icon="👥" />
       <StatCard label="Individuals" value={stats.individuals} icon="👤" />
       <StatCard label="Organizations" value={stats.organizations} icon="🏢" />

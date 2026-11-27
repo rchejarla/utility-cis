@@ -30,10 +30,12 @@ export function StatCard({ label, value, icon, accent = "primary" }: StatCardPro
         border: "1px solid var(--border)",
         borderLeft: `3px solid ${ACCENT_VAR[accent]}`,
         borderRadius: "var(--radius)",
-        padding: "16px 20px",
+        // Compact since 2026-11-27: a row of four of these sat above
+        // every list that used them, at ~70px each before the table.
+        padding: "8px 14px",
         display: "flex",
         alignItems: "center",
-        gap: "14px",
+        gap: "12px",
         flex: "1 1 160px",
         minWidth: 0,
       }}
@@ -41,14 +43,14 @@ export function StatCard({ label, value, icon, accent = "primary" }: StatCardPro
       {icon && (
         <div
           style={{
-            width: "36px",
-            height: "36px",
+            width: "30px",
+            height: "30px",
             borderRadius: "8px",
             background: "var(--bg-elevated)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: "18px",
+            fontSize: "15px",
             flexShrink: 0,
           }}
         >
@@ -58,7 +60,7 @@ export function StatCard({ label, value, icon, accent = "primary" }: StatCardPro
       <div style={{ minWidth: 0 }}>
         <div
           style={{
-            fontSize: "22px",
+            fontSize: "18px",
             fontWeight: "700",
             color: "var(--text-primary)",
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -72,7 +74,7 @@ export function StatCard({ label, value, icon, accent = "primary" }: StatCardPro
           style={{
             fontSize: "12px",
             color: "var(--text-muted)",
-            marginTop: "2px",
+            marginTop: "0",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",

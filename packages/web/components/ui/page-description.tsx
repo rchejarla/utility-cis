@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 interface PageDescriptionProps {
   /**
@@ -33,11 +34,18 @@ export function PageDescription({ storageKey, children }: PageDescriptionProps) 
   // mismatch; the mount effect then flips to hidden if the user has
   // previously dismissed this page's intro.
   const [visible, setVisible] = useState(true);
+  /** The page header's help slot, found after mount (the header renders first). */
+  const [slot, setSlot] = useState<Element | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (localStorage.getItem(`cis_intro_hidden:${storageKey}`) === "1") {
-      setVisible(false);
+    setSlot(document.querySelector("[data-page-help-slot]"));
+    try {
+      if (localStorage.getItem(`cis_intro_hidden:${storageKey}`) === "1") {
+        setVisible(false);
+      }
+    } catch {
+      // Storage blocked: the description simply stays open.
     }
   }, [storageKey]);
 
@@ -56,37 +64,41 @@ export function PageDescription({ storageKey, children }: PageDescriptionProps) 
   }
 
   if (!visible) {
-    // Collapsed affordance — leaves a small "Show help" link in the
-    // same slot so dismissal is reversible. Matches the muted-link
-    // styling used elsewhere.
-    return (
-      <div style={{ margin: "0 0 16px" }}>
-        <button
-          type="button"
-          onClick={show}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "4px 8px",
-            fontSize: 11,
-            background: "transparent",
-            border: "1px dashed var(--border)",
-            borderRadius: "var(--radius)",
-            color: "var(--text-muted)",
-            cursor: "pointer",
-            fontFamily: "inherit",
-            letterSpacing: "0.04em",
-            textTransform: "uppercase",
-          }}
-          title="Show page help"
-          aria-label="Show page help"
-        >
-          <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>ⓘ</span>
-          Show page help
-        </button>
-      </div>
+    /*
+     * Collapsed: a small "Help" link so dismissal is reversible. It goes
+     * into the page header's slot beside the title when there is one, so
+     * a dismissed description costs no height at all — it used to keep a
+     * full row of its own for a single dashed button. Rendered in place
+     * only on a page without a PageHeader.
+     */
+    const button = (
+      <button
+        type="button"
+        onClick={show}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "1px 6px",
+          fontSize: 11,
+          background: "transparent",
+          border: "1px dashed var(--border)",
+          borderRadius: "var(--radius)",
+          color: "var(--text-muted)",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
+        }}
+        title="Show page help"
+        aria-label="Show page help"
+      >
+        <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>ⓘ</span>
+        Help
+      </button>
     );
+    if (slot) return createPortal(button, slot);
+    return <div style={{ margin: "0 0 10px" }}>{button}</div>;
   }
 
   return (
@@ -98,8 +110,8 @@ export function PageDescription({ storageKey, children }: PageDescriptionProps) 
         alignItems: "flex-start",
         gap: 12,
         width: "100%",
-        padding: "10px 14px",
-        margin: "0 0 16px",
+        padding: "6px 12px",
+        margin: "0 0 12px",
         borderLeft: "3px solid var(--accent-primary)",
         background: "transparent",
         fontSize: 13,

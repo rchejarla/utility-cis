@@ -24,12 +24,12 @@ export function SettingsSection({
   children,
 }: SettingsSectionProps) {
   return (
-    <section style={{ marginBottom: "40px" }}>
+    <section style={{ marginBottom: "28px" }}>
       <h2
         style={{
-          fontSize: "20px",
+          fontSize: "18px",
           fontWeight: 600,
-          margin: "0 0 6px",
+          margin: "0 0 4px",
           color: danger ? "var(--danger)" : "var(--text-primary)",
           letterSpacing: "-0.01em",
         }}
@@ -41,8 +41,10 @@ export function SettingsSection({
           style={{
             fontSize: "13px",
             color: "var(--text-secondary)",
-            margin: "0 0 20px",
-            maxWidth: "60ch",
+            // Wider measure and a smaller gap since 2026-11-27: at 60ch a
+            // one-sentence description wrapped to two or three lines.
+            margin: "0 0 14px",
+            maxWidth: "110ch",
             lineHeight: 1.5,
           }}
         >
@@ -95,7 +97,7 @@ export function SettingRow({ label, description, control }: SettingRowProps) {
         gridTemplateColumns: "1fr auto",
         gap: "20px",
         alignItems: "center",
-        padding: "18px 0",
+        padding: "12px 0",
         borderBottom: "1px solid var(--border-subtle)",
       }}
     >
