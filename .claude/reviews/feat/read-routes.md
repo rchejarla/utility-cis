@@ -30,16 +30,16 @@ Two bodies of work, merged from four parallel worktree streams:
    `restore_date_order_checks`, `transfer_carries_rate_schedule`, the
    error-handler mapping for raising triggers, and the transfer/move-out fixes.
 
-**An important gap for whoever picks this up:** `feat/read-routes-ui` at
-**b0dd318** is *not* merged here. It carries the fix for a resubmit that could
-post a **second `meter_read` per meter** (`submitEntry` partitioned the whole
-batch instead of its `PENDING` rows), and the reading band's change from
-`min × 0.5 / max × 2` to a median-scaled band. The branch tips each hold what
-the other lacks. Merge it before reviewing the entry path.
+`feat/read-routes-ui` at **b0dd318** was merged in on 2026-11-26 — a clean
+merge, no overlapping files. It carries the fix for a resubmit that could post a
+**second `meter_read` per meter** (`submitEntry` partitioned the whole batch
+instead of its `PENDING` rows), and the reading band's change from
+`min × 0.5 / max × 2` to a median-scaled band. Both are therefore in scope for
+the review below, and neither has been run.
 
-Branch tips, all on origin as of 2026-11-26: `feat/read-routes` 703b9da,
-`feat/read-routes-ui` b0dd318, `test/read-routes-e2e` 701b820,
-`chore/drop-read-seq` fe25434.
+The other two streams, `test/read-routes-e2e` 701b820 and `chore/drop-read-seq`
+fe25434, hold no commit this branch lacks; they are on origin for their names
+only. All four branches are on origin.
 
 ## L1 code review (all tiers)
 - [ ] Dispatched l1-reviewer
@@ -156,9 +156,9 @@ Branch tips, all on origin as of 2026-11-26: `feat/read-routes` 703b9da,
 - [x] Checklist committed
 - [ ] Ready to ship
 
-**Not ready to ship.** Required before that, in order: merge `b0dd318`, boot the
-stack and run the five test files that have never been re-run, then the three
-Tier 3 reviewer passes. See `docs/specs/05-service-agreement.md` for the one
+**Not ready to ship.** Required before that, in order: boot the stack and run
+the five test files that have never been re-run, then the three Tier 3 reviewer
+passes. See `docs/specs/05-service-agreement.md` for the one
 open product question (`createServiceAgreement` and move-in write no
 rate-schedule assignment, and the billing executor files that condition
 quietly).
