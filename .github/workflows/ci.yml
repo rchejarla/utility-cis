@@ -25,10 +25,13 @@ jobs:
         with:
           version: 9.15.0
 
+      # The repo's own Node, from .nvmrc — not a number written here. This
+      # said `node-version: 20` while .nvmrc and package.json's engines both
+      # said >=22.12, so CI tested a runtime the project does not declare.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
 
       # Font Awesome Pro ships from a private registry that requires an
@@ -131,7 +134,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Configure Font Awesome Pro registry
