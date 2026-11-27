@@ -132,8 +132,10 @@ only. All four branches are on origin.
   `read_route_id` written, never read (open, non-blocking).
 - Grep 5 — Unread config keys: none; `transfer_carries_rate_schedule` read
   where it takes effect.
-- Docs, **open**: the architecture doc has no read-route endpoint rows, no
-  field tables for ReadRoute/ReadRouteStop/ReadSkip, and says 78 models (83).
+- Docs: the architecture doc had no read-route endpoint rows, no field tables
+  for ReadRoute/ReadRouteStop/ReadSkip, and said 78 models (83). **Fixed
+  2026-11-27**: §4.16a–c, 14 endpoint rows, the progress row's new params, the
+  trigger's lock, and both stale counts (83 models; 82 tenant tables, not 61).
 - Intentional orphans: `effective_range`.
 
 ## Adversarial review (Tier 2+)
@@ -224,8 +226,8 @@ the four affected integration suites and the three e2e specs all pass after
 the fixes above; all three reviews ran and every Important/blocking finding is
 fixed. Before shipping: decide the `meter_read` unique-index question, decide
 which open non-blocking items to take now (the two data-loss ones — adversarial
-#2 and the save/submit race — were fixed 2026-11-27), and bring the
-architecture doc up to date. See `docs/specs/05-service-agreement.md` for the one
+#2 and the save/submit race — were fixed 2026-11-27). The architecture doc
+was brought up to date the same day. See `docs/specs/05-service-agreement.md` for the one
 open product question (`createServiceAgreement` and move-in write no
 rate-schedule assignment, and the billing executor files that condition
 quietly).

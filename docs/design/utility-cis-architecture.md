@@ -300,7 +300,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 
 ### 4.1 Entity Summary
 
-**50 core domain entities** across 15 categories (a curated summary, not the full schema: the Prisma schema defines 78 models, and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
+**50 core domain entities** across 15 categories (a curated summary, not the full schema: the Prisma schema defines 83 models as of 2026-11-27 — counted with `grep -c '^model ' schema.prisma`, which is how to re-check it — and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
 
 | Category | Entities |
 |----------|----------|
@@ -634,6 +634,59 @@ Every reading from a meter. TimescaleDB hypertable for interval data at scale.
 
 **Multi-register reads (Phase 2.5).** Meters with multiple registers (e.g., a demand+usage commercial meter) produce **one `MeterRead` row per active register per read event**, all sharing one `read_event_id`, one `read_datetime`, and one reader, but distinct `register_id`, `uom_id`, and consumption values. Single-register meters keep writing a single row with `read_event_id = NULL` — no backfill. See `docs/specs/08-meter-reading.md` for the full data-model, API, UI, import, and billing rules.
 
+**No unique key on (meter, register, read date).** Nothing in the database stops a second read for the same meter on the same day; the read-route entry service guards against it in code (row-status partitioning, the claim, the reopen and save locks — spec 30). A unique index is the open question recorded in `.claude/reviews/feat/read-routes.md`; on a hypertable it would have to include the partition column.
+
+### 4.16a ReadRoute
+
+An ordered walk of **premises** a reader visits, tied to one billing cycle (spec 30, added 2026-11-17). Itinerary only: the reads that come back are `MeterRead` rows carrying `route_id`, and a sheet is never stored — it is rebuilt from the stops on demand.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope |
+| code | VARCHAR(50) | Unique per utility (`read_route_utility_id_code_key`) |
+| name | VARCHAR(255) | |
+| billing_cycle_id | UUID | FK → BillingCycle, composite `(utility_id, billing_cycle_id)`, `ON DELETE RESTRICT`. The cycle decides the reading window a sheet and its progress are judged against |
+| origin | VARCHAR(20) | `LOCAL \| EXTERNAL`, by CHECK. LOCAL: the itinerary is maintained here — stops, the printed sheet, keyed entry. EXTERNAL: a vendor owns it; its reads arrive by import naming the route code, and stops, sheet and entry are refused (`ROUTE_IS_EXTERNAL`). Not editable by PATCH — reassigning who owns the walk is its own operation |
+| active | BOOLEAN | No DELETE for a route, because its reads point at it; retiring is `active = false` |
+| created_at / updated_at | TIMESTAMPTZ | |
+
+**Entry batches are `ImportBatch` rows**, not a table of their own: one file-less batch per (route, read date) with `mapping.kind = 'read-route-entry'`, one `ImportRow` per readable register in walking order, posted through the same `processBatch` path a file takes. The row statuses carry the entry lifecycle: `PENDING` (staged), `IMPORTED`, `SKIPPED` (with `errorCode NOT_ENTERED` for an untouched row), `ERROR` (refused; reopen returns these to `PENDING`). Two per-row codes are entry-only: `AWAITING_OTHER_REGISTER` (transient, a coded register parked while its meter's reading posts) and `OTHER_REGISTER_REFUSED` (that reading was refused, so the coded row is correctable rather than skipped). The zombie sweep reclaims a stuck entry batch to `PENDING` but never re-enqueues it.
+
+### 4.16b ReadRouteStop
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope |
+| read_route_id | UUID | FK → ReadRoute, composite, `ON DELETE CASCADE` |
+| premise_id | UUID | FK → Premise, composite, `ON DELETE RESTRICT`. **Unique per tenant** (`read_route_stop_one_route_per_premise_key`): a premise is a stop on at most one route, because a reader visits an address once |
+| sequence | INTEGER | Walking order; unique per route, assigned in steps of 100 so a stop can be inserted between two others. The unique is **`DEFERRABLE INITIALLY IMMEDIATE`** so a resequence can shift a block in one statement — Prisma cannot express that, another reason never to run `migrate dev` |
+| created_at | TIMESTAMPTZ | |
+
+A sheet prints **one line per active register** of each readable meter at each stop (an AMI meter prints none; a stop with nothing to read is listed separately rather than silently dropped). A stop whose account bills on a different cycle still prints — the route page lists it as a data-quality case.
+
+### 4.16c ReadSkip
+
+The absence of a read — a locked gate, a dog — which `MeterRead` cannot represent, since `consumption` is NOT NULL and a zero bills zero now and double next month.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope |
+| meter_id | UUID | FK → Meter, composite, `ON DELETE CASCADE` |
+| read_route_id | UUID | Nullable FK → ReadRoute, composite, `ON DELETE SET NULL (read_route_id)` — the column-list form, so the delete nulls the route and not the tenant |
+| read_date | DATE | |
+| skip_reason | VARCHAR(50) | CHECK: `LOCKED_GATE`, `DOG`, `BURIED`, `UNREADABLE`, `OBSTRUCTED`, `APPEARS_VACANT`, `NO_METER_FOUND` |
+| notes | TEXT | |
+| reader_id | UUID | |
+| resolved_at | TIMESTAMPTZ | Set when a read later arrives for the window; a resolved skip stays as history |
+| created_at | TIMESTAMPTZ | |
+
+**One open skip per meter per day**, by partial unique index `read_skip_one_open_per_meter_day` on `(utility_id, meter_id, read_date) WHERE resolved_at IS NULL` — SQL-only. `recordSkips` refuses a meter that already has a read in the window (`METER_ALREADY_READ`). A meter is skipped only if **no** register of it posted a reading; a coded register beside a posted one keeps its reason on the import row and writes no skip. `notes`, `reader_id` and `read_route_id` are written but not yet read by anything (only the progress view reads skips, for `meter_id` and `skip_reason`).
+
+All three tables are FORCEd under the standard `tenant_isolation` policy, and every key between them and other tenant tables is composite `(utility_id, …)`, like the other 64.
+
 ### 4.17 AuditLog
 
 All entity state changes via internal event emitter.
@@ -838,7 +891,7 @@ Reference table for service-hold type codes. Replaces the former `SuspensionType
 
 ### 4.23 Utility
 
-The tenant itself, as a row (2026-10-18). `utility_id` on all 61 tables that carry one is a foreign key to this, `ON DELETE RESTRICT` — so a write naming a tenant that does not exist is refused by the database rather than silently opening an empty partition. Seven tables' `utility_id` is nullable, for the global reference rows that belong to no tenant (§1.3 of the tenancy note), plus `cis_user`, where a null means the platform actor.
+The tenant itself, as a row (2026-10-18). `utility_id` on all 82 tables that carry one (counted 2026-11-27; it said 61 until then, which had gone stale long before) is a foreign key to this, `ON DELETE RESTRICT` — so a write naming a tenant that does not exist is refused by the database rather than silently opening an empty partition. Seven tables' `utility_id` is nullable, for the global reference rows that belong to no tenant (§1.3 of the tenancy note), plus `cis_user`, where a null means the platform actor.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -871,7 +924,7 @@ The design principle is **defense in depth**: Zod returns nice errors at the API
 | Trigger | Rule |
 |---|---|
 | `before_sa_lifecycle_invariants` on `service_agreement` | a terminal status must carry an `end_date`, and an `end_date` may not be set on a still-live agreement without moving the status with it |
-| `before_one_live_service_per_premise` on `service_point` (2026-11-18) | two `PENDING`/`ACTIVE` agreements may not both serve one premise for one commodity over overlapping days. The key spans both tables — `premise_id` is on the point, `commodity_id` on the agreement — which is why no exclusion constraint can express it. It replaces `no_overlapping_active_sa`, which spec 05 and `schema.prisma` both described and the database did not contain; see spec 05 |
+| `before_one_live_service_per_premise` on `service_point` (2026-11-18) | two `PENDING`/`ACTIVE` agreements may not both serve one premise for one commodity over overlapping days. The key spans both tables — `premise_id` is on the point, `commodity_id` on the agreement — which is why no exclusion constraint can express it. It replaces `no_overlapping_active_sa`, which spec 05 and `schema.prisma` both described and the database did not contain; see spec 05. **Takes `pg_advisory_xact_lock` on (tenant, premise, commodity) before its check** (`20261127090000`): without it two concurrent openings at one address each missed the other's uncommitted point under READ COMMITTED and both committed |
 
 **Both raise `check_violation` with a marker, and that choice is load-bearing.** Prisma recognises `unique_violation` (23505) and replaces the message with its own "Unique constraint failed", so the sentence naming the conflict never reaches the caller; 23514 passes through. `middleware/error-handler.ts` matches the marker and answers **409** with the trigger's own words — without that branch these fall to the generic arms and arrive as a 400 "Database error" or a 500, which is a refusal with a reason reported as a fault with none. A trigger added by a later migration must be added to `DATABASE_INVARIANTS` there, or its reason goes nowhere.
 
@@ -998,7 +1051,21 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | PATCH | `/api/v1/meter-reads/:id` | Meter Reads (creates CORRECTED row, preserves original) |
 | DELETE | `/api/v1/meter-reads/:id` | Meter Reads (guarded against frozen + corrected-by state) |
 | POST | `/api/v1/meter-reads/:id/resolve-exception` | Meter Reads |
-| GET | `/api/v1/meter-reads/progress` | Meter Reads (how much of a cycle is still unread, over the window a run would bill; spec 08) |
+| GET | `/api/v1/meter-reads/progress` | Meter Reads (how much of a cycle is still unread; spec 08). `window=billing` (default) is the window a run would bill, `window=reading` the one containing `asOf`; `readRouteId` narrows it to one route's stops, which must be on that cycle. Rows carry `routeCode` and `skipReason` |
+| GET | `/api/v1/read-routes` | Read Routes (list, with cycle code and stop count; VIEW) |
+| POST | `/api/v1/read-routes` | Read Routes (create; EDIT — route maintenance is EDIT, entry is CREATE) |
+| GET | `/api/v1/read-routes/:id` | Read Routes |
+| PATCH | `/api/v1/read-routes/:id` | Read Routes (rename, retire via `active`; `origin` not accepted). **No caller in the web app yet** |
+| GET | `/api/v1/read-routes/:id/stops` | Read Routes (stops in walking order, with address and the cycles billed there) |
+| POST | `/api/v1/read-routes/:id/stops` | Read Routes (add a stop; refuses a premise already on any route) |
+| DELETE | `/api/v1/read-routes/:id/stops/:stopId` | Read Routes |
+| GET | `/api/v1/read-routes/:id/unsequenced` | Read Routes (the tray: premises on no route at all) |
+| GET | `/api/v1/read-routes/:id/sheet` | Read Routes (`onDate`; PDF, or `format=json` for the data including stops with nothing to read). Not persisted |
+| POST | `/api/v1/read-routes/:id/entry` | Read Routes (open keyed entry for `readDate`; idempotent per route and day, 201 either way; CREATE) |
+| PATCH | `/api/v1/read-routes/:id/entry/:batchId/rows` | Read Routes (stage a row: a reading, a skip code, or neither to clear it. Locks the batch row, so it cannot race Post) |
+| POST | `/api/v1/read-routes/:id/entry/:batchId/submit` | Read Routes (post the sheet: skips first, then readings through `processBatch`; a second call reports the stored result) |
+| POST | `/api/v1/read-routes/:id/entry/reopen` | Read Routes (`readDate`; returns refused rows to PENDING. 409 `ENTRY_NOTHING_TO_CORRECT` on a clean sheet, `ENTRY_NOT_FINISHED` while a submit is running) |
+| GET | `/api/v1/read-routes/:id/progress` | Read Routes (the route's own cycle; `window=reading` by default here) |
 | GET | `/api/v1/meter-data-exceptions` | Meter Reads (interval-coverage queue — days an interval meter's data does not cover; spec 26) |
 | POST | `/api/v1/meter-data-exceptions/:id/accept` | Meter Reads (bill the month as it stands; audited, and the pre-run check stops blocking those minutes) |
 | POST | `/api/v1/meter-data-exceptions/:id/reopen` | Meter Reads (withdraw an acceptance) |
