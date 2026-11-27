@@ -167,6 +167,30 @@ export default function ReadRouteDetailPage() {
     }
   }
 
+  /*
+   * Rename and retire — `PATCH /read-routes/:id`, which had no caller on
+   * any screen until 2026-11-27. Retiring is the only way out for a route:
+   * there is no DELETE, because its reads point at it. Code and cycle are
+   * not offered here — a vendor route's code is what its imports match on,
+   * and moving a route to another cycle changes which window every sheet
+   * of it means — so each deserves more than an inline field.
+   */
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  async function updateRoute(change: { name?: string; active?: boolean }) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const updated = await apiClient.patch<ReadRouteSummary>(`/api/v1/read-routes/${id}`, change);
+      // The PATCH answers the route row; the summary's counts are the list's.
+      setRoute((prev) => (prev ? { ...prev, ...updated } : prev));
+      setNameDraft(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not update this route");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeStop(stopId: string) {
     setBusy(true);
     setActionError(null);
@@ -232,6 +256,61 @@ export default function ReadRouteDetailPage() {
           ) : undefined
         }
       />
+
+      {canEdit && (
+        <div style={{ ...card, marginBottom: 18 }} data-testid="route-details">
+          <div
+            style={{
+              padding: "12px 18px",
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+              fontSize: 13,
+            }}
+          >
+            <label htmlFor="routeName" style={{ ...label, display: "inline", marginBottom: 0 }}>
+              Name
+            </label>
+            <input
+              id="routeName"
+              value={nameDraft ?? route.name}
+              onChange={(e) => setNameDraft(e.target.value)}
+              style={{ ...control, minWidth: 220 }}
+            />
+            {nameDraft !== null && nameDraft.trim() !== "" && nameDraft.trim() !== route.name && (
+              <button
+                onClick={() => void updateRoute({ name: nameDraft.trim() })}
+                disabled={busy}
+                style={{ ...primaryLink, border: "none", cursor: "pointer", padding: "6px 14px" }}
+              >
+                Save name
+              </button>
+            )}
+            <span style={{ flex: 1 }} />
+            <span style={{ color: "var(--text-muted)" }}>
+              {route.active ? "In use" : "Retired — kept for the reads that name it"}
+            </span>
+            <button
+              onClick={() => {
+                if (
+                  route.active &&
+                  !window.confirm(
+                    `Retire ${route.code}? It stays on record for the reads that name it, but drops out of use.`,
+                  )
+                ) {
+                  return;
+                }
+                void updateRoute({ active: !route.active });
+              }}
+              disabled={busy}
+              style={{ ...ghostButton, padding: "6px 12px", fontSize: 12 }}
+            >
+              {route.active ? "Retire route" : "Put back in use"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {progress && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>

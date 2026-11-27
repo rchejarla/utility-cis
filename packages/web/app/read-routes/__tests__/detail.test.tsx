@@ -31,6 +31,7 @@ vi.mock("next/navigation", () => ({
 const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
 const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
 const del = apiClient.delete as unknown as ReturnType<typeof vi.fn>;
+const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
 
 const ROUTE = {
   id: "rt-1",
@@ -321,6 +322,59 @@ describe("Read route detail — the walk", () => {
  * page that asked anyway would show an error for a route that is
  * working exactly as intended.
  */
+/*
+ * `PATCH /read-routes/:id` had no caller on any screen, so a route could
+ * be created and never renamed or retired. Retiring is the only way out —
+ * there is no DELETE, because a route's reads point at it.
+ */
+describe("Read route detail — renaming and retiring", () => {
+  it("saves a new name, and only once it differs", async () => {
+    serve();
+    patch.mockResolvedValue({ ...ROUTE, name: "North Willson East" });
+    renderPage();
+
+    const name = await screen.findByLabelText(/^name$/i);
+    expect(screen.queryByRole("button", { name: /save name/i })).toBeNull();
+    await userEvent.clear(name);
+    await userEvent.type(name, "North Willson East");
+    await userEvent.click(screen.getByRole("button", { name: /save name/i }));
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/read-routes/rt-1", { name: "North Willson East" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: /W-04 — North Willson East/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("retires the route after asking, and offers to put it back", async () => {
+    serve();
+    patch.mockResolvedValue({ ...ROUTE, active: false });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /retire route/i }));
+
+    expect(confirm).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/read-routes/rt-1", { active: false }),
+    );
+    expect(await screen.findByRole("button", { name: /put back in use/i })).toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it("does nothing when the retire is not confirmed", async () => {
+    serve();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /retire route/i }));
+
+    expect(patch).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+});
+
 describe("Read route detail — a route a vendor owns", () => {
   const vendor = { ...ROUTE, origin: "EXTERNAL", stopCount: 0, code: "VEN-7", name: "VEN-7" };
 

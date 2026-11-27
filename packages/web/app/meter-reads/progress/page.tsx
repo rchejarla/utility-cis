@@ -65,6 +65,13 @@ export default function ReadingProgressPage() {
    */
   const [cycles, setCycles] = useState<Cycle[] | null>(null);
   const [cycleId, setCycleId] = useState<string>("");
+  /*
+   * One route of the cycle, or all of them (spec 30 §5.9). Only the
+   * chosen cycle's routes are offered: a route is worked inside one
+   * cycle's window, and the endpoint refuses another cycle's route.
+   */
+  const [routes, setRoutes] = useState<{ id: string; code: string; name: string }[]>([]);
+  const [routeId, setRouteId] = useState<string>("");
   const [progress, setProgress] = useState<ReadingProgress | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -87,13 +94,32 @@ export default function ReadingProgressPage() {
       });
   }, []);
 
+  useEffect(() => {
+    setRouteId("");
+    if (!cycleId) {
+      setRoutes([]);
+      return;
+    }
+    apiClient
+      .get<{ data: { id: string; code: string; name: string }[] }>("/api/v1/read-routes", {
+        billingCycleId: cycleId,
+        limit: "100",
+      })
+      .then((res) => setRoutes(res.data ?? []))
+      // No routes to offer is the honest fallback: the cycle-wide answer
+      // still stands, and this filter is a narrowing of it.
+      .catch(() => setRoutes([]));
+  }, [cycleId]);
+
   const fetchProgress = useCallback(async () => {
     if (!cycleId) return;
     setLoading(true);
     try {
       setProgress(
         await apiClient.get<ReadingProgress>(
-          `/api/v1/meter-reads/progress?billingCycleId=${cycleId}&limit=100`,
+          `/api/v1/meter-reads/progress?billingCycleId=${cycleId}&limit=100${
+            routeId ? `&readRouteId=${routeId}` : ""
+          }`,
         ),
       );
     } catch (err) {
@@ -101,7 +127,7 @@ export default function ReadingProgressPage() {
     } finally {
       setLoading(false);
     }
-  }, [cycleId, toast]);
+  }, [cycleId, routeId, toast]);
 
   useEffect(() => {
     fetchProgress();
@@ -157,6 +183,25 @@ export default function ReadingProgressPage() {
             ))}
           </select>
         </div>
+        <div>
+          <label htmlFor="route" style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+            Route
+          </label>
+          <select
+            id="route"
+            style={selectStyle}
+            value={routeId}
+            disabled={routes.length === 0}
+            onChange={(e) => setRouteId(e.target.value)}
+          >
+            <option value="">{routes.length === 0 ? "No routes on this cycle" : "All routes"}</option>
+            {routes.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.code} — {r.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {progress && (
@@ -186,6 +231,8 @@ export default function ReadingProgressPage() {
               <th style={thCell}>Agreement</th>
               <th style={thCell}>Account</th>
               <th style={thCell}>Last read</th>
+              <th style={thCell}>Route</th>
+              <th style={thCell}>Why not read</th>
             </tr>
           </thead>
           <tbody>
@@ -214,12 +261,27 @@ export default function ReadingProgressPage() {
                     <span style={{ color: "var(--text-muted)" }}>Never read</span>
                   )}
                 </td>
+                <td style={{ ...tdCell, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {row.routeCode ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+                </td>
+                <td style={tdCell}>
+                  {/*
+                    * The reader's own reason, from an open skip. Without it
+                    * a locked gate and a meter nobody went to look like the
+                    * same row, and they are different mornings' work.
+                    */}
+                  {row.skipReason ? (
+                    <span data-testid="skip-reason">{row.skipReason.replace(/_/g, " ").toLowerCase()}</span>
+                  ) : (
+                    <span style={{ color: "var(--text-muted)" }}>—</span>
+                  )}
+                </td>
               </tr>
             ))}
             {progress && progress.data.length === 0 && (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={7}
                   style={{ padding: "24px 18px", color: "var(--text-muted)", textAlign: "center" }}
                 >
                   {loading
@@ -233,7 +295,7 @@ export default function ReadingProgressPage() {
             {!progress && (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={7}
                   style={{ padding: "24px 18px", color: "var(--text-muted)", textAlign: "center" }}
                 >
                   {loading ? "Loading..." : "Pick a cycle."}

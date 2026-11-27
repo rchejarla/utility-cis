@@ -99,6 +99,7 @@ export default function ReadRouteEntryPage() {
   const [held, setHeld] = useState<ByRow<Held>>({});
   const [rowError, setRowError] = useState<ByRow<string>>({});
   const [nothingToRead, setNothingToRead] = useState<{ sequence: number; address: string }[]>([]);
+  const [nothingToReadFailed, setNothingToReadFailed] = useState(false);
   const [result, setResult] = useState<EntrySubmitResultWire | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /*
@@ -169,8 +170,13 @@ export default function ReadRouteEntryPage() {
         `/api/v1/read-routes/${id}/sheet`,
         { onDate: readDate, format: "json" },
       )
-      .then((sheet) => setNothingToRead(sheet.stopsWithNothingToRead ?? []))
-      .catch(() => setNothingToRead([]));
+      .then((sheet) => {
+        setNothingToRead(sheet.stopsWithNothingToRead ?? []);
+        setNothingToReadFailed(false);
+      })
+      // Said, not swallowed: an empty list here reads as "every stop has
+      // something to read", which is the silent failure §5.1 forbids.
+      .catch(() => setNothingToReadFailed(true));
   }, [id, readDate, isLocal]);
 
   const focusRow = (index: number) => {
@@ -355,6 +361,27 @@ export default function ReadRouteEntryPage() {
   );
   const blank = rows.length - entered;
   const refusedRows = rows.filter((r) => r.status === "ERROR");
+  const leftOutRows = rows.filter((r) => r.status === "SKIPPED" && r.errorCode === "NOT_ENTERED");
+  /*
+   * A number on screen that the server does not have: typed and never
+   * committed with Enter, or held by the band and never confirmed. Post
+   * used to go ahead and the row posted as "nothing entered" — the number
+   * the reader wrote down, lost, with nothing on the result saying so.
+   * Post waits until each is saved or cleared, and says which.
+   *
+   * Not a number the server **refused** (READ_BILLED at the keyboard):
+   * that row already says why it was not saved, the number cannot be
+   * saved however often Enter is pressed, and it posts as nothing entered
+   * on purpose. The block is for numbers somebody forgot, not ones the
+   * server declined.
+   */
+  const unsavedRows = rows.filter(
+    (r) =>
+      r.status !== "IMPORTED" &&
+      r.status !== "SKIPPED" &&
+      !rowError[r.rowId] &&
+      (typed[r.rowId] ?? "").trim() !== (r.reading ?? ""),
+  );
 
   if (!canView) return <AccessDenied />;
   if (loadError) {
@@ -415,13 +442,17 @@ export default function ReadRouteEntryPage() {
               {entered} of {rows.length} entered
             </span>
             {!result && rows.length > 0 && (
-              <button onClick={() => void submit()} disabled={busy} style={primaryButton}>
+              <button
+                onClick={() => void submit()}
+                disabled={busy || unsavedRows.length > 0}
+                style={primaryButton}
+              >
                 Post the route
               </button>
             )}
-            {result && refusedRows.length > 0 && (
+            {result && (refusedRows.length > 0 || leftOutRows.length > 0) && (
               <button onClick={() => void correct()} disabled={busy} style={primaryButton}>
-                Correct the refused rows
+                {refusedRows.length > 0 ? "Correct the refused rows" : "Enter the rows left out"}
               </button>
             )}
           </div>
@@ -479,11 +510,35 @@ export default function ReadRouteEntryPage() {
         </div>
       )}
 
+      {!result && unsavedRows.length > 0 && (
+        <div role="status" data-testid="unsaved-rows" style={{ ...noteBar, marginBottom: 14, borderColor: "var(--warning)" }}>
+          <b>
+            {unsavedRows.length} {unsavedRows.length === 1 ? "number is" : "numbers are"} typed but
+            not saved
+          </b>{" "}
+          — press Enter on {unsavedRows.length === 1 ? "it" : "each"} (or clear{" "}
+          {unsavedRows.length === 1 ? "it" : "them"}) before posting, or{" "}
+          {unsavedRows.length === 1 ? "it" : "they"} would post as nothing entered:{" "}
+          {unsavedRows
+            .map((r) => `${r.meterNumber}${r.registerNumber ? ` reg ${r.registerNumber}` : ""}`)
+            .join(", ")}
+          .
+        </div>
+      )}
+
       {!result && blank > 0 && rows.length > 0 && (
         <div style={{ ...noteBar, marginBottom: 14 }}>
           {blank} {blank === 1 ? "row has" : "rows have"} nothing entered. Posting now leaves{" "}
           {blank === 1 ? "it" : "them"} out — a row with neither a reading nor a reason is not a
           reading event, and not a skip either.
+        </div>
+      )}
+
+      {nothingToReadFailed && (
+        <div role="alert" style={{ ...noteBar, marginBottom: 14, borderColor: "var(--warning)" }}>
+          Could not check which stops on this route have nothing to read on {readDate}. The rows
+          below are right, but a stop missing from them would not be pointed out — reload before
+          relying on the count.
         </div>
       )}
 

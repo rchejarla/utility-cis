@@ -745,6 +745,96 @@ describe("Read route entry — posting the route", () => {
   });
 
   /*
+   * A number typed and never committed with Enter posted as "nothing
+   * entered", and the result never said which number was lost. Post now
+   * waits for it and names the meter; Enter saves it and frees Post.
+   */
+  it("holds Post while a typed number is unsaved, and names the meter", async () => {
+    serve();
+    renderPage();
+
+    const [first] = await inputs();
+    await userEvent.click(first!);
+    await userEvent.keyboard("1120"); // typed, not Entered
+
+    const post = screen.getByRole("button", { name: /post the route/i });
+    expect(post).toBeDisabled();
+    expect(screen.getByTestId("unsaved-rows")).toHaveTextContent(/WM-101/);
+
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByRole("button", { name: /post the route/i })).toBeEnabled());
+    expect(screen.queryByTestId("unsaved-rows")).toBeNull();
+  });
+
+  /*
+   * A number the server refused (READ_BILLED at the keyboard) is not a
+   * forgotten one: the row says why, Enter cannot save it, and it posts as
+   * nothing entered on purpose. Blocking Post on it would leave the sheet
+   * unpostable — which is what the e2e journey hit.
+   */
+  it("does not hold Post for a number the server refused", async () => {
+    serve();
+    patch.mockRejectedValue(new Error("The meter already has a billed read in this period"));
+    renderPage();
+
+    const [first] = await inputs();
+    await userEvent.click(first!);
+    await userEvent.keyboard("1120{Enter}");
+
+    expect(await screen.findByText(/already has a billed read/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /post the route/i })).toBeEnabled();
+    expect(screen.queryByTestId("unsaved-rows")).toBeNull();
+  });
+
+  /*
+   * A sheet that posted cleanly but left rows out can be reopened for
+   * them — the server returns NOT_ENTERED rows to PENDING since
+   * 2026-11-27 — so the screen offers it, under a name that says what.
+   */
+  it("offers to enter the rows left out when nothing was refused", async () => {
+    serve({
+      rows: [row({ status: "SKIPPED", errorCode: "NOT_ENTERED" })],
+      submit: {
+        batchId: "b-1",
+        status: "COMPLETE",
+        importedCount: 0,
+        errorCount: 0,
+        skipsRecorded: 0,
+        notEntered: 1,
+        alreadySubmitted: false,
+      },
+    });
+    renderPage();
+    await entryRows();
+    await userEvent.click(screen.getByRole("button", { name: /post the route/i }));
+
+    await userEvent.click(await screen.findByRole("button", { name: /enter the rows left out/i }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/api/v1/read-routes/rt-1/entry/reopen", {
+        readDate: "2026-06-05",
+      }),
+    );
+  });
+
+  /*
+   * An empty "nothing to read" list reads as "every stop has something",
+   * which is the silent failure §5.1 forbids — so a failure to load it is
+   * said, not swallowed.
+   */
+  it("says so when it cannot check which stops have nothing to read", async () => {
+    serve();
+    get.mockImplementation(async (url: string) => {
+      if (url.includes("/sheet")) throw new Error("Network error");
+      return ROUTE;
+    });
+    renderPage();
+    await entryRows();
+
+    expect(await screen.findByText(/could not check which stops/i)).toBeInTheDocument();
+  });
+
+  /*
    * The reopen's answer replaces every row and every typed value, so a
    * number typed while it was in flight was wiped when it landed — Enter
    * then saved nothing and the next Post refused the stop again. The e2e
