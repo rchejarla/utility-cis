@@ -41,6 +41,33 @@ interface MonthlyTotal {
   total: number;
 }
 
+interface BilledPeriod {
+  segmentId: string;
+  periodStart: string;
+  periodEnd: string;
+  billNumber: string;
+  tou: boolean;
+}
+
+/** One billed period's usage by TOU period (the bill's own table) and by hour of day. */
+interface BilledPeriodUsage {
+  byPeriod: {
+    heading: string;
+    rows: Array<{ label: string; usage: string; share: string; amount: string }>;
+    footnote: string[];
+  } | null;
+  hourly: {
+    unit: string | null;
+    periods: Array<{ code: string; label: string }>;
+    hours: Array<{ hour: number; byPeriod: Record<string, number> }>;
+  } | null;
+}
+
+/** A colour per TOU period, in the tenant's display order. */
+const PERIOD_COLOURS = ["var(--danger)", "var(--warning)", "var(--accent-primary)", "var(--success)", "var(--text-muted)"];
+
+const hourLabel = (h: number) => (h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`);
+
 /** "off_peak" → "Off peak". The tenant's own labels are not on this endpoint. */
 const periodLabel = (code: string) => {
   const words = code.replace(/[_-]+/g, " ").trim();
@@ -68,6 +95,9 @@ function PortalUsagePageInner() {
   const [selectedAgreementId, setSelectedAgreementId] = useState<string | null>(presetAgreement);
   const [reads, setReads] = useState<ReadRow[]>([]);
   const [monthlyData, setMonthlyData] = useState<MonthlyTotal[]>([]);
+  const [billedPeriods, setBilledPeriods] = useState<BilledPeriod[]>([]);
+  const [segmentId, setSegmentId] = useState<string | null>(null);
+  const [periodUsage, setPeriodUsage] = useState<BilledPeriodUsage | null>(null);
   const [loading, setLoading] = useState(true);
   const [readsLoading, setReadsLoading] = useState(false);
   const [granularity, setGranularity] = useState<Granularity>("monthly");
@@ -109,6 +139,42 @@ function PortalUsagePageInner() {
       .catch(console.error)
       .finally(() => setReadsLoading(false));
   }, [selectedAgreementId, fromMonth, toMonth]);
+
+  /*
+   * Billed time-of-use periods, for the Hourly view (spec 26, TOU-BIL-3).
+   * Only billed ones: the breakdown is the bill's own, and a period nobody
+   * has billed yet has no bill to agree with.
+   */
+  useEffect(() => {
+    setBilledPeriods([]);
+    setSegmentId(null);
+    setPeriodUsage(null);
+    if (!selectedAgreementId) return;
+    apiClient
+      .get<{ data: BilledPeriod[] }>(`/portal/api/agreements/${selectedAgreementId}/billed-periods`)
+      .then((res) => {
+        const tou = (res.data ?? []).filter((p) => p.tou);
+        setBilledPeriods(tou);
+        setSegmentId(tou[0]?.segmentId ?? null);
+      })
+      .catch(() => setBilledPeriods([]));
+  }, [selectedAgreementId]);
+
+  useEffect(() => {
+    setPeriodUsage(null);
+    if (!selectedAgreementId || !segmentId || granularity !== "hourly") return;
+    apiClient
+      .get<BilledPeriodUsage>(
+        `/portal/api/agreements/${selectedAgreementId}/billed-periods/${segmentId}/usage`,
+      )
+      .then(setPeriodUsage)
+      .catch(() => setPeriodUsage(null));
+  }, [selectedAgreementId, segmentId, granularity]);
+
+  // Back to monthly when the agreement has no billed TOU period to show.
+  useEffect(() => {
+    if (granularity === "hourly" && billedPeriods.length === 0) setGranularity("monthly");
+  }, [billedPeriods, granularity]);
 
   const uomLabel = reads[0]?.uom?.code ?? "";
   const uomName = reads[0]?.uom?.name ?? "";
@@ -233,13 +299,18 @@ function PortalUsagePageInner() {
       <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
         {(["monthly", "daily", "hourly"] as Granularity[]).map((g) => {
           const isActive = granularity === g;
-          const isDisabled = g !== "monthly";
+          // Hourly is the billed time-of-use breakdown; daily has no data behind it yet.
+          const isDisabled = g === "daily" || (g === "hourly" && billedPeriods.length === 0);
+          const why =
+            g === "daily"
+              ? "Daily usage is not available yet"
+              : "Hourly usage is shown for billed time-of-use periods";
           return (
             <button
               key={g}
               onClick={() => !isDisabled && setGranularity(g)}
               disabled={isDisabled}
-              title={isDisabled ? "Interval data available in Phase 3" : undefined}
+              title={isDisabled ? why : undefined}
               style={{
                 padding: "6px 14px",
                 fontSize: 12,
@@ -280,7 +351,161 @@ function PortalUsagePageInner() {
         </div>
       )}
 
-      {readsLoading ? (
+      {granularity === "hourly" ? (
+        <div data-testid="tou-view">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+            <label htmlFor="billed-period" style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>
+              Billed period
+            </label>
+            <select
+              id="billed-period"
+              value={segmentId ?? ""}
+              onChange={(e) => setSegmentId(e.target.value)}
+              style={{
+                padding: "6px 10px",
+                fontSize: 13,
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                background: "var(--bg-card)",
+                color: "var(--text-primary)",
+                fontFamily: "inherit",
+              }}
+            >
+              {billedPeriods.map((p) => (
+                <option key={p.segmentId} value={p.segmentId}>
+                  {p.periodStart} – {p.periodEnd}{p.billNumber ? ` (bill ${p.billNumber})` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {!periodUsage ? (
+            <p style={{ color: "var(--text-muted)" }}>Loading…</p>
+          ) : (
+            <>
+              {periodUsage.hourly ? (
+                <div
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    padding: "20px 24px 14px",
+                    marginBottom: 20,
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
+                    Usage by hour of day, across the billed period
+                    {periodUsage.hourly.unit ? ` (${periodUsage.hourly.unit})` : ""}
+                  </div>
+                  {(() => {
+                    const hourly = periodUsage.hourly!;
+                    const totalOf = (h: { byPeriod: Record<string, number> }) =>
+                      Object.values(h.byPeriod).reduce((a, b) => a + b, 0);
+                    const max = Math.max(1, ...hourly.hours.map(totalOf));
+                    return (
+                      <>
+                        <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 160 }}>
+                          {hourly.hours.map((h) => (
+                            <div
+                              key={h.hour}
+                              data-testid={`hour-${h.hour}`}
+                              title={`${hourLabel(h.hour)}: ${Math.round(totalOf(h) * 100) / 100}`}
+                              style={{ flex: 1, display: "flex", flexDirection: "column-reverse", height: "100%" }}
+                            >
+                              {hourly.periods.map((p, i) => {
+                                const v = h.byPeriod[p.code] ?? 0;
+                                if (v === 0) return null;
+                                return (
+                                  <div
+                                    key={p.code}
+                                    style={{
+                                      height: `${(v / max) * 100}%`,
+                                      background: PERIOD_COLOURS[i % PERIOD_COLOURS.length],
+                                    }}
+                                  />
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 3, marginTop: 4 }}>
+                          {hourly.hours.map((h) => (
+                            <span key={h.hour} style={{ flex: 1, fontSize: 9, color: "var(--text-muted)", textAlign: "center" }}>
+                              {h.hour % 3 === 0 ? hourLabel(h.hour) : ""}
+                            </span>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+                          {hourly.periods.map((p, i) => (
+                            <span key={p.code} style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ width: 10, height: 10, borderRadius: 2, background: PERIOD_COLOURS[i % PERIOD_COLOURS.length] }} />
+                              {p.label}
+                            </span>
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    padding: 16,
+                    marginBottom: 20,
+                    color: "var(--text-muted)",
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    fontSize: 13,
+                  }}
+                >
+                  Hourly data isn&apos;t available for this meter — it records how much you used in
+                  each time-of-use period, not when.
+                </div>
+              )}
+
+              {periodUsage.byPeriod && (
+                <div
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ background: "var(--bg-elevated)" }}>
+                        <th style={thStyle}>Period</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>Usage</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>Share</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>Charged</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {periodUsage.byPeriod.rows.map((r) => (
+                        <tr key={r.label}>
+                          <td style={tdStyle}>{r.label}</td>
+                          <td style={{ ...tdStyle, textAlign: "right" }}>{r.usage}</td>
+                          <td style={{ ...tdStyle, textAlign: "right" }}>{r.share}</td>
+                          <td style={{ ...tdStyle, textAlign: "right" }}>${r.amount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {periodUsage.byPeriod.footnote.length > 0 && (
+                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+                      {periodUsage.byPeriod.footnote.map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ) : readsLoading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading usage data…</p>
       ) : monthlyData.length === 0 ? (
         <div

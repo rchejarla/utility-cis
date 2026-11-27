@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { listBillsForAccount } from "../services/bill.service.js";
 import { monthlyUsage } from "../services/portal-usage.js";
+import { billedPeriodUsage, listBilledPeriods } from "../services/portal-tou-usage.js";
 
 /**
  * Portal data endpoints under /portal/api/*.
@@ -285,6 +286,46 @@ export async function portalApiRoutes(app: FastifyInstance) {
       // (a total read wins over the TOU buckets that reconcile to it) is
       // the rating engine's, and two copies of it would drift.
       return reply.send({ data: reads, monthly: monthlyUsage(reads) });
+    },
+  );
+
+  /*
+   * Billed periods, and one billed period's usage by TOU period and by hour
+   * (spec 26, the portal half of TOU-BIL-3). Ownership is in the service's
+   * queries (the agreement through `account.customerId`, the segment
+   * through that agreement and a posted bill), and a miss is a 404 — the
+   * portal's rule, so a stranger's agreement or an unposted bill reveal
+   * nothing about themselves.
+   */
+  app.get(
+    "/portal/api/agreements/:agreementId/billed-periods",
+    { config: { module: "portal_usage", permission: "VIEW" } },
+    async (request, reply) => {
+      const customerId = requireCustomerId(request);
+      const { agreementId } = request.params as { agreementId: string };
+      const periods = await listBilledPeriods(request.user.utilityId, customerId, agreementId);
+      if (!periods) {
+        return reply.status(404).send({
+          error: { code: "AGREEMENT_NOT_FOUND", message: "Agreement not found or not yours" },
+        });
+      }
+      return reply.send({ data: periods });
+    },
+  );
+
+  app.get(
+    "/portal/api/agreements/:agreementId/billed-periods/:segmentId/usage",
+    { config: { module: "portal_usage", permission: "VIEW" } },
+    async (request, reply) => {
+      const customerId = requireCustomerId(request);
+      const { agreementId, segmentId } = request.params as { agreementId: string; segmentId: string };
+      const usage = await billedPeriodUsage(request.user.utilityId, customerId, agreementId, segmentId);
+      if (!usage) {
+        return reply.status(404).send({
+          error: { code: "BILLED_PERIOD_NOT_FOUND", message: "Billed period not found" },
+        });
+      }
+      return reply.send(usage);
     },
   );
 

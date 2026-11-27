@@ -15,10 +15,9 @@ unstarted.
   (§§3b–3c); the TOU pre-run check in the billing run's preview
   (TOU-BIL-1).
 - **Built 2026-11-27:** TOU on the bill — the usage-by-period table with
-  shares and the hours footnote (TOU-BIL-2, and the bill half of
-  TOU-BIL-3).
-- **Not built:** portal usage by period and hour, and the shadow bill
-  (rest of TOU-BIL-3, TOU-BIL-4 — plan slices 2–4); modeling (TOU-MOD-*, slice 4, overlapping
+  shares and the hours footnote (TOU-BIL-2) — and the portal's billed
+  usage by period and by hour (TOU-BIL-3).
+- **Not built:** the shadow bill (TOU-BIL-4 — plan slices 3a, 3b, 4); modeling (TOU-MOD-*, slice 4, overlapping
   spec 29); the TOU-INT-8 volume measurement; and the follow-ups marked
   in place — the register-mapping importer (§3a), the zoneless-file
   warning (§3b), predicting interval gaps at preview (TOU-INT-4a),
@@ -1821,9 +1820,17 @@ it is wrong.
   *Bill half built 2026-11-27* as the **Share** column — each period's
   share of the usage, rather than a single "on-peak" figure, because peak
   codes are the tenant's and nothing marks one as the peak (decided
-  2026-11-27). The portal half is slice 2 of the plan; the portal's
-  monthly totals, which counted a TOU meter's month about twice, were
-  fixed first (spec 15, 2026-11-27).
+  2026-11-27). The portal's monthly totals, which counted a TOU meter's
+  month about twice, were fixed first (spec 15, 2026-11-27).
+
+  *Portal half built 2026-11-27* (plan slice 2): the usage page's Hourly
+  view shows, for a **billed** TOU period, the bill's own usage-by-period
+  table and a 24-hour profile stacked by period
+  (`services/portal-tou-usage.ts`; `GET /portal/api/agreements/:id/billed-periods`
+  and `…/billed-periods/:segmentId/usage`). Intervals are classified as the
+  roll-up classifies them (`toLocalMoment` + `resolvePeak` against the
+  schedule's calendar version), so the fall-back night's repeated hour
+  counts twice; a register meter has no hourly view and says why.
 - **TOU-BIL-4 (Should).** Shadow bill: for a customer on TOU, or
   considering it, show what the same usage would have cost on the
   standard rate. Shown to staff, and in the portal when the tenant
