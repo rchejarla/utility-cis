@@ -3,6 +3,7 @@ import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { listBillsForAccount } from "../services/bill.service.js";
+import { monthlyUsage } from "../services/portal-usage.js";
 
 /**
  * Portal data endpoints under /portal/api/*.
@@ -269,13 +270,21 @@ export async function portalApiRoutes(app: FastifyInstance) {
           reading: true,
           consumption: true,
           readType: true,
+          // Which TOU period a row is, or null for a total read — so the
+          // table can say "Peak" against a bucket instead of presenting it
+          // as a second reading, and so the totals below can tell them apart.
+          peakCode: true,
+          meterId: true,
           meter: { select: { meterNumber: true } },
           uom: { select: { code: true, name: true } },
         },
         orderBy: { readDate: "asc" },
       });
 
-      return reply.send({ data: reads });
+      // The monthly figures are computed here, not in the page: the rule
+      // (a total read wins over the TOU buckets that reconcile to it) is
+      // the rating engine's, and two copies of it would drift.
+      return reply.send({ data: reads, monthly: monthlyUsage(reads) });
     },
   );
 

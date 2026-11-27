@@ -26,12 +26,26 @@ interface AccountWithAgreements {
 interface ReadRow {
   id: string;
   readDate: string;
-  reading: string;
+  /** Null for a TOU bucket, which has a quantity and no dial behind it. */
+  reading: string | null;
   consumption: string;
   readType: string;
+  /** The TOU period a bucket row belongs to; null for a total read. */
+  peakCode: string | null;
   meter: { meterNumber: string };
   uom?: { code: string; name: string };
 }
+
+interface MonthlyTotal {
+  month: string;
+  total: number;
+}
+
+/** "off_peak" → "Off peak". The tenant's own labels are not on this endpoint. */
+const periodLabel = (code: string) => {
+  const words = code.replace(/[_-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
 
 type Granularity = "monthly" | "daily" | "hourly";
 
@@ -53,6 +67,7 @@ function PortalUsagePageInner() {
   const [accounts, setAccounts] = useState<AccountWithAgreements[]>([]);
   const [selectedAgreementId, setSelectedAgreementId] = useState<string | null>(presetAgreement);
   const [reads, setReads] = useState<ReadRow[]>([]);
+  const [monthlyData, setMonthlyData] = useState<MonthlyTotal[]>([]);
   const [loading, setLoading] = useState(true);
   const [readsLoading, setReadsLoading] = useState(false);
   const [granularity, setGranularity] = useState<Granularity>("monthly");
@@ -83,11 +98,14 @@ function PortalUsagePageInner() {
   useEffect(() => {
     if (!selectedAgreementId) return;
     setReadsLoading(true);
-    apiClient.get<{ data: ReadRow[] }>(
+    apiClient.get<{ data: ReadRow[]; monthly: MonthlyTotal[] }>(
       `/portal/api/agreements/${selectedAgreementId}/usage`,
       { from: fromMonth, to: toMonth },
     )
-      .then((res) => setReads(res.data ?? []))
+      .then((res) => {
+        setReads(res.data ?? []);
+        setMonthlyData(res.monthly ?? []);
+      })
       .catch(console.error)
       .finally(() => setReadsLoading(false));
   }, [selectedAgreementId, fromMonth, toMonth]);
@@ -103,16 +121,15 @@ function PortalUsagePageInner() {
     return null;
   }, [accounts, selectedAgreementId]);
 
-  const monthlyData = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const r of reads) {
-      const month = r.readDate.slice(0, 7);
-      map.set(month, (map.get(month) ?? 0) + Number(r.consumption));
-    }
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, total]) => ({ month, total: Math.round(total * 100) / 100 }));
-  }, [reads]);
+  /*
+   * The monthly figures come from the API, not from adding up `reads`
+   * here. A TOU meter's month holds a total read *and* a row per TOU
+   * period that reconcile to it, so summing every row counted the month
+   * about twice — what the customer saw was not what they were billed for.
+   * The API applies the rating engine's own rule (the total wins, the
+   * buckets stand in where there is none).
+   */
+  const hasTouRows = useMemo(() => reads.some((r) => r.peakCode !== null), [reads]);
 
   const maxVal = Math.max(1, ...monthlyData.map((d) => d.total));
 
@@ -334,6 +351,7 @@ function PortalUsagePageInner() {
                 <tr style={{ background: "var(--bg-elevated)" }}>
                   <th style={thStyle}>Date</th>
                   <th style={thStyle}>Meter</th>
+                  {hasTouRows && <th style={thStyle}>Period</th>}
                   <th style={thStyle}>Reading</th>
                   <th style={{ ...thStyle, textAlign: "right" }}>Consumption{uomLabel ? ` (${uomLabel})` : ""}</th>
                   <th style={thStyle}>Type</th>
@@ -348,7 +366,19 @@ function PortalUsagePageInner() {
                         {r.meter.meterNumber}
                       </span>
                     </td>
-                    <td style={tdStyle}>{Number(r.reading).toLocaleString()}</td>
+                    {hasTouRows && (
+                      <td style={tdStyle} data-testid="usage-period">
+                        {r.peakCode ? periodLabel(r.peakCode) : "Total"}
+                      </td>
+                    )}
+                    {/* A TOU bucket has no dial reading, and printed `0` here. */}
+                    <td style={tdStyle}>
+                      {r.reading === null ? (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      ) : (
+                        Number(r.reading).toLocaleString()
+                      )}
+                    </td>
                     <td style={{ ...tdStyle, textAlign: "right" }}>
                       <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 600 }}>
                         {Number(r.consumption).toLocaleString()}
