@@ -10,11 +10,23 @@ import { prisma } from "../lib/prisma.js";
 export interface TenantConfigDTO {
   utilityId: string;
   requireHoldApproval: boolean;
+  /**
+   * Whether a transfer of service carries the source agreement's
+   * in-force rate-schedule assignments onto the new agreement.
+   *
+   * **Defaults to true, including for a tenant with no config row.**
+   * The column default says the same thing, and the two have to agree:
+   * `transferService` reads the row directly rather than through this
+   * service, so a disagreement would mean the screen showed one answer
+   * and the workflow used the other.
+   */
+  transferCarriesRateSchedule: boolean;
   settings: Record<string, unknown>;
 }
 
 const DEFAULTS: Omit<TenantConfigDTO, "utilityId"> = {
   requireHoldApproval: false,
+  transferCarriesRateSchedule: true,
   settings: {},
 };
 
@@ -26,6 +38,7 @@ export async function getTenantConfig(utilityId: string): Promise<TenantConfigDT
   return {
     utilityId,
     requireHoldApproval: row.requireHoldApproval,
+    transferCarriesRateSchedule: row.transferCarriesRateSchedule,
     settings: (row.settings as Record<string, unknown>) ?? {},
   };
 }
@@ -41,6 +54,9 @@ export async function updateTenantConfig(
   if (patch.requireHoldApproval !== undefined) {
     data.requireHoldApproval = patch.requireHoldApproval;
   }
+  if (patch.transferCarriesRateSchedule !== undefined) {
+    data.transferCarriesRateSchedule = patch.transferCarriesRateSchedule;
+  }
   if (patch.settings !== undefined) {
     data.settings = patch.settings as object;
   }
@@ -51,6 +67,11 @@ export async function updateTenantConfig(
     create: {
       utilityId,
       requireHoldApproval: patch.requireHoldApproval ?? false,
+      // `?? DEFAULTS` rather than `?? false`: this is the one flag here
+      // that defaults to on, so a create triggered by saving some other
+      // field must not turn it off as a side effect.
+      transferCarriesRateSchedule:
+        patch.transferCarriesRateSchedule ?? DEFAULTS.transferCarriesRateSchedule,
       settings: (patch.settings ?? {}) as object,
     },
   });
@@ -58,6 +79,7 @@ export async function updateTenantConfig(
   return {
     utilityId,
     requireHoldApproval: row.requireHoldApproval,
+    transferCarriesRateSchedule: row.transferCarriesRateSchedule,
     settings: (row.settings as Record<string, unknown>) ?? {},
   };
 }

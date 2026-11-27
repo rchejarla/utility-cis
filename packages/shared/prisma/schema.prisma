@@ -602,8 +602,18 @@ model ServiceAgreement {
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
   /// Generated tsrange [start_date, end_date) — DB-managed, read-only at the
-  /// application layer. Source of truth for the no_overlapping_active_sa
-  /// exclusion constraint. Service code uses start_date/end_date directly.
+  /// application layer. Service code uses start_date/end_date directly.
+  ///
+  /// **Nothing reads it.** It was built as the source of truth for the
+  /// `no_overlapping_active_sa` exclusion constraint, and the 2026-10-18
+  /// squash dropped that constraint while keeping the column — so it was
+  /// maintained for seven months for a guarantee that was not there, and
+  /// this comment asserted the guarantee. The rule now lives on
+  /// `service_point`, where its key can actually be expressed, as the
+  /// `before_one_live_service_per_premise` trigger (spec 05). The column
+  /// is kept rather than dropped because removing a generated column is
+  /// its own decision; `service_point_meter.effective_range` is still
+  /// live and backs `spm_no_double_install`.
   effectiveRange  Unsupported("tsrange")? @map("effective_range")
 
   // Relations
@@ -1715,6 +1725,20 @@ model UtilityConfig {
   utilityId           String   @unique @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   requireHoldApproval Boolean  @default(false) @map("require_hold_approval")
+  /// Does a transfer of service carry the source agreement's in-force
+  /// rate-schedule assignments onto the new agreement?
+  ///
+  /// A column rather than a `settings` key because every utility has an
+  /// answer (spec 18): the service is the same service at the same
+  /// premise on the same tariff, so most utilities want the tariff to
+  /// follow it — and the ones that re-rate on every ownership change
+  /// want the opposite, loudly. Default true.
+  ///
+  /// `false` leaves the new agreement unrated, which is what every
+  /// agreement-creating path did before this flag existed: a billing
+  /// run's planner then blocks it by name with `NO_ACTIVE_ASSIGNMENTS`
+  /// rather than billing it as zero.
+  transferCarriesRateSchedule Boolean @default(true) @map("transfer_carries_rate_schedule")
   settings            Json     @default("{}") @map("settings")
 
   // ─── Automation settings that are not per-scheduler ───────────────

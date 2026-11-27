@@ -31,11 +31,33 @@ interface ServiceAgreement {
       customerType?: string;
     };
   };
-  premise?: {
+  /**
+   * **The premise arrives here, not as `agreement.premise`.**
+   *
+   * This interface declared a flat `premise` until 2026-11-18, and
+   * neither the list this page reads nor the detail endpoint sends that
+   * key — checked against both on that date. A premise is not an
+   * agreement field; it belongs to the service point. So the source
+   * panel rendered `premise: ,`, a bare comma, in the only state anyone
+   * has observed it in, and no test could see it: this screen has no
+   * jsdom coverage at all, and a mock built from this interface would
+   * have supplied the field the server does not.
+   *
+   * An array because an agreement may serve more than one point, and a
+   * transfer now moves all of them (spec 05). Showing the first and
+   * silently dropping the rest would hide exactly what the operator is
+   * about to commit.
+   */
+  servicePoints?: {
     id: string;
-    addressLine1: string;
-    city: string;
-  };
+    endDate: string | null;
+    premise?: {
+      id: string;
+      addressLine1: string;
+      addressLine2?: string | null;
+      city: string;
+    } | null;
+  }[];
   commodity?: {
     name: string;
   };
@@ -52,6 +74,20 @@ interface Account {
     customerType?: string;
   };
 }
+
+/**
+ * The addresses a transfer would move: one line per still-open service
+ * point. A point whose premise the response did not include is counted
+ * but not named, rather than rendered as punctuation.
+ */
+const openPremises = (sa?: ServiceAgreement) =>
+  (sa?.servicePoints ?? [])
+    .filter((sp) => sp.endDate === null)
+    .map((sp) => sp.premise)
+    .filter((p): p is NonNullable<typeof p> => Boolean(p));
+
+const premiseLine = (p: { addressLine1: string; addressLine2?: string | null; city: string }) =>
+  [p.addressLine1, p.addressLine2].filter(Boolean).join(" ") + `, ${p.city}`;
 
 const customerName = (c?: { firstName?: string | null; lastName?: string | null; organizationName?: string | null; customerType?: string }) => {
   if (!c) return "(no customer)";
@@ -226,7 +262,18 @@ export default function TransferWizardPage() {
                 customer: <strong style={{ color: "var(--text-primary)" }}>{customerName(source.account?.customer)}</strong>
               </div>
               <div>
-                premise: <strong style={{ color: "var(--text-primary)" }}>{source.premise?.addressLine1}, {source.premise?.city}</strong>
+                {openPremises(source).length > 1 ? "premises" : "premise"}:{" "}
+                {openPremises(source).length === 0 ? (
+                  <strong style={{ color: "var(--warning)" }}>
+                    none on this agreement
+                  </strong>
+                ) : (
+                  openPremises(source).map((p) => (
+                    <div key={p.id} style={{ paddingLeft: openPremises(source).length > 1 ? 10 : 0 }}>
+                      <strong style={{ color: "var(--text-primary)" }}>{premiseLine(p)}</strong>
+                    </div>
+                  ))
+                )}
               </div>
               <div>
                 commodity: <strong style={{ color: "var(--text-primary)" }}>{source.commodity?.name}</strong>

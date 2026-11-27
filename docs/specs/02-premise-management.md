@@ -102,6 +102,8 @@ When a Meter is installed at a premise, the meter's `commodity_id` must exist in
 
 On the Premise detail page, commodity assignments are edited via toggle buttons (one per configured commodity) rather than raw UUID inputs. The display resolves commodity names from their IDs for readability.
 
+**One live service per commodity, enforced in the database (2026-11-18).** A premise may be served for several commodities at once — water and sewer and electricity — but not twice for the *same* commodity over the same days: two live agreements claiming one supply is two bills for it. The `before_one_live_service_per_premise` trigger on `service_point` refuses the second one with `ONE_LIVE_SERVICE_PER_PREMISE`, which reaches a caller as a 409 naming the agreement already there. Both agreements must be `PENDING`/`ACTIVE` for it to apply, and a successor starting the day the predecessor ends is a clean hand-over rather than an overlap. The rule and the gap it deliberately leaves are in [05 — Service Agreement](05-service-agreement.md) under **Effective-Range Overlap Prevention**.
+
 ### Address Validation
 
 - `state` must be exactly 2 characters (state code)

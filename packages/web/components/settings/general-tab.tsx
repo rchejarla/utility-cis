@@ -15,6 +15,9 @@ import { usePermission } from "@/lib/use-permission";
  *     as PENDING and remain there until a user with the APPROVE
  *     permission explicitly approves them. The scheduler's
  *     PENDING → ACTIVE transition also respects this gate.
+ *   - transferCarriesRateSchedule: when true (the default), a transfer
+ *     of service copies the source agreement's in-force rate-schedule
+ *     assignments onto the new agreement.
  *
  * Data shape comes from GET /api/v1/tenant-config and is saved via
  * PATCH to the same endpoint. Only the fields the admin actually
@@ -25,8 +28,29 @@ import { usePermission } from "@/lib/use-permission";
 interface TenantConfigResponse {
   utilityId: string;
   requireHoldApproval: boolean;
+  transferCarriesRateSchedule: boolean;
   settings: Record<string, unknown>;
 }
+
+/**
+ * The flags this tab owns, as one object.
+ *
+ * Two pieces of `useState` plus a two-field `initial` was already the
+ * shape this was growing into, and the dirty check has to compare every
+ * flag or the Save button goes dead for the one it forgot.
+ */
+interface Flags {
+  requireHoldApproval: boolean;
+  transferCarriesRateSchedule: boolean;
+}
+
+const FALLBACK: Flags = {
+  requireHoldApproval: false,
+  // Matches the API's default for a tenant with no config row. A screen
+  // that rendered this off while the workflow treated it as on would be
+  // worse than no screen.
+  transferCarriesRateSchedule: true,
+};
 
 export function GeneralTab() {
   const { canEdit } = usePermission("tenant_profile");
@@ -34,15 +58,19 @@ export function GeneralTab() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [requireHoldApproval, setRequireHoldApproval] = useState(false);
-  const [initial, setInitial] = useState<{ requireHoldApproval: boolean } | null>(null);
+  const [flags, setFlags] = useState<Flags>(FALLBACK);
+  const [initial, setInitial] = useState<Flags | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const cfg = await apiClient.get<TenantConfigResponse>("/api/v1/tenant-config");
-        setRequireHoldApproval(cfg.requireHoldApproval);
-        setInitial({ requireHoldApproval: cfg.requireHoldApproval });
+        const loaded: Flags = {
+          requireHoldApproval: cfg.requireHoldApproval,
+          transferCarriesRateSchedule: cfg.transferCarriesRateSchedule,
+        };
+        setFlags(loaded);
+        setInitial(loaded);
       } catch (err) {
         toast(err instanceof Error ? err.message : "Failed to load settings", "error");
       } finally {
@@ -51,13 +79,18 @@ export function GeneralTab() {
     })();
   }, [toast]);
 
-  const isDirty = initial !== null && initial.requireHoldApproval !== requireHoldApproval;
+  const set = <K extends keyof Flags>(key: K) => (next: Flags[K]) =>
+    setFlags((prev) => ({ ...prev, [key]: next }));
+
+  const isDirty =
+    initial !== null &&
+    (Object.keys(flags) as (keyof Flags)[]).some((k) => initial[k] !== flags[k]);
 
   async function save() {
     setSaving(true);
     try {
-      await apiClient.patch("/api/v1/tenant-config", { requireHoldApproval });
-      setInitial({ requireHoldApproval });
+      await apiClient.patch("/api/v1/tenant-config", flags);
+      setInitial(flags);
       toast("General settings saved", "success");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to save", "error");
@@ -94,8 +127,37 @@ export function GeneralTab() {
           <ToggleField
             label="Require approval before activation"
             description="When enabled, new holds start as PENDING and remain there until a user with the APPROVE permission on service_suspensions explicitly approves them. Only approved holds will be auto-activated by the scheduler. When disabled, the scheduler transitions PENDING → ACTIVE as soon as the start date arrives."
-            checked={requireHoldApproval}
-            onChange={setRequireHoldApproval}
+            checked={flags.requireHoldApproval}
+            onChange={set("requireHoldApproval")}
+            disabled={!canEdit}
+          />
+        </Row>
+      </section>
+
+      <section>
+        <h2
+          style={{
+            fontSize: 14,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+            marginTop: 0,
+            marginBottom: 8,
+          }}
+        >
+          Transfer of Service
+        </h2>
+        <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0, marginBottom: 16 }}>
+          What a transfer carries onto the new agreement when a service moves from one
+          account to another.
+        </p>
+
+        <Row>
+          <ToggleField
+            label="Carry the rate schedule"
+            description="When enabled, a transfer copies the source agreement's in-force rate-schedule assignments onto the new agreement, effective from the transfer date — the same service at the same premise keeps the same tariff. When disabled, the new agreement starts unrated and a billing run will hold it by name until someone assigns a schedule. Turn this off if a change of responsibility is also a re-rate."
+            checked={flags.transferCarriesRateSchedule}
+            onChange={set("transferCarriesRateSchedule")}
             disabled={!canEdit}
           />
         </Row>

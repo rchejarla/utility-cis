@@ -2,6 +2,49 @@ import type { FastifyRequest, FastifyReply, FastifyError } from "fastify";
 import { ZodError } from "zod";
 import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 
+/**
+ * The database triggers that refuse a write, and the marker each one
+ * puts at the front of its message.
+ *
+ * Add a row here when a migration adds a trigger that raises; otherwise
+ * its reason never reaches the caller. Both of these live in
+ * `packages/shared/prisma/migrations` — a trigger is not expressible in
+ * `schema.prisma`, so this list and those functions are the only places
+ * the rules are written down.
+ */
+const DATABASE_INVARIANTS = [
+  // Two live agreements serving one premise for one commodity.
+  "ONE_LIVE_SERVICE_PER_PREMISE",
+  // A terminal status without an end date, or the reverse.
+  "SA_LIFECYCLE_INVARIANT_VIOLATION",
+] as const;
+
+/**
+ * The trigger's own sentence, without the marker or Postgres's framing.
+ *
+ * A raised exception arrives wrapped in whatever the client added around
+ * it — "Invalid `prisma.servicePoint.create()` invocation", the query,
+ * sometimes a stack — so the message is cut down to the one line that
+ * was written for a person to read. `code` already carries the marker,
+ * so repeating it in the prose is noise.
+ */
+function cleanInvariantMessage(raw: string, marker: string): string {
+  const line = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.includes(marker));
+  if (!line) return raw;
+  const after = line
+    .slice(line.indexOf(marker) + marker.length)
+    .replace(/^[:\s]+/, "")
+    // Prisma reports the server's text as ``Message: `…` ``, so the
+    // closing backtick is the last thing on the line. Left in, the
+    // sentence an operator reads ends in punctuation nobody typed.
+    .replace(/[`'"]+$/, "")
+    .trim();
+  return after || line;
+}
+
 export function errorHandler(
   error: FastifyError | Error,
   request: FastifyRequest,
@@ -18,6 +61,36 @@ export function errorHandler(
           message: e.message,
         })),
       },
+    });
+    return;
+  }
+
+  /*
+   * Invariants the database enforces with a trigger, not a constraint.
+   *
+   * Each raises `check_violation` with a marker as the first word of the
+   * message, and 23514 is a code Prisma passes through rather than
+   * rewriting — which is the whole reason these use it. But *which*
+   * Prisma error class wraps a trigger exception depends on the
+   * operation, so matching on the class or on an error code would cover
+   * some paths and not others; the marker is in the message either way.
+   *
+   * Without this branch they fall to the generic arms below and reach an
+   * operator as a 400 "Database error" or a 500 "An internal server
+   * error occurred" — a refusal with a reason, reported as a fault with
+   * none. These are rules a CSR meets by picking the wrong premise or
+   * the wrong date, so the sentence the trigger wrote is the sentence
+   * they need to see.
+   *
+   * 409, because the request was well formed and the conflict is with
+   * the state of the records, which is what the web client's forms
+   * already surface as the server's own message.
+   */
+  const marker = DATABASE_INVARIANTS.find((m) => error.message.includes(m));
+  if (marker) {
+    request.log.warn({ marker }, "database invariant refused a write");
+    reply.status(409).send({
+      error: { code: marker, message: cleanInvariantMessage(error.message, marker) },
     });
     return;
   }
