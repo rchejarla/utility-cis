@@ -110,6 +110,16 @@ export default function ReadRouteEntryPage() {
    */
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /*
+   * A post or reopen in flight, whose answer replaces every row and every
+   * typed value (`takeRows`). The fields are disabled for that long,
+   * because a number typed into a refused row while Correct was still
+   * reopening it was wiped when the reopen answered — Enter then found an
+   * empty field, saved nothing, and the next Post refused the stop again.
+   * Not `busy`: that is also set by each row's save, and disabling the
+   * next field mid-save would stop Enter moving down the sheet.
+   */
+  const [reloading, setReloading] = useState(false);
 
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -279,6 +289,7 @@ export default function ReadRouteEntryPage() {
   async function submit() {
     if (!batchId) return;
     setBusy(true);
+    setReloading(true);
     setActionError(null);
     let posted: EntrySubmitResultWire;
     try {
@@ -289,6 +300,7 @@ export default function ReadRouteEntryPage() {
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not post this route");
       setBusy(false);
+      setReloading(false);
       return;
     }
     setResult(posted);
@@ -314,11 +326,13 @@ export default function ReadRouteEntryPage() {
       );
     } finally {
       setBusy(false);
+      setReloading(false);
     }
   }
 
   async function correct() {
     setBusy(true);
+    setReloading(true);
     setActionError(null);
     try {
       const reopened = await apiClient.post<EntryOpenResponse>(
@@ -331,6 +345,7 @@ export default function ReadRouteEntryPage() {
       setActionError(err instanceof Error ? err.message : "Could not reopen this sheet");
     } finally {
       setBusy(false);
+      setReloading(false);
     }
   }
 
@@ -576,7 +591,7 @@ export default function ReadRouteEntryPage() {
                       row.registerNumber ? ` register ${row.registerNumber}` : ""
                     }`}
                     value={typed[row.rowId] ?? ""}
-                    disabled={settled}
+                    disabled={settled || reloading}
                     onChange={(e) => setTyped((prev) => ({ ...prev, [row.rowId]: e.target.value }))}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter") return;
@@ -611,7 +626,7 @@ export default function ReadRouteEntryPage() {
                   <select
                     aria-label={`Why ${row.meterNumber} was not read`}
                     value={row.skipReason ?? ""}
-                    disabled={settled}
+                    disabled={settled || reloading}
                     onChange={(e) => void chooseReason(row, index, e.target.value)}
                     style={{ ...control, width: "100%", opacity: settled ? 0.6 : 1 }}
                   >

@@ -282,6 +282,11 @@ single-read API does not — open item 5.
 | `ENTRY_NOTHING_TO_CORRECT` | 409 | The sheet posted cleanly, so there is nothing to reopen |
 | `ENTRY_NOT_FINISHED` | 409 | The sheet is still being submitted; a reopen now would hand its rows to a second submit |
 
+`OTHER_REGISTER_REFUSED` is a per-row `errorCode`, not an HTTP code: a coded
+register whose meter's typed reading (on another register) was refused. It is
+ERROR rather than SKIPPED so a reopen brings it back beside that reading — a
+meter is "read" only if one of its readings actually **posted**.
+
 `NOT_ENTERED` is not an HTTP code: it is the per-row `errorCode` on a staged
 row nobody typed anything against, so submit can say what it left out.
 

@@ -141,10 +141,21 @@ only. All four branches are on origin.
 - Blocking findings: B1 reopen during a running submit (= L1 #4), B2 trigger
   race (= L1 #5). Both **fixed**, with tests.
 - Non-blocking, open unless noted:
-  1. Save racing Post can leave a typed number as SKIPPED/NOT_ENTERED (= L1 minor).
+  1. Save racing Post can leave a typed number as SKIPPED/NOT_ENTERED (= L1
+     minor). **Fixed 2026-11-27**: `saveEntryRow` locks the batch row `FOR
+     UPDATE` for the whole save, so Post's claim waits for it or the save is
+     refused. Test: "a save racing Post's claim waits for it and is refused".
   2. `readMeters` is built from row contents, so a refused register-1 reading
      tells a coded register-2 "the other register was read" — neither read nor
-     skip. Same content-not-status shape as the resubmit bug.
+     skip. **Fixed 2026-11-27**: such coded registers are parked
+     (`AWAITING_OTHER_REGISTER`) while readings post and settled by row
+     status after — SKIPPED if a reading IMPORTED, else ERROR
+     `OTHER_REGISTER_REFUSED`, which reopen admits. Test: "a coded register
+     whose meter's reading was refused is correctable, not skipped".
+  - Found while verifying those, **fixed**: on the entry screen a number typed
+    while Correct's reopen was in flight was wiped when it answered (the e2e
+    journey lost this race twice). Fields are disabled while a post or reopen
+    reloads the rows. Unit test added.
   3. Crash loses skips — **fixed** (= L1 #3). Still open: a crash between the
      `meter_read` commit and the row going IMPORTED re-posts on resubmit.
   4. UTC date — **fixed** (= L1 #6). Server still accepts future read dates.
@@ -212,9 +223,9 @@ only. All four branches are on origin.
 the four affected integration suites and the three e2e specs all pass after
 the fixes above; all three reviews ran and every Important/blocking finding is
 fixed. Before shipping: decide the `meter_read` unique-index question, decide
-which open non-blocking items to take now (adversarial #2 and the save/submit
-race are the ones that can lose data), and bring the architecture doc up to
-date. See `docs/specs/05-service-agreement.md` for the one
+which open non-blocking items to take now (the two data-loss ones — adversarial
+#2 and the save/submit race — were fixed 2026-11-27), and bring the
+architecture doc up to date. See `docs/specs/05-service-agreement.md` for the one
 open product question (`createServiceAgreement` and move-in write no
 rate-schedule assignment, and the billing executor files that condition
 quietly).

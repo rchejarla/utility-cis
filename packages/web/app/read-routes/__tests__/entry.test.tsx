@@ -745,6 +745,45 @@ describe("Read route entry — posting the route", () => {
   });
 
   /*
+   * The reopen's answer replaces every row and every typed value, so a
+   * number typed while it was in flight was wiped when it landed — Enter
+   * then saved nothing and the next Post refused the stop again. The e2e
+   * journey lost that race. The fields stay shut until the answer is in.
+   */
+  it("keeps the fields shut while the reopen is in flight, so nothing typed is wiped", async () => {
+    const refused = row({ reading: "1120", status: "ERROR", errorCode: "READ_BILLED", errorMessage: "Billed" });
+    serve({
+      rows: [refused],
+      submit: {
+        batchId: "b-1",
+        status: "PARTIAL",
+        importedCount: 0,
+        errorCount: 1,
+        skipsRecorded: 0,
+        notEntered: 0,
+        alreadySubmitted: false,
+      },
+    });
+    let answer!: (v: unknown) => void;
+    const base = post.getMockImplementation()!;
+    post.mockImplementation(async (url: string, body: unknown) => {
+      if (url.endsWith("/entry/reopen")) return new Promise((r) => (answer = r));
+      return base(url, body);
+    });
+    renderPage();
+    await entryRows();
+    await userEvent.click(screen.getByRole("button", { name: /post the route/i }));
+    await screen.findByText(/1 refused/i);
+
+    await userEvent.click(screen.getByRole("button", { name: /correct the refused/i }));
+
+    const [field] = await inputs();
+    await waitFor(() => expect(field).toBeDisabled());
+    answer({ batchId: "b-1", rows: [{ ...refused, status: "PENDING", errorCode: null, errorMessage: null }] });
+    await waitFor(() => expect(field).toBeEnabled());
+  });
+
+  /*
    * The post succeeded; reading the outcomes back did not. Those are two
    * requests, and the first one wrote `meter_read` rows — so telling the
    * operator the post failed is the one answer that is certainly wrong,

@@ -429,6 +429,82 @@ describe("submitting", () => {
     expect(coded.errorMessage).toContain("UNREADABLE");
   });
 
+  /*
+   * The other side of the case above: register 1's number is typed but
+   * refused, so the meter was **not** read. Judged by the row having a
+   * number, register 2 went SKIPPED "the other register was read" — the
+   * meter ended with neither a read nor a skip, and a SKIPPED row is out
+   * of a reopen's reach. Judged by row status, it is ERROR beside the
+   * refused reading, and a reopen brings both back.
+   */
+  it("a coded register whose meter's reading was refused is correctable, not skipped", async () => {
+    const routeId = await makeRoute();
+    const s = await makeStop(routeId, { registers: [1, 2] });
+    const read = await priorRead(s, false);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: s.meterId, registerId: s.registerIds[0], reading: 140 });
+    await save(batchId, { meterId: s.meterId, registerId: s.registerIds[1], skipReason: "DOG" });
+    // Billed after typing, so submit refuses register 1's reading.
+    await seed((p) =>
+      p.meterRead.updateMany({ where: { id: read.id }, data: { billedAt: new Date("2026-06-06T00:00:00Z") } }),
+    );
+
+    const result = await submit(batchId);
+
+    expect(result).toMatchObject({ importedCount: 0, errorCount: 2, skipsRecorded: 0 });
+    const stored = await seed((p) => p.importRow.findMany({ where: { importBatchId: batchId } }));
+    const coded = stored.find((r) => (r.rawData as Record<string, string>).registerId === s.registerIds[1])!;
+    expect(coded).toMatchObject({ status: "ERROR", errorCode: "OTHER_REGISTER_REFUSED" });
+    expect(await skipCount(s.meterId)).toBe(0);
+
+    const reopened = await reopen(routeId);
+    expect(rowFor(reopened.rows, s.meterId, s.registerIds[0]).status).toBe("PENDING");
+    expect(rowFor(reopened.rows, s.meterId, s.registerIds[1])).toMatchObject({
+      status: "PENDING",
+      skipReason: "DOG",
+    });
+  });
+
+  /*
+   * A save landing while Post is claiming the sheet. The claim is held
+   * uncommitted here; the save must wait for it and then be refused,
+   * rather than read PENDING through the uncommitted claim and write a
+   * number that the submit — which has already read the rows — marks
+   * NOT_ENTERED, out of reach of a reopen. Without the batch lock in
+   * `saveEntryRow` the save resolves and this fails.
+   */
+  it("a save racing Post's claim waits for it and is refused, not lost", async () => {
+    const routeId = await makeRoute();
+    const s = await makeStop(routeId);
+    const { batchId } = await open(routeId);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    const claim = seed((p) =>
+      p.$transaction(
+        async (tx) => {
+          await tx.importBatch.update({ where: { id: batchId }, data: { status: "PROCESSING" } });
+          await gate;
+        },
+        { timeout: 30_000, maxWait: 30_000 },
+      ),
+    );
+    await pause(500); // the claim holds the batch row
+    const saving = save(batchId, { meterId: s.meterId, registerId: null, reading: 150 });
+    const outcome = saving.then(
+      () => "saved",
+      (e: { code?: string }) => e.code,
+    );
+    await pause(500);
+    release();
+    await claim;
+
+    expect(await outcome).toBe("ENTRY_CLOSED");
+    const row = await seed((p) => p.importRow.findFirstOrThrow({ where: { importBatchId: batchId } }));
+    expect((row.rawData as { reading: string }).reading).toBe("");
+  });
+
   it("one meter already read does not cost the other skips sharing its reason", async () => {
     const routeId = await makeRoute();
     const a = await makeStop(routeId);
