@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
@@ -420,6 +420,51 @@ describe("Bill detail — fees and adjustments", () => {
 
     await screen.findByText("4.71 HCF");
     expect(screen.queryByText("Fees and adjustments")).not.toBeInTheDocument();
+  });
+
+  /*
+   * Usage by time of day (spec 26, TOU-BIL-2): the same table and hours
+   * footnote the PDF prints, from the same presentation, so staff see what
+   * the customer's paper says. Information only — the totals box is
+   * untouched by it.
+   */
+  it("shows the TOU usage table and its hours, and leaves the total alone", async () => {
+    routeGets(
+      presentation({
+        touSections: [
+          {
+            heading: "Electric — usage by time of day",
+            rows: [
+              { label: "Peak", usage: "0.00 kWh", share: "0%", amount: "0.00" },
+              { label: "Off-peak", usage: "402.00 kWh", share: "100%", amount: "29.79" },
+            ],
+            footnote: [
+              "Time-of-day periods, summer season (1 Jun – 30 Sep):",
+              "Peak: 5–8 pm weekdays, excluding holidays.",
+              "Off-peak: all other hours.",
+            ],
+          },
+        ],
+      }),
+    );
+    renderDialog();
+
+    const section = await screen.findByTestId("tou-section");
+    expect(within(section).getByText("Electric — usage by time of day")).toBeInTheDocument();
+    // The unused period keeps its row.
+    expect(within(section).getByText("0.00 kWh")).toBeInTheDocument();
+    expect(within(section).getByText("402.00 kWh")).toBeInTheDocument();
+    expect(within(section).getByText("Peak: 5–8 pm weekdays, excluding holidays.")).toBeInTheDocument();
+    // Still the presentation's own total.
+    expect(screen.getByText("$72.89")).toBeInTheDocument();
+  });
+
+  it("shows no TOU section on a bill without TOU service", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    await screen.findByText("4.71 HCF");
+    expect(screen.queryByTestId("tou-section")).not.toBeInTheDocument();
   });
 
   /*

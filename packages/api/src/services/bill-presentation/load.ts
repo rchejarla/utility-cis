@@ -14,6 +14,7 @@ import { money } from "./format.js";
 import { resolveIssuer } from "./issuer.js";
 import { resolveRecipient } from "./recipient.js";
 import { loadAppliedCredits, settlementOf } from "./settlement.js";
+import { loadTouSections } from "./tou.js";
 
 /**
  * Resolves one `Bill` into render-ready content.
@@ -291,6 +292,8 @@ export async function loadBillPresentation(
   const { issuer, payTo } = await resolveIssuer(utilityId);
   const recipient = resolveRecipient(bill.account);
   const groups = chargeGroups(bill.segments);
+  // Empty for a bill with no TOU service, which then renders exactly as before.
+  const touSections = await loadTouSections(utilityId, bill.segments);
 
   const applied = await loadAppliedCredits(utilityId, bill.id, bill.billDate);
   const feeGroup = await loadFeesGroup(
@@ -339,6 +342,7 @@ export async function loadBillPresentation(
       periodEnd: bill.periodEnd,
     },
     groups,
+    touSections,
     feesGroup: feeGroup,
     statement,
     totalRows: totalRowsOf(statement, totals, settlement !== null),
