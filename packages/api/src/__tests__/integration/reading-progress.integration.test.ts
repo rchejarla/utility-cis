@@ -154,7 +154,9 @@ const progress = (over: Record<string, unknown> = {}) =>
 describe("a cycle nobody has read yet", () => {
   it("counts every service it expects a read for, and names them", async () => {
     await service({ agreementNumber: "SA-P1", meterId: fixA.meterId });
-    await service({ agreementNumber: "SA-P2", meterId: fixA.meterId2 });
+    // Its own premise: two live agreements for one commodity at one
+    // premise is what `one_live_service_per_premise` refuses.
+    await service({ agreementNumber: "SA-P2", meterId: fixA.meterId2, premiseId: await extraPremise("P2") });
 
     const p = await progress();
 
@@ -203,7 +205,7 @@ describe("a cycle nobody has read yet", () => {
 describe("what counts as read", () => {
   it("drops a service whose meter was read inside the window", async () => {
     const sa = await service({ agreementNumber: "SA-P1", meterId: fixA.meterId });
-    await service({ agreementNumber: "SA-P2", meterId: fixA.meterId2 });
+    await service({ agreementNumber: "SA-P2", meterId: fixA.meterId2, premiseId: await extraPremise("P2") });
     await seedRead(fixA.meterId, sa, "2026-02-08");
 
     const p = await progress();
@@ -581,8 +583,9 @@ describe("progress for an EXTERNAL route", () => {
      * carries it" is weakened to "any read carried it".
      */
     const sa1 = await service({ agreementNumber: "SA-M1", meterId: fixA.meterId });
-    const sa2 = await service({ agreementNumber: "SA-M2", meterId: fixA.meterId2 });
-    const sa3 = await service({ agreementNumber: "SA-M3", meterId: fixA.meterId3 });
+    // One premise each: one live service per premise and commodity.
+    const sa2 = await service({ agreementNumber: "SA-M2", meterId: fixA.meterId2, premiseId: await extraPremise("M2") });
+    const sa3 = await service({ agreementNumber: "SA-M3", meterId: fixA.meterId3, premiseId: await extraPremise("M3") });
     const ext = await route({ code: "VENDOR-7", origin: "EXTERNAL" });
     const other = await route({ code: "VENDOR-8", origin: "EXTERNAL" });
     await seedRead(fixA.meterId, sa1, "2026-01-05", { routeId: ext });
@@ -638,12 +641,16 @@ describe("why an outstanding row is outstanding", () => {
      * Fails if the skip lookup is deleted, or if it stops filtering on
      * `resolvedAt: null` (the resolved one on meter2 would name a reason).
      */
+    // One premise each (one live service per premise and commodity), and
+    // all three are stops, so the route still covers the same services.
+    const p2 = await extraPremise("S2");
+    const p3 = await extraPremise("S3");
     await service({ agreementNumber: "SA-S1", meterId: fixA.meterId });
-    await service({ agreementNumber: "SA-S2", meterId: fixA.meterId2 });
-    await service({ agreementNumber: "SA-S3", meterId: fixA.meterId3 });
+    await service({ agreementNumber: "SA-S2", meterId: fixA.meterId2, premiseId: p2 });
+    await service({ agreementNumber: "SA-S3", meterId: fixA.meterId3, premiseId: p3 });
     await skip(fixA.meterId, "LOCKED_GATE");
     await skip(fixA.meterId2, "DOG", true);
-    const r = await route({ code: "R-SK", stops: [fixA.premiseId] });
+    const r = await route({ code: "R-SK", stops: [fixA.premiseId, p2, p3] });
 
     const byRoute = await progress({ readRouteId: r });
     const reason = (p: typeof byRoute, n: string) =>
