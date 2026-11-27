@@ -1061,6 +1061,13 @@ model MeterRead {
   @@index([utilityId, importBatchId])
   @@index([utilityId, readEventId])
   @@index([utilityId, routeId])
+  /// Also, in SQL only: the partial unique index
+  /// `meter_read_one_original_per_instant` on (utility_id,
+  /// service_agreement_id, meter_id, register_id, peak_code, read_datetime)
+  /// NULLS NOT DISTINCT WHERE corrects_read_id IS NULL — one original read
+  /// per instant. Prisma cannot express a partial or NULLS NOT DISTINCT
+  /// index, so `migrate dev` would propose dropping it. Migration
+  /// 20261127100000 says why each column is in the key.
   @@map("meter_read")
 }
 

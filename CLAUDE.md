@@ -182,7 +182,9 @@ single column. The 2026-10-25 collections work added two more
 declared as bare scalar columns in `schema.prisma` with the key itself
 in the migration, plus a **partial unique index**
 (`delinquency_action_one_live_per_rule`) that Prisma cannot express
-either. `migrate dev` compares the database against the model, finds
+either. Since 2026-11-27, add `meter_read_one_original_per_instant` — a
+partial `NULLS NOT DISTINCT` unique index on the hypertable, the only
+thing in the database that refuses a read posted twice. `migrate dev` compares the database against the model, finds
 all of it undescribed, and generates a migration *reverting* it. It
 reads as a routine drift fix and would silently drop the ledger's
 invariants and full-text search. Use `migrate deploy`; write schema

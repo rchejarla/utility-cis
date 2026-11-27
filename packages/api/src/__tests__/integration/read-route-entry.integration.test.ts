@@ -505,6 +505,33 @@ describe("submitting", () => {
     expect((row.rawData as { reading: string }).reading).toBe("");
   });
 
+  /*
+   * The state every double-post bug on this branch ended in: a row whose
+   * read is in `meter_read`, back at PENDING. The application guards are
+   * meant to make it unreachable; this is what happens if one fails
+   * anyway. `meter_read_one_original_per_instant` refuses the second
+   * copy and the handler names it, rather than a second read billing in
+   * full.
+   */
+  it("refuses to post a row's read a second time, by the database's own key", async () => {
+    const routeId = await makeRoute();
+    const s = await makeStop(routeId);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: s.meterId, registerId: null, reading: 150 });
+    expect(await submit(batchId)).toMatchObject({ importedCount: 1 });
+    // A guard failed: the posted row is PENDING again and the batch reopened.
+    await seed(async (p) => {
+      await p.importRow.updateMany({ where: { importBatchId: batchId }, data: { status: "PENDING" } });
+      await p.importBatch.update({ where: { id: batchId }, data: { status: "PENDING" } });
+    });
+
+    await submit(batchId);
+
+    expect(await seed((p) => p.meterRead.count({ where: { meterId: s.meterId } }))).toBe(1);
+    const row = await seed((p) => p.importRow.findFirstOrThrow({ where: { importBatchId: batchId } }));
+    expect(row).toMatchObject({ status: "ERROR", errorCode: "READ_ALREADY_POSTED" });
+  });
+
   it("one meter already read does not cost the other skips sharing its reason", async () => {
     const routeId = await makeRoute();
     const a = await makeStop(routeId);

@@ -161,7 +161,9 @@ Supported file formats (configurable per tenant):
 
 5. **Correction audit:** Creating a CORRECTED read automatically creates an AuditLog entry capturing before/after state of both the original (now marked) and new read.
 
-6. **Duplicate import prevention:** The unique constraint on `[meter_id, register_id, read_datetime, read_source]` prevents re-importing the same AMI interval data. Duplicate rows during import are silently skipped with a count in the batch report.
+6. **One original read per instant (2026-11-27).** The partial unique index `meter_read_one_original_per_instant` refuses a second original read with the same `(utility_id, service_agreement_id, meter_id, register_id, peak_code, read_datetime)`, NULLS NOT DISTINCT, corrections (`corrects_read_id` set) excluded. It is "this exact read, once", **not** "one read per day": the hypertable requires `read_datetime` in every unique key, so two reads at different times on one day are both accepted. Agreement and peak code are in the key because a transfer writes FINAL and opening reads for one meter at one instant, and the interval rollup writes one row per TOU bucket at one instant. In an import a duplicate row is **refused, not skipped** — `ERROR` with `READ_ALREADY_POSTED`, counted in the batch's errors, so a re-posted file is visible. Over HTTP it is a 409 `UNIQUE_CONSTRAINT`. SQL-only; Prisma cannot express it.
+
+   *Corrected 2026-11-27.* This rule claimed a unique constraint on `[meter_id, register_id, read_datetime, read_source]` that silently skipped duplicate imports. No such constraint existed: until the index above, nothing in the database refused a read posted twice, which is how the read-route resubmit bug could write a second read per meter. Interval data has its own idempotence on `meter_read_interval` (spec 26).
 
 7. **Exception thresholds:** After each read is saved (single or batch), the system evaluates all active ExceptionThreshold rules for the meter's commodity and account type. Any threshold triggered sets `exception_code` and queues the read for review. Configurable per tenant (Bozeman Req 93).
 

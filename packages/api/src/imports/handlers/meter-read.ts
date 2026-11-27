@@ -390,26 +390,47 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       readDatetime,
     );
 
-    const created = await ctx.tx.meterRead.create({
-      data: {
-        utilityId: ctx.utilityId,
-        meterId: meter.id,
-        serviceAgreementId,
-        routeId,
-        registerId: row.registerId ?? null,
-        uomId,
-        peakCode,
-        readDate,
-        readDatetime,
-        reading: row.reading,
-        priorReading,
-        consumption,
-        readType: row.readType ?? "ACTUAL",
-        readSource: row.readSource ?? batchData.defaultReadSource,
-        exceptionCode: exceptionCode ?? null,
-        readerId: ctx.actorId,
-      },
-    });
+    let created;
+    try {
+      created = await ctx.tx.meterRead.create({
+        data: {
+          utilityId: ctx.utilityId,
+          meterId: meter.id,
+          serviceAgreementId,
+          routeId,
+          registerId: row.registerId ?? null,
+          uomId,
+          peakCode,
+          readDate,
+          readDatetime,
+          reading: row.reading,
+          priorReading,
+          consumption,
+          readType: row.readType ?? "ACTUAL",
+          readSource: row.readSource ?? batchData.defaultReadSource,
+          exceptionCode: exceptionCode ?? null,
+          readerId: ctx.actorId,
+        },
+      });
+    } catch (err: unknown) {
+      /*
+       * `meter_read_one_original_per_instant`: this exact read — same
+       * agreement, meter, register, peak code and instant — is already
+       * posted. Named here rather than left to the batch's catch-all,
+       * which would file it as UNHANDLED with Prisma's own sentence: a
+       * re-posted file is an operator's question, not a fault. The only
+       * unique on `meter_read` besides the primary key, so a P2002 here
+       * is this one. Returned at once — the transaction is aborted.
+       */
+      if (err && typeof err === "object" && (err as { code?: string }).code === "P2002") {
+        return {
+          ok: false,
+          code: "READ_ALREADY_POSTED",
+          message: `Meter "${row.meterNumber}" already has this read posted at ${readDatetime.toISOString()}`,
+        };
+      }
+      throw err;
+    }
 
     await resolveSkipsForRead(ctx.tx, ctx.utilityId, meter.id, readDate);
 

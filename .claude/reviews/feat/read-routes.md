@@ -166,10 +166,17 @@ only. All four branches are on origin.
      rate changes are dropped — intended? spec should say.
   7. A typed-but-not-Entered or held number is silently NOT_ENTERED on Post,
      and NOT_ENTERED rows cannot be reopened.
-- Reviewer's meta-note worth acting on: a unique index on `meter_read`
-  `(utility_id, meter_id, register_id, read_date)` (hypertable, so it must
-  include the partition column) is the real backstop for B1, items 1, 3 and 4,
-  rather than more application guards. **Product decision for Rao.**
+- Reviewer's meta-note worth acting on: a unique index on `meter_read` as the
+  real backstop rather than more application guards. **Done 2026-11-27**
+  (Rao's call): `meter_read_one_original_per_instant` on (utility,
+  agreement, meter, register, peak code, read_datetime) NULLS NOT DISTINCT
+  WHERE corrects_read_id IS NULL. Not per *day* — the hypertable forces
+  `read_datetime` into the key — but every duplicate this branch produced
+  repeats the instant. Agreement and peak code are in the key because
+  transfer and the interval rollup legitimately write two originals at one
+  instant. Import refusal is `READ_ALREADY_POSTED`. Tests: four index cases
+  in `meter-read-one-original.integration.test.ts`, plus the double-post
+  state through the real entry path.
 - The three questions handed to the reviewer, each from a defect this branch
   had already produced once:
   1. Does any path still partition a batch by its contents rather than by row
@@ -224,7 +231,20 @@ only. All four branches are on origin.
 1261, web 918 with `NODE_OPTIONS=--no-experimental-webstorage` on Node 26),
 the four affected integration suites and the three e2e specs all pass after
 the fixes above; all three reviews ran and every Important/blocking finding is
-fixed. Before shipping: decide the `meter_read` unique-index question, decide
+fixed. The `meter_read` unique index was added 2026-11-27.
+
+**Integration run, 2026-11-27** (the 32 suites that touch meter reads,
+workflows, intervals or the seed, one file at a time, plus the two new
+ones): all pass except **`dev-seed.integration.test.ts` — 2 of 4 fail, and
+fail identically on a6ede6d with none of the index work** ("expected 61 to
+be less than 45", "expected 0 to be greater than 0"), so it predates this
+change; likely a date the seed or the test assumes, crossed by today's date.
+**Open, not investigated.** `reading-progress` (4) and `tou-readiness` (1)
+were failing too — their fixtures opened two live agreements at one premise,
+which 703b9da's trigger refuses; those suites had not run since. Fixed in
+the fixtures, not the trigger.
+
+Before shipping: decide
 which open non-blocking items to take now (the two data-loss ones — adversarial
 #2 and the save/submit race — were fixed 2026-11-27). The architecture doc
 was brought up to date the same day. See `docs/specs/05-service-agreement.md` for the one
