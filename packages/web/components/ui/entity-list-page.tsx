@@ -273,6 +273,8 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
   });
 
   const subtitle = `${meta.total.toLocaleString()} total ${subject}`;
+  /** The search box, either variant, which now leads the filter row. */
+  const wideSearch = !!search;
 
   // Fresh-empty = page loaded, zero rows, and the user hasn't narrowed
   // the set via filters or search. In that case skip the filter bar +
@@ -297,15 +299,25 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
         // redundant. Once data exists, the header button returns as
         // the quick-add shortcut next to the title.
         actions={
-          canCreate && !showEmptyCta && (newAction || importHref) ? (
+          /*
+           * The right-hand slot (Meter Reads' "Show me") sits in the
+           * header since 2026-11-27. It is page navigation, not a filter,
+           * and at the end of a full filter row it wrapped onto a line of
+           * its own. It stays when the empty state hides the create
+           * buttons, which is when it is most worth having.
+           */
+          filtersRightSlot || (canCreate && !showEmptyCta && (newAction || importHref)) ? (
             <>
+              {filtersRightSlot && <div style={{ alignSelf: "center" }}>{filtersRightSlot}</div>}
+              {canCreate && !showEmptyCta && (
+              <>
               {importHref && (
                 <Link
                   href={importHref}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
-                    padding: "8px 16px",
+                    padding: "6px 14px",
                     borderRadius: "var(--radius)",
                     background: "transparent",
                     color: "var(--accent-primary)",
@@ -325,7 +337,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
-                    padding: "8px 16px",
+                    padding: "6px 14px",
                     borderRadius: "var(--radius)",
                     background: "var(--accent-primary)",
                     color: "#fff",
@@ -338,6 +350,8 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
                   {newAction.label}
                 </Link>
               )}
+              </>
+              )}
             </>
           ) : undefined
         }
@@ -345,89 +359,15 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
 
       {headerSlot}
 
-      {!showEmptyCta && search && search.variant !== "compact" && (
-        <div style={{ position: "relative", marginBottom: "12px" }}>
-          <div
-            style={{
-              position: "absolute",
-              left: "16px",
-              top: "50%",
-              transform: "translateY(-50%)",
-              color: "var(--text-muted)",
-              pointerEvents: "none",
-              display: "flex",
-              alignItems: "center",
-            }}
-          >
-            <FontAwesomeIcon icon={faMagnifyingGlass} style={{ width: 16, height: 16 }} />
-          </div>
-          <input
-            style={{
-              width: "100%",
-              padding: "12px 16px 12px 44px",
-              borderRadius: "var(--radius)",
-              border: "1px solid var(--border)",
-              background: "var(--bg-elevated)",
-              color: "var(--text-primary)",
-              fontSize: "14px",
-              fontFamily: "inherit",
-              outline: "none",
-              boxSizing: "border-box",
-              transition: "border-color 0.15s ease, box-shadow 0.15s ease",
-            }}
-            placeholder={search.placeholder ?? "Search..."}
-            value={searchInput}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = "var(--accent-primary)";
-              e.currentTarget.style.boxShadow = "0 0 0 3px rgba(99, 102, 241, 0.15)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = "var(--border)";
-              e.currentTarget.style.boxShadow = "none";
-            }}
-          />
-        </div>
-      )}
-
-      {!showEmptyCta && search && search.variant === "compact" && (
-        <div style={{ marginBottom: "8px" }}>
-          <input
-            style={{
-              padding: "7px 12px",
-              borderRadius: "var(--radius)",
-              border: "1px solid var(--border)",
-              background: "var(--bg-elevated)",
-              color: "var(--text-primary)",
-              fontSize: "13px",
-              fontFamily: "inherit",
-              outline: "none",
-              width: "260px",
-            }}
-            placeholder={search.placeholder ?? "Search..."}
-            value={searchInput}
-            onChange={(e) => handleSearchChange(e.target.value)}
-          />
-        </div>
-      )}
-
       {showEmptyCta ? (
         <>
         {/*
-          * The filter row's right-hand control survives the empty
-          * state, on a row of its own.
-          *
-          * It is page-level navigation rather than a filter — the Meter
-          * Reads screen puts its "Show me" menu there — and a tenant
-          * with no rows yet is exactly when "how much of this cycle is
-          * still unread" is worth asking. The pills are suppressed
-          * here because filtering nothing is meaningless; this is not.
+          * The right-hand slot survives the empty state — it is in the
+          * header now (see the actions above). It is page-level
+          * navigation rather than a filter, and a tenant with no rows yet
+          * is exactly when "how much of this cycle is still unread" is
+          * worth asking.
           */}
-        {filtersRightSlot && (
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "16px" }}>
-            {filtersRightSlot}
-          </div>
-        )}
         <ListEmptyCta
           subject={subject}
           headline={emptyState?.headline}
@@ -446,16 +386,80 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
         </>
       ) : (
         <>
-          {(filterConfigs.length > 0 || searchableFilters.length > 0 || filtersRightSlot) && (
+          {(wideSearch || filterConfigs.length > 0 || searchableFilters.length > 0) && (
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: "12px",
-                marginBottom: "16px",
+                marginBottom: "10px",
                 flexWrap: "wrap",
               }}
             >
+              {/*
+                The full-width search had a row of its own above the
+                filters until 2026-11-27. It leads this row now and grows
+                into the space the pills leave, so a list with both costs
+                one row of head room, not two.
+              */}
+              {wideSearch && (
+                <div
+                  style={{
+                    position: "relative",
+                    // Compact keeps its fixed width; the full one grows.
+                    /*
+                     * A small basis that may grow, so a row with many
+                     * pills (Meter Reads has six and a "Show me") keeps
+                     * the search on it instead of wrapping it onto a line
+                     * of its own — which is the row this change removed.
+                     */
+                    flex: search!.variant === "compact" ? "1 1 160px" : "1 1 220px",
+                    minWidth: 140,
+                    maxWidth: search!.variant === "compact" ? 280 : 520,
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: "12px",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      color: "var(--text-muted)",
+                      pointerEvents: "none",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faMagnifyingGlass} style={{ width: 14, height: 14 }} />
+                  </div>
+                  <input
+                    style={{
+                      width: "100%",
+                      padding: "6px 12px 6px 34px",
+                      borderRadius: "var(--radius)",
+                      border: "1px solid var(--border)",
+                      background: "var(--bg-elevated)",
+                      color: "var(--text-primary)",
+                      fontSize: "13px",
+                      fontFamily: "inherit",
+                      outline: "none",
+                      boxSizing: "border-box",
+                      transition: "border-color 0.15s ease, box-shadow 0.15s ease",
+                    }}
+                    placeholder={search!.placeholder ?? "Search..."}
+                    value={searchInput}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = "var(--accent-primary)";
+                      e.currentTarget.style.boxShadow = "0 0 0 3px rgba(99, 102, 241, 0.15)";
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = "var(--border)";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
+                  />
+                </div>
+              )}
               {filterConfigs.length > 0 && <FilterBar filters={filterConfigs} />}
               {searchableFilters.map((f) => (
                 <div key={f.key} style={{ width: 220 }}>
@@ -471,9 +475,6 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
                   />
                 </div>
               ))}
-              {filtersRightSlot && (
-                <div style={{ marginLeft: "auto", flexShrink: 0 }}>{filtersRightSlot}</div>
-              )}
             </div>
           )}
 

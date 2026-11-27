@@ -25,7 +25,7 @@ export function Tabs({ tabs, activeTab, onTabChange, action, children }: TabsPro
           alignItems: "center",
           gap: "2px",
           borderBottom: "1px solid var(--border)",
-          marginBottom: "20px",
+          marginBottom: "12px",
         }}
       >
         {tabs.map((tab) => {
@@ -35,7 +35,7 @@ export function Tabs({ tabs, activeTab, onTabChange, action, children }: TabsPro
               key={tab.key}
               onClick={() => onTabChange(tab.key)}
               style={{
-                padding: "8px 16px",
+                padding: "6px 14px",
                 fontSize: "13px",
                 fontWeight: isActive ? "600" : "400",
                 color: isActive ? "var(--text-primary)" : "var(--text-secondary)",

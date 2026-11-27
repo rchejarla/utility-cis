@@ -189,9 +189,9 @@ export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
   return (
     <div>
       {/* Search */}
-      <div style={{ marginBottom: "16px" }}>
+      <div style={{ marginBottom: "10px" }}>
         <input
-          style={{ ...inputStyle, maxWidth: "320px" }}
+          style={{ ...inputStyle, maxWidth: "320px", padding: "6px 12px" }}
           placeholder="Search by name or email..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}

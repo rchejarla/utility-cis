@@ -92,15 +92,9 @@ export function NumberingTab() {
   }
 
   return (
-    <div style={{ maxWidth: 880, display: "flex", flexDirection: "column", gap: 24 }}>
+    <div style={{ maxWidth: 880, display: "flex", flexDirection: "column", gap: 18 }}>
+      {/* What this page does is said once, in the page description. */}
       <section>
-        <h2 style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", marginTop: 0, marginBottom: 8 }}>
-          Identifier Templates
-        </h2>
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0, marginBottom: 16 }}>
-          Control how new agreement and account numbers are generated when a CSR leaves the number blank on a form. Templates use tokens for year, month, and sequence; the preview below updates live as you type.
-        </p>
-
         <FormatCard
           label="Service Agreement"
           value={agreement}
@@ -185,8 +179,8 @@ function FormatCard({
   const preview = previewTemplate(value.template || "", value.startAt || 1);
 
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 16, background: "var(--bg-surface)" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px", background: "var(--bg-surface)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <h4 style={{ fontSize: 13, fontWeight: 700, margin: 0 }}>{label}</h4>
         <button
           type="button"

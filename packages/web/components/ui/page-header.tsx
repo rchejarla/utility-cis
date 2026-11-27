@@ -16,45 +16,47 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, subtitle, action, actions }: PageHeaderProps) {
   return (
+    /*
+     * Compact since 2026-11-27: the title, its count and the page-help
+     * affordance share one line. Stacked — title, underline, subtitle, then
+     * a help button on a row of its own — they pushed a list's first row
+     * about 300px down the screen before any data.
+     */
     <div
       style={{
         display: "flex",
-        alignItems: "flex-start",
+        alignItems: "center",
         justifyContent: "space-between",
-        marginBottom: "24px",
+        marginBottom: "14px",
         gap: "16px",
       }}
     >
-      <div>
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "baseline",
+          flexWrap: "wrap",
+          columnGap: "12px",
+          rowGap: "2px",
+          minWidth: 0,
+        }}
+      >
         <h1
           style={{
-            fontSize: "22px",
+            fontSize: "20px",
             fontWeight: "600",
             color: "var(--text-primary)",
-            margin: "0 0 4px",
+            margin: 0,
             lineHeight: "1.3",
           }}
         >
           {title}
         </h1>
-        {/* Signature gradient underline beneath every page title — one of
-            the few places the indigo→violet→cyan accent gradient appears
-            in the light theme, so the brand shows without decorating
-            every surface. */}
-        <div
-          aria-hidden
-          style={{
-            height: "2px",
-            width: "32px",
-            borderRadius: "2px",
-            background: "var(--accent-gradient)",
-            margin: subtitle ? "0 0 6px" : "0",
-          }}
-        />
         {subtitle && (
           <p
             style={{
-              fontSize: "14px",
+              fontSize: "13px",
               color: "var(--text-secondary)",
               margin: 0,
               lineHeight: "1.4",
@@ -63,6 +65,25 @@ export function PageHeader({ title, subtitle, action, actions }: PageHeaderProps
             {subtitle}
           </p>
         )}
+        {/* Where a collapsed PageDescription puts its "Help" link. */}
+        <span data-page-help-slot style={{ display: "inline-flex", alignSelf: "center" }} />
+        {/* Signature gradient underline beneath every page title — one of
+            the few places the indigo→violet→cyan accent gradient appears
+            in the light theme, so the brand shows without decorating
+            every surface. Positioned in the header's bottom margin, so it
+            costs no height of its own. */}
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 0,
+            bottom: "-5px",
+            height: "2px",
+            width: "32px",
+            borderRadius: "2px",
+            background: "var(--accent-gradient)",
+          }}
+        />
       </div>
 
       {actions ? (
@@ -75,7 +96,7 @@ export function PageHeader({ title, subtitle, action, actions }: PageHeaderProps
               display: "inline-flex",
               alignItems: "center",
               gap: "6px",
-              padding: "8px 16px",
+              padding: "6px 14px",
               borderRadius: "var(--radius)",
               background: "var(--accent-primary)",
               color: "#fff",
@@ -98,7 +119,7 @@ export function PageHeader({ title, subtitle, action, actions }: PageHeaderProps
               display: "inline-flex",
               alignItems: "center",
               gap: "6px",
-              padding: "8px 16px",
+              padding: "6px 14px",
               borderRadius: "var(--radius)",
               background: "var(--accent-primary)",
               color: "#fff",

@@ -162,9 +162,14 @@ export default function ReadingProgressPage() {
         row until a run rolls them up.
       </PageDescription>
 
-      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 18 }}>
-        <div>
-          <label htmlFor="cycle" style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+      {/*
+        Pickers and the three numbers share one row (2026-11-27): stacked,
+        labels above the selects and tall tiles below them, they put the
+        table ~350px down the page.
+      */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label htmlFor="cycle" style={{ fontSize: 12, color: "var(--text-muted)" }}>
             Cycle
           </label>
           <select
@@ -183,8 +188,8 @@ export default function ReadingProgressPage() {
             ))}
           </select>
         </div>
-        <div>
-          <label htmlFor="route" style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label htmlFor="route" style={{ fontSize: 12, color: "var(--text-muted)" }}>
             Route
           </label>
           <select
@@ -202,18 +207,17 @@ export default function ReadingProgressPage() {
             ))}
           </select>
         </div>
+        {progress && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginLeft: "auto" }}>
+            <Stat label="Still to read" value={progress.outstanding.toLocaleString()} loud />
+            <Stat
+              label="Read"
+              value={`${progress.read.toLocaleString()} of ${progress.expected.toLocaleString()}`}
+            />
+            {pct !== null && <Stat label="Complete" value={`${pct}%`} />}
+          </div>
+        )}
       </div>
-
-      {progress && (
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
-          <Stat label="Still to read" value={progress.outstanding.toLocaleString()} loud />
-          <Stat
-            label="Read"
-            value={`${progress.read.toLocaleString()} of ${progress.expected.toLocaleString()}`}
-          />
-          {pct !== null && <Stat label="Complete" value={`${pct}%`} />}
-        </div>
-      )}
 
       <div
         style={{
@@ -323,8 +327,11 @@ function Stat({ label, value, loud }: { label: string; value: string; loud?: boo
         background: "var(--bg-card)",
         border: `1px solid ${loud ? "var(--warning)" : "var(--border)"}`,
         borderRadius: "var(--radius)",
-        padding: "12px 18px",
-        minWidth: 150,
+        padding: "5px 12px",
+        // Label and figure side by side: a tile per number was ~75px tall.
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
       }}
     >
       <div
@@ -333,14 +340,13 @@ function Stat({ label, value, loud }: { label: string; value: string; loud?: boo
           textTransform: "uppercase",
           letterSpacing: "0.06em",
           color: "var(--text-muted)",
-          marginBottom: 6,
         }}
       >
         {label}
       </div>
       <div
         style={{
-          fontSize: 24,
+          fontSize: 17,
           fontWeight: 700,
           color: loud ? "var(--warning)" : "var(--text-primary)",
           fontFamily: "'JetBrains Mono', monospace",

@@ -971,7 +971,8 @@ export function Sidebar({
           user can always toggle back. */}
       <div
         style={{
-          height: 56,
+          // Matches the topbar's height, so the two bottom borders meet.
+          height: 48,
           padding: collapsed ? 0 : "0 8px 0 20px",
           borderBottom: "1px solid var(--border)",
           display: "flex",

@@ -119,12 +119,14 @@ export function Topbar({ compact = false, variant = "tenant", identity }: Topbar
     <header
       style={{
         ...PINNED,
-        height: "56px",
+        // 48, down from 56 on 2026-11-27 — head room for the page. The
+        // sidebar's brand row matches it.
+        height: "48px",
         background: "var(--header-bg)",
         borderBottom: "1px solid var(--border)",
         display: "flex",
         alignItems: "center",
-        padding: "0 24px",
+        padding: "0 16px",
         gap: "16px",
         flexShrink: 0,
       }}

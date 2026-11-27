@@ -68,8 +68,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           style={{
             flex: 1,
             overflow: "auto",
-            padding: isMobile ? "16px" : "24px",
-            paddingBottom: isMobile ? "72px" : "24px",
+            padding: isMobile ? "12px" : "16px 20px",
+            paddingBottom: isMobile ? "72px" : "20px",
           }}
         >
           {children}

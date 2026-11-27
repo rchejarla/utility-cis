@@ -214,8 +214,8 @@ export default function PremisesPage() {
     <div
       style={{
         display: "flex",
-        gap: "12px",
-        marginBottom: "20px",
+        gap: "10px",
+        marginBottom: "12px",
         flexWrap: "wrap",
       }}
     >
@@ -226,12 +226,14 @@ export default function PremisesPage() {
     </div>
   );
 
+  // Leads the filter row (2026-11-27), as EntityListPage's search does —
+  // a row of its own cost ~50px of head room above the table.
   const searchBar = (
-    <div style={{ position: "relative", marginBottom: 12 }}>
+    <div style={{ position: "relative", flex: "1 1 260px", maxWidth: 460 }}>
       <div
         style={{
           position: "absolute",
-          left: 16,
+          left: 12,
           top: "50%",
           transform: "translateY(-50%)",
           color: "var(--text-muted)",
@@ -240,17 +242,17 @@ export default function PremisesPage() {
           alignItems: "center",
         }}
       >
-        <FontAwesomeIcon icon={faMagnifyingGlass} style={{ width: 16, height: 16 }} />
+        <FontAwesomeIcon icon={faMagnifyingGlass} style={{ width: 14, height: 14 }} />
       </div>
       <input
         style={{
           width: "100%",
-          padding: "12px 16px 12px 44px",
+          padding: "6px 12px 6px 34px",
           borderRadius: "var(--radius)",
           border: "1px solid var(--border)",
           background: "var(--bg-elevated)",
           color: "var(--text-primary)",
-          fontSize: 14,
+          fontSize: 13,
           fontFamily: "inherit",
           outline: "none",
           boxSizing: "border-box",
@@ -306,10 +308,11 @@ export default function PremisesPage() {
         display: "flex",
         alignItems: "center",
         gap: "12px",
-        marginBottom: "16px",
+        marginBottom: "10px",
         flexWrap: "wrap",
       }}
     >
+      {searchBar}
       <FilterBar
         filters={[
           {
@@ -338,7 +341,6 @@ export default function PremisesPage() {
           compact
         />
       </div>
-      <div style={{ marginLeft: "auto", flexShrink: 0 }}>{viewToggle}</div>
     </div>
   );
 
@@ -348,14 +350,19 @@ export default function PremisesPage() {
         title="Premises"
         subtitle={`${meta.total.toLocaleString()} total premises`}
         actions={
-          canCreate && !showEmptyCta ? (
+          // The Table/Map toggle sits in the header (2026-11-27): at the
+          // end of the filter row it wrapped onto a line of its own.
+          !showEmptyCta ? (
             <>
+              <div style={{ alignSelf: "center" }}>{viewToggle}</div>
+              {canCreate && (
+              <>
               <Link
                 href="/premises/import"
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  padding: "8px 16px",
+                  padding: "6px 14px",
                   borderRadius: "var(--radius)",
                   background: "transparent",
                   color: "var(--accent-primary)",
@@ -373,7 +380,7 @@ export default function PremisesPage() {
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  padding: "8px 16px",
+                  padding: "6px 14px",
                   borderRadius: "var(--radius)",
                   background: "var(--accent-primary)",
                   color: "#fff",
@@ -385,6 +392,8 @@ export default function PremisesPage() {
               >
                 Add Premise
               </Link>
+              </>
+              )}
             </>
           ) : undefined
         }
@@ -407,7 +416,6 @@ export default function PremisesPage() {
         />
       ) : (
         <>
-          {searchBar}
           {filterRow}
           {view === "table" ? (
             <DataTable
