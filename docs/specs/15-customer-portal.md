@@ -112,6 +112,8 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 | GET | `/portal/api/accounts` | portal_accounts | List customer's accounts |
 | GET | `/portal/api/accounts/:accountId` | portal_accounts | Account detail with agreements, meters, premises |
 | GET | `/portal/api/accounts/:accountId/bills` | portal_accounts | The account's **posted** bills, with settlement fields (`overdue`, `partPaid`, `charge.openAmount`) |
+| GET | `/portal/api/agreements/:id/billed-periods` | portal_usage | The agreement's segments on **posted** bills, newest first, each flagged `tou` when rated on a time-of-use schedule (2026-11-27) |
+| GET | `/portal/api/agreements/:id/billed-periods/:segmentId/usage` | portal_usage | One billed period's usage: `byPeriod` — the bill's own usage-by-TOU-period table and hours footnote — and `hourly`, a 24-hour profile stacked by TOU period, `null` for a meter with no interval data (2026-11-27) |
 | GET | `/portal/api/agreements/:id/usage` | portal_usage | Meter reads for an agreement (accepts `from`, `to` YYYY-MM params), each with its `peakCode` (null for a total read), plus `monthly` — the month totals, computed server-side by the rating engine's rule |
 | GET | `/portal/api/bills/:id/document` | accounts | The customer's own bill PDF, streamed through the API |
 | GET | `/portal/api/profile` | portal_profile | Customer contact info |
@@ -146,6 +148,8 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 4. **Unified identity:** Portal customers and admin staff share the same `CisUser` table, `Role` system, `UtilityModule` system, and JWT format. The only distinction is the `customerId` FK and the role's module permissions.
 
 5. **Usage data visibility:** Customers can view meter read data for their active service agreements via the usage page. Date range is configurable (from/to month pickers, default trailing 12 months). UOM is frozen on each read and displayed alongside consumption.
+
+   **Hourly is a billed time-of-use period's breakdown** (2026-11-27, spec 26 TOU-BIL-3). The Hourly button, a disabled "Phase 3" placeholder until then, is enabled when the agreement has billed TOU periods. It shows a billed-period picker, the bill's own usage-by-period table (so the portal cannot show a split the bill does not), and usage by **hour of day** across the period, stacked by TOU period — a 24-bar profile rather than ~744 hourly bars, because what a TOU customer wants to know is how much of their use lands in the expensive hours. Intervals are classified exactly as the roll-up that priced the bill classifies them, by local time on the calendar's clock, so the fall-back night's repeated 1 am counts twice. A register meter records totals per period, not when they were used, and says so instead of showing a chart. Ownership is in every query; a stranger's agreement, someone else's segment and an unposted bill are all 404. Daily stays disabled — nothing supplies daily data yet.
 
    **A month's usage is counted once, by the rating engine's rule** (2026-11-27). A TOU meter's month holds a total read *and* one row per TOU period that reconcile to it; the page used to add every row, so a TOU customer saw roughly double what they used and were billed for. The endpoint now returns `monthly`: per meter, the total read wins and the TOU buckets stand in only where there is no total (an interval meter writes only buckets) — the same rule as `meter-loader.ts`, applied server-side so the portal and the bill cannot disagree. The table labels each row's TOU period (a Period column, shown only when the agreement has TOU rows) and shows "—" for a bucket's reading, which has no dial behind it and printed `0`.
 
@@ -190,7 +194,7 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 - Third-party payer access (restricted portal role)
 - Outage and service status page (external system integration)
 - Real authentication: password hashing, email verification, MFA via ApptorID
-- AMI interval data visualization on usage page (daily/hourly granularity)
+- AMI interval data visualization on usage page — **hourly built 2026-11-27** for billed time-of-use periods (a 24-hour profile by TOU period); daily granularity, and hourly for periods not rated on TOU, still to do
 
 ## Bozeman RFP Coverage
 
