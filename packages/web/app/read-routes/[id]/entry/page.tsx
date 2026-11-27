@@ -226,7 +226,7 @@ export default function ReadRouteEntryPage() {
        * A row that is a *code* has an empty field for that reason, and an
        * empty body clears both, so only a staged reading is cleared here.
        */
-      if (row.reading !== null || true) {
+      if (row.reading !== null) {
         setHeld((prev) => without(prev, row.rowId));
         if (!(await save(row, {}))) return;
       }
