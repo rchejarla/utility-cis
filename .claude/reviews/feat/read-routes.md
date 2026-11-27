@@ -239,7 +239,13 @@ ones): all pass except **`dev-seed.integration.test.ts` — 2 of 4 fail, and
 fail identically on a6ede6d with none of the index work** ("expected 61 to
 be less than 45", "expected 0 to be greater than 0"), so it predates this
 change; likely a date the seed or the test assumes, crossed by today's date.
-**Open, not investigated.** `reading-progress` (4) and `tou-readiness` (1)
+**Fixed 2026-11-27**: `seed.js` anchored its read series on the calendar
+month, which matches the billing window in force only on the 1st–9th; from
+R01's bill day on, a run swallowed both unbilled reads (61 days) and left
+none. It now anchors on `cycleWindow` (the `computeBillPeriod` rule, shared
+with the TOU fixture). dev-seed 4/4 today (the 27th, the failing case), and
+the anchor checked for the 1st, 8th, 9th, 10th, 11th, 31st, a year rollover
+and February. `reading-progress` (4) and `tou-readiness` (1)
 were failing too — their fixtures opened two live agreements at one premise,
 which 703b9da's trigger refuses; those suites had not run since. Fixed in
 the fixtures, not the trigger.

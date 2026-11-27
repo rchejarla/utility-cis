@@ -501,4 +501,6 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
   };
 }
 
-module.exports = { seedTouService };
+// `cycleWindow` too: seed.js anchors its own read series on the window in
+// force, by the same rule, rather than keeping a third copy of it.
+module.exports = { seedTouService, cycleWindow };

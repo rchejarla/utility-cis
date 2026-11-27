@@ -6,7 +6,7 @@ const { PrismaClient } = require("./packages/shared/src/generated/prisma");
 const { seedDelinquencyLadder } = require("./seed/delinquency-ladder.js");
 const { seedPaymentPlan } = require("./seed/payment-plan.js");
 const { seedTouCalendar } = require("./seed/tou-calendar.js");
-const { seedTouService } = require("./seed/tou-service.js");
+const { seedTouService, cycleWindow } = require("./seed/tou-service.js");
 
 /*
  * `@prisma/adapter-pg` and `pg` are declared by `packages/shared`, and
@@ -939,9 +939,31 @@ async function main() {
    * from it downstream — which period a run may close on, which bill
    * covers it — was then a day out from what this file says.
    */
+  /*
+   * **Anchored on the billing window in force, not on the calendar
+   * month.** The newest read belongs to the month *after* the window a run
+   * would bill today, so it is next period's read; the demo bills end one
+   * period before that window (`billPeriodEnd`, below), so a run has
+   * exactly one month to bill and leaves one read over.
+   *
+   * This was the current calendar month until 2026-11-27, which is the
+   * same thing only from the 1st to the 9th. From R01's bill day on, the
+   * window in force ends on *this* month's 10th, so it swallowed both
+   * unbilled reads at once: the first run billed a 61-day catch-up and
+   * left nothing for the next period. `dev-seed.integration.test.ts`
+   * failed on those two counts for the back two-thirds of every month.
+   *
+   * `cycleWindow` is `computeBillPeriod`'s rule, already used by the TOU
+   * fixture; R01's days because the accounts these reads are on bill on
+   * it. On the 10th–31st the newest read is up to a month ahead of today —
+   * as it already was on the 1st–7th, when the current month's 8th had
+   * not arrived yet. A next-period read has to sit after the window, and
+   * on the bill day itself nothing after the window has happened.
+   */
+  const R01_WINDOW = cycleWindow({ billDayOfMonth: 10, readDayOfMonth: 8 });
   const READ_DAY_UTC = new Date(Date.UTC(
-    new Date().getUTCFullYear(),
-    new Date().getUTCMonth(),
+    R01_WINDOW.endDate.getUTCFullYear(),
+    R01_WINDOW.endDate.getUTCMonth() + 1,
     15,
   ));
   const saList = await p.serviceAgreement.findMany({
