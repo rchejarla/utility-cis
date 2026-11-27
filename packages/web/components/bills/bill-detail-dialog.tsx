@@ -28,6 +28,8 @@ interface SegmentRow {
   credits: string;
   total: string;
   lines: SegmentLine[];
+  /** The comparison schedule a shadow bill would use, or null (spec 26, TOU-BIL-4). */
+  comparesWith?: string | null;
 }
 
 interface BillWithSegments {
@@ -113,6 +115,8 @@ interface ShadowBillView {
   };
   /** Comparison minus actual: positive means the comparison would have cost more. */
   difference: string;
+  /** Where a TOU comparison's usage by period came from; null for a standard comparison. */
+  touUsageFrom?: "registers" | "intervals" | null;
 }
 
 type ShadowState = { loading: true } | { data: ShadowBillView } | { error: string };
@@ -143,11 +147,12 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
   const [shadows, setShadows] = useState<Record<string, ShadowState>>({});
 
   /*
-   * Offered on a bill with time-of-use usage: in this slice the comparison
-   * runs TOU → standard, so a bill without TOU sections has nothing that
-   * could answer. The server is still the judge, and its refusal is shown.
+   * Offered per segment where its tariff names a comparison — TOU against
+   * standard or standard against TOU. The server is still the judge (a
+   * meter with no interval data cannot be priced on TOU), and its refusal
+   * is shown.
    */
-  const canCompare = (presentation?.touSections?.length ?? 0) > 0;
+  const canCompare = (seg: SegmentRow) => !!seg.comparesWith;
 
   const compare = (segmentId: string) => {
     setShadows((s) => ({ ...s, [segmentId]: { loading: true } }));
@@ -432,7 +437,7 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                     {seg.segmentNumber}
                   </span>
                   <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    {canCompare && !shadows[seg.id] && (
+                    {canCompare(seg) && !shadows[seg.id] && (
                       <SmallButton onClick={() => compare(seg.id)} label="Compare rates" />
                     )}
                     <span style={{ fontFamily: "monospace", fontSize: "13px", fontWeight: 600 }}>
@@ -657,6 +662,8 @@ function ShadowPanel({ state }: { state: ShadowState }) {
         </tbody>
       </table>
       <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+        {state.data.touUsageFrom === "intervals" &&
+          "Usage by time of day worked out from this meter's interval data, with the tariff's own hours. "}
         A comparison only — rated on request from this period&apos;s reads, never stored or sent to the customer.
       </div>
     </div>

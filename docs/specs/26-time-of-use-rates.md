@@ -16,10 +16,10 @@ unstarted.
   (TOU-BIL-1).
 - **Built 2026-11-27:** TOU on the bill — the usage-by-period table with
   shares and the hours footnote (TOU-BIL-2) — and the portal's billed
-  usage by period and by hour (TOU-BIL-3), and the staff shadow bill,
-  TOU → standard (TOU-BIL-4, slice 3a).
-- **Not built:** the rest of the shadow bill — standard → TOU from
-  intervals, and the portal toggle (TOU-BIL-4, slices 3b and 4); modeling (TOU-MOD-*, slice 4, overlapping
+  usage by period and by hour (TOU-BIL-3), and the staff shadow bill in
+  both directions — TOU → standard, and standard → TOU from registers or
+  classified intervals (TOU-BIL-4, slices 3a and 3b).
+- **Not built:** the shadow bill in the portal (TOU-BIL-4, slice 4); modeling (TOU-MOD-*, slice 4, overlapping
   spec 29); the TOU-INT-8 volume measurement; and the follow-ups marked
   in place — the register-mapping importer (§3a), the zoneless-file
   warning (§3b), predicting interval gaps at preview (TOU-INT-4a),
@@ -1860,14 +1860,35 @@ it is wrong.
     segment, the charge itself; if reads were corrected since, the shadow
     rates the corrected ones, and settling that is a rebill's job.
   - Refusals, all 409: `NO_COMPARISON_SCHEDULE`;
-    `COMPARISON_SCHEDULE_NOT_IN_FORCE`; and `SHADOW_TOU_NOT_AVAILABLE` for
-    the standard → TOU direction, which needs usage split by period that
-    a standard customer's meter has only as intervals (slice 3b).
+    `COMPARISON_SCHEDULE_NOT_IN_FORCE`; `COMPARISON_SCHEDULE_SAME_KIND`
+    when the version in force for the period is the same kind as the
+    billed tariff (kinds are checked at set time against the then latest
+    version, and a tariff can change kind across versions).
   - **UI:** the rate schedule page's "Compare against" field, and "Compare
-    rates" on each segment of the staff bill dialog for a bill with TOU
-    usage, captioned as a comparison never stored or sent.
+    rates" on each segment of the staff bill dialog whose tariff names a
+    comparison (`GET /api/v1/bills/:id` carries `comparesWith` per
+    segment), captioned as a comparison never stored or sent.
 
-  Not built: the standard → TOU direction (3b) and the portal toggle (4).
+  *Standard → TOU, "considering TOU", built 2026-11-27* (plan slice 3b):
+  a TOU tariff prices usage by period, so the comparison needs buckets
+  the standard customer's bill never had. `rateAgreementPeriod`'s `fill`
+  hook supplies the ones the loader left unset, after it has run:
+
+  - A meter that already carries **TOU bucket reads** (a TOU register
+    meter billed on a standard rate) uses them — what a TOU bill for it
+    would use. `touUsageFrom: "registers"`.
+  - A meter with **intervals** has them classified in memory by
+    `classifyIntervals`, the roll-up's own rules extracted from
+    `rollUpIntervals` (which now calls it), against the comparison
+    tariff's calendar, over the billed days as whole UTC days.
+    `touUsageFrom: "intervals"`, and the dialog says so. Nothing is
+    written — no bucket reads.
+  - It refuses as the roll-up does: `SHADOW_INTERVALS_INCOMPLETE` for a
+    gap, a missing interval, or one that cannot be classified or straddles
+    a boundary; and `SHADOW_NEEDS_INTERVALS` for a meter with neither
+    buckets nor intervals, which records how much was used, not when.
+
+  Not built: the portal toggle (slice 4).
 
 ## 7. Modeling (the stand-alone rate engine offer)
 

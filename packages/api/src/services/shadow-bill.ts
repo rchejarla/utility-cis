@@ -1,7 +1,10 @@
 import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "../lib/prisma.js";
 import type * as engine from "../lib/rate-engine/index.js";
+import { Decimal } from "../lib/rate-engine/decimal.js";
+import { loadTouCalendarById } from "../lib/rate-engine-loaders/load-tou-calendar.js";
 import { getBillSegment, rateAgreementPeriod, type BillSegmentLineRow } from "./bill-segment.service.js";
+import { classifyIntervals } from "./interval-rollup.service.js";
 
 /**
  * A shadow bill: what one billed period would have cost on the schedule
@@ -11,16 +14,23 @@ import { getBillSegment, rateAgreementPeriod, type BillSegmentLineRow } from "./
  * **Nothing is written.** It is rated through `rateAgreementPeriod`, the
  * same code that priced the bill, with the tariff's assignment swapped for
  * the comparison schedule's, and the result is returned and forgotten:
- * no segment, no lines, no `billedAt`, no audit row. That is the property
- * that lets it be offered freely — it is a question, not a transaction.
+ * no segment, no lines, no `billedAt`, no audit row, no bucket reads. That
+ * is the property that lets it be offered freely — it is a question, not
+ * a transaction.
  *
- * Built in this direction first (slice 3a): a **TOU** schedule compared
- * with its standard rate, which every TOU customer can be answered for,
- * since the standard rate prices total usage and total usage is always
- * there. The other direction — what TOU would have cost a standard
- * customer — needs usage split by period, which a standard customer's
- * meter has only if it records intervals; slice 3b classifies those.
- * Until then that direction is refused by name, not attempted.
+ * Both directions (slices 3a and 3b):
+ *
+ * - **TOU → standard.** The standard rate prices total usage, which every
+ *   TOU customer has.
+ * - **Standard → TOU** — "considering TOU". A TOU tariff prices usage by
+ *   period, which a standard customer has only if the meter can say when
+ *   it was used. A meter that already carries TOU bucket reads uses them;
+ *   one that records **intervals** has them classified here, in memory,
+ *   by `classifyIntervals` — the roll-up's own rules against the TOU
+ *   tariff's calendar, so the answer is the bill that customer would
+ *   actually get, refusals included: a gap, a missing interval or a
+ *   straddling one stops the comparison rather than pricing a short
+ *   month. A meter with neither is refused by name.
  *
  * The actual side is the **stored** segment, not a re-rate: it is what
  * the customer was charged. If reads were corrected after billing, the
@@ -45,9 +55,16 @@ export interface ShadowBill {
   shadow: ShadowSide;
   /** `shadow.total − actual.total`: positive means the comparison would have cost more. */
   difference: string;
+  /**
+   * Where the comparison's time-of-use usage came from, when it prices
+   * any: the meter's own TOU registers, or its intervals classified for
+   * this comparison. `null` when the comparison is a standard rate.
+   */
+  touUsageFrom: "registers" | "intervals" | null;
 }
 
 const day = (d: Date) => d.toISOString().slice(0, 10);
+const DAY_MS = 86_400_000;
 const refuse = (statusCode: number, code: string, message: string) =>
   Object.assign(new Error(message), { statusCode, code });
 
@@ -57,6 +74,9 @@ export async function shadowBill(utilityId: string, segmentId: string): Promise<
   const db = prisma as unknown as Prisma.TransactionClient;
 
   const swapped: Array<{ code: string; name: string; version: number }> = [];
+  /** The calendar of the TOU comparison, when there is one. */
+  let comparisonCalendarId: string | null = null;
+  let touUsageFrom: ShadowBill["touUsageFrom"] = null;
 
   const { base, result } = await rateAgreementPeriod(db, utilityId, segment.serviceAgreementId, period, {
     substitute: async (loaded) => {
@@ -83,14 +103,6 @@ export async function shadowBill(utilityId: string, segmentId: string): Promise<
           assignments.push(a); // Riders, taxes and anything else carry over unchanged.
           continue;
         }
-        if (own.touCalendarId === null) {
-          throw refuse(
-            409,
-            "SHADOW_TOU_NOT_AVAILABLE",
-            `${own.code} is a standard rate. What a time-of-use rate would have cost needs this customer's ` +
-              "usage split by time of day, which is not available yet.",
-          );
-        }
         const other = await prisma.rateSchedule.findFirst({
           where: {
             utilityId,
@@ -108,13 +120,21 @@ export async function shadowBill(utilityId: string, segmentId: string): Promise<
             `No published version of ${own.comparisonScheduleCode} was in effect on ${day(period.startDate)}.`,
           );
         }
-        if (other.touCalendarId !== null) {
+        /*
+         * The kinds were checked when the code was set, against the then
+         * latest version — but the version in force for this period is
+         * what is rated, and a tariff can change kind across versions.
+         */
+        if ((other.touCalendarId === null) === (own.touCalendarId === null)) {
           throw refuse(
             409,
-            "SHADOW_TOU_NOT_AVAILABLE",
-            `The version of ${other.code} in effect then is a time-of-use rate, so it cannot be compared yet.`,
+            "COMPARISON_SCHEDULE_SAME_KIND",
+            `The version of ${other.code} in effect on ${day(period.startDate)} is the same kind of tariff as ${own.code}, ` +
+              "so comparing them answers nothing.",
           );
         }
+        if (other.touCalendarId) comparisonCalendarId ??= other.touCalendarId;
+
         swapped.push({ code: other.code, name: other.name, version: other.version });
         assignments.push({
           ...a,
@@ -140,6 +160,68 @@ export async function shadowBill(utilityId: string, segmentId: string): Promise<
         });
       }
       return { ...loaded, assignments };
+    },
+
+    /*
+     * Standard → TOU: the buckets a TOU tariff prices, for a meter that
+     * has none. A meter's own bucket reads are left alone — they are what
+     * a TOU bill for it would use too.
+     */
+    fill: async ({ touKeys, vars }) => {
+      if (touKeys.length === 0 || !comparisonCalendarId) return;
+      touUsageFrom = "registers";
+      const missing = touKeys.filter((k) => !vars.has(k));
+      if (missing.length === 0) return;
+      touUsageFrom = "intervals";
+
+      // The billed days, as a half-open window of whole UTC days — the
+      // span the meter loader reads a period's reads over.
+      const window = {
+        startDate: period.startDate,
+        endDate: new Date(period.endDate.getTime() + DAY_MS),
+      };
+      const load = await loadTouCalendarById(prisma, { utilityId, id: comparisonCalendarId, period: window });
+      if (!load.ok) throw refuse(409, "SHADOW_TOU_CALENDAR", load.problem);
+
+      const meterIds = [...new Set(missing.map((k) => k.split(":")[2]!))];
+      const meters = await prisma.meter.findMany({
+        where: { utilityId, id: { in: meterIds } },
+        select: { id: true, meterNumber: true, uom: { select: { code: true } } },
+      });
+      for (const meter of meters) {
+        const intervals = await prisma.meterReadInterval.findMany({
+          where: {
+            utilityId,
+            meterId: meter.id,
+            intervalStart: { gte: window.startDate, lt: window.endDate },
+          },
+          orderBy: { intervalStart: "asc" },
+          select: { intervalStart: true, lengthMinutes: true, quantity: true, quality: true },
+        });
+        if (intervals.length === 0) {
+          throw refuse(
+            409,
+            "SHADOW_NEEDS_INTERVALS",
+            `Meter ${meter.meterNumber} records how much was used, not when, so what a time-of-use rate ` +
+              "would have cost cannot be worked out for it.",
+          );
+        }
+        const classified = classifyIntervals(load.calendar, intervals, window);
+        if (!classified.ok) {
+          throw refuse(
+            409,
+            "SHADOW_INTERVALS_INCOMPLETE",
+            `Meter ${meter.meterNumber}'s interval data for this period cannot be split by time of day: ` +
+              classified.problems.join(" "),
+          );
+        }
+        for (const b of classified.buckets) {
+          const key = `meter:tou:${meter.id}:${b.peakCode}`;
+          if (!vars.has(key)) {
+            vars.set(key, { quantity: new Decimal(b.quantity), unit: meter.uom?.code ?? "KWH" });
+          }
+        }
+      }
     },
   });
 
@@ -192,5 +274,6 @@ export async function shadowBill(utilityId: string, segmentId: string): Promise<
       })),
     },
     difference: shadowTotal.minus(actualTotal).toFixed(4),
+    touUsageFrom,
   };
 }
