@@ -149,13 +149,32 @@ beforeEach(() =>
     await resetDb();
     fix = await makeTenantFixture(prisma, TENANT_A);
     await ensurePrincipal(prisma, TENANT_A);
-    for (const moduleKey of ["agreements", "rate_schedules"]) {
+    for (const moduleKey of ["agreements", "rate_schedules", "billing"]) {
       await prisma.utilityModule.create({ data: { utilityId: fix.utilityId, moduleKey } });
     }
     await (await import("../../services/rbac.service.js")).invalidateTenantModulesCache(fix.utilityId);
 
+    /*
+     * One season all year, on UTC so the arithmetic needs no offsets:
+     * weekdays 17:00–20:00 peak, everything else off-peak. The 3a tests
+     * price from bucket reads and never consult the hours; 3b classifies
+     * intervals against them.
+     */
     const seasonSet = await prisma.seasonSet.create({
       data: { utilityId: fix.utilityId, name: "Seasons", effectiveDate: new Date("2026-01-01"), publishedAt: new Date() },
+    });
+    await prisma.season.create({
+      data: {
+        utilityId: fix.utilityId,
+        seasonSetId: seasonSet.id,
+        seasonCode: "all",
+        label: "All year",
+        startMonth: 1,
+        startDay: 1,
+        endMonth: 12,
+        endDay: 31,
+        sortOrder: 0,
+      },
     });
     calendarId = (
       await prisma.touCalendar.create({
@@ -165,11 +184,37 @@ beforeEach(() =>
           effectiveDate: new Date("2026-01-01"),
           publishedAt: new Date(),
           seasonSetId: seasonSet.id,
-          timeZone: "America/Denver",
+          timeZone: "UTC",
           clockBasis: "prevailing",
         },
       })
     ).id;
+    const dayTypes: Record<string, string> = {};
+    for (const [code, weekdays] of [["weekday", [1, 2, 3, 4, 5]], ["weekend", [6, 7]]] as const) {
+      const dt = await prisma.touDayType.create({
+        data: { utilityId: fix.utilityId, touCalendarId: calendarId, dayTypeCode: code, label: code },
+      });
+      dayTypes[code] = dt.id;
+      await prisma.touDayTypeWeekday.createMany({
+        data: weekdays.map((isoWeekday) => ({ utilityId: fix.utilityId, touCalendarId: calendarId, touDayTypeId: dt.id, isoWeekday })),
+      });
+    }
+    await prisma.touSlot.createMany({
+      data: [
+        { dayType: "weekday", peakCode: "off_peak", start: 0, end: 1020 },
+        { dayType: "weekday", peakCode: "peak", start: 1020, end: 1200 },
+        { dayType: "weekday", peakCode: "off_peak", start: 1200, end: 1440 },
+        { dayType: "weekend", peakCode: "off_peak", start: 0, end: 1440 },
+      ].map((s) => ({
+        utilityId: fix.utilityId,
+        touCalendarId: calendarId,
+        seasonCode: "all",
+        touDayTypeId: dayTypes[s.dayType]!,
+        peakCode: s.peakCode,
+        startMinute: s.start,
+        endMinute: s.end,
+      })),
+    });
 
     touId = await schedule({
       code: "RES-TOU",
@@ -266,6 +311,42 @@ describe("GET /api/v1/bill-segments/:id/shadow", () => {
     expect(Number(body.shadow.total)).toBe(510);
   });
 
+  it("tells the bill dialog which segments can be compared", async () => {
+    await month("2026-07-31", 1000, 200, 800);
+    const seg = await bill("2026-07-01", "2026-07-31");
+    const billId = await asPlatform(async () => {
+      const { prisma } = prismaImports;
+      const b = await prisma.bill.create({
+        data: {
+          utilityId: fix.utilityId,
+          accountId: fix.accountId,
+          billingCycleId: fix.billingCycleId,
+          periodStart: new Date("2026-07-01"),
+          periodEnd: new Date("2026-07-31"),
+          billDate: new Date("2026-07-31"),
+          dueDate: new Date("2026-08-20"),
+          subtotal: seg.total,
+          taxes: "0",
+          credits: "0",
+          total: seg.total,
+          billNumber: "B-SHADOW-1",
+        },
+      });
+      await prisma.billSegment.update({ where: { id: seg.id }, data: { billId: b.id } });
+      return b.id;
+    });
+
+    const res = await app.inject({ method: "GET", url: `/api/v1/bills/${billId}`, headers: headers() });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().segments[0].comparesWith).toBe("RES-STD");
+
+    await asPlatform(() =>
+      prismaImports.prisma.rateSchedule.update({ where: { id: touId }, data: { comparisonScheduleCode: null } }),
+    );
+    const after = await app.inject({ method: "GET", url: `/api/v1/bills/${billId}`, headers: headers() });
+    expect(after.json().segments[0].comparesWith).toBeNull();
+  });
+
   it("refuses when the tariff names no comparison schedule", async () => {
     await month("2026-07-31", 1000, 200, 800);
     const seg = await bill("2026-07-01", "2026-07-31");
@@ -279,19 +360,117 @@ describe("GET /api/v1/bill-segments/:id/shadow", () => {
     expect(res.json().error?.code ?? res.json().code).toBe("NO_COMPARISON_SCHEDULE");
   });
 
-  it("refuses the standard → TOU direction by name until interval classification exists", async () => {
-    await asPlatform(async () => {
+});
+
+/*
+ * Standard → TOU, "considering TOU" (slice 3b). The customer is on the
+ * standard rate; what would the TOU tariff have charged?
+ *
+ * One weekday, Wednesday 1 July 2026, hourly at 1 kWh an hour:
+ *   STD v1   $10 + 24 kWh × 0.12                        = $12.88
+ *   TOU      $10 + 3 kWh peak × 0.30 + 21 off × 0.08    = $12.58
+ */
+describe("standard → TOU", () => {
+  beforeEach(() =>
+    asPlatform(async () => {
       const { prisma } = prismaImports;
+      await prisma.rateSchedule.update({ where: { id: touId }, data: { comparisonScheduleCode: null } });
       await prisma.rateSchedule.update({ where: { id: stdV1Id }, data: { comparisonScheduleCode: "RES-TOU" } });
       await prisma.sAScheduleAssignment.updateMany({ where: { serviceAgreementId: saId }, data: { rateScheduleId: stdV1Id } });
+    }),
+  );
+
+  /** The day's total read, as a standard meter reports it. */
+  const totalRead = (kwh: number) =>
+    asPlatform(() =>
+      prismaImports.prisma.meterRead.create({
+        data: {
+          utilityId: fix.utilityId,
+          meterId: fix.meterId,
+          serviceAgreementId: saId,
+          uomId: fix.uomId,
+          readDate: new Date("2026-07-01"),
+          readDatetime: new Date("2026-07-01T23:00:00Z"),
+          reading: kwh,
+          priorReading: 0,
+          consumption: kwh,
+          readType: "ACTUAL",
+          readSource: "AMI",
+        },
+      }),
+    );
+
+  /** Hourly intervals at 1 kWh, from one UTC instant to another, skipping any hour listed. */
+  const hourly = (from: string, to: string, skip: number[] = []) =>
+    asPlatform(async () => {
+      const rows = [];
+      for (let t = Date.parse(from); t < Date.parse(to); t += 3_600_000) {
+        if (skip.includes(new Date(t).getUTCHours())) continue;
+        rows.push({
+          utilityId: fix.utilityId,
+          meterId: fix.meterId,
+          uomId: fix.uomId,
+          intervalStart: new Date(t),
+          lengthMinutes: 60,
+          quantity: "1.000000",
+          quality: "actual",
+        });
+      }
+      await prismaImports.prisma.meterReadInterval.createMany({ data: rows });
     });
+
+  it("prices an interval meter on the TOU tariff from its own intervals, and writes nothing", async () => {
+    await totalRead(24);
+    await hourly("2026-07-01T00:00:00Z", "2026-07-02T00:00:00Z");
+    const seg = await bill("2026-07-01", "2026-07-01");
+    expect(Number(seg.total)).toBe(12.88);
+    const before = await counts();
+    const readsBefore = await asPlatform(() => prismaImports.prisma.meterRead.count());
+
+    const res = await shadow(seg.id);
+
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json();
+    expect(body.shadow.schedules).toEqual([{ code: "RES-TOU", name: "RES-TOU", version: 1 }]);
+    expect(Number(body.shadow.total)).toBe(12.58);
+    expect(body.difference).toBe("-0.3000");
+    expect(body.touUsageFrom).toBe("intervals");
+    const peak = body.shadow.lines.find((l: { label: string }) => l.label === "peak energy");
+    expect(Number(peak.quantity)).toBe(3);
+    // No segment, line or audit row — and no bucket reads left behind.
+    expect(await counts()).toEqual(before);
+    expect(await asPlatform(() => prismaImports.prisma.meterRead.count())).toBe(readsBefore);
+  });
+
+  it("uses a meter's own TOU registers where it has them", async () => {
     await month("2026-07-31", 1000, 200, 800);
     const seg = await bill("2026-07-01", "2026-07-31");
+
+    const body = (await shadow(seg.id)).json();
+
+    expect(body.touUsageFrom).toBe("registers");
+    expect(Number(body.shadow.total)).toBe(134); // The 3a figure, from the same buckets.
+  });
+
+  it("refuses a meter that records totals only", async () => {
+    await totalRead(24);
+    const seg = await bill("2026-07-01", "2026-07-01");
 
     const res = await shadow(seg.id);
 
     expect(res.statusCode).toBe(409);
-    expect(res.json().error?.code ?? res.json().code).toBe("SHADOW_TOU_NOT_AVAILABLE");
+    expect(res.json().error?.code ?? res.json().code).toBe("SHADOW_NEEDS_INTERVALS");
+  });
+
+  it("refuses intervals with a gap rather than pricing a short day", async () => {
+    await totalRead(24);
+    await hourly("2026-07-01T00:00:00Z", "2026-07-02T00:00:00Z", [18]);
+    const seg = await bill("2026-07-01", "2026-07-01");
+
+    const res = await shadow(seg.id);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error?.code ?? res.json().code).toBe("SHADOW_INTERVALS_INCOMPLETE");
   });
 });
 

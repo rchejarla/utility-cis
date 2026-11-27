@@ -1,5 +1,8 @@
 import { prisma } from "../lib/prisma.js";
-import { loadTouCalendarById } from "../lib/rate-engine-loaders/load-tou-calendar.js";
+import {
+  loadTouCalendarById,
+  type LoadedTouCalendar,
+} from "../lib/rate-engine-loaders/load-tou-calendar.js";
 import { findCoverageProblems } from "../lib/interval-coverage.js";
 import { peakCodesUsedBy, resolvePeak } from "../lib/rate-engine/tou-calendar.js";
 import { toLocalMoment } from "../lib/rate-engine/tou-clock.js";
@@ -84,6 +87,110 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
     };
   }
 
+  const classified = classifyIntervals(calendar, intervals, period);
+  if (!classified.ok) {
+    return { ok: false, problems: classified.problems, intervalsRead: intervals.length };
+  }
+  const { buckets, totals } = classified;
+
+  /*
+   * Stamped at the end of the period, like a register meter's read: the
+   * bucket describes consumption up to that moment, and the loader
+   * selects reads by `readDatetime` within the billing period.
+   */
+  const readDatetime = new Date(period.endDate.getTime() - 1);
+  const readDate = new Date(readDatetime.toISOString().slice(0, 10));
+
+  const readEventId = await prisma.$transaction(async (tx) => {
+    /*
+     * Replace, so a re-run after a correction does not double the
+     * month. Only this meter's interval-derived rows for this period
+     * are removed — `reading: null` is what distinguishes them from a
+     * register meter's buckets, which have dials behind them and are
+     * not ours to delete.
+     */
+    await tx.meterRead.deleteMany({
+      where: {
+        utilityId,
+        meterId,
+        readDatetime: { gte: period.startDate, lt: period.endDate },
+        peakCode: { not: null },
+        reading: null,
+        billedAt: null,
+      },
+    });
+
+    const eventId = crypto.randomUUID();
+    await tx.meterRead.createMany({
+      data: buckets.map((b) => ({
+        utilityId,
+        meterId,
+        serviceAgreementId,
+        readEventId: eventId,
+        uomId,
+        readDate,
+        readDatetime,
+        // No dial. A sum over classified intervals has no cumulative
+        // reading, and inventing one would put a number on the bill
+        // that matches nothing on the device.
+        reading: null,
+        priorReading: null,
+        consumption: b.quantity,
+        peakCode: b.peakCode,
+        /*
+         * Measured or estimated — which is what this column is for.
+         * It held `AMI` until 2026-11-06, a *source*, which
+         * `readSource` beside it already said; so the one column that
+         * could tell a customer their on-peak charge rests on an
+         * estimate said nothing, and TOU-GAP-2's "a bill containing any
+         * estimate says so" had nothing to read.
+         *
+         * Per bucket, so an estimated on-peak hour does not make the
+         * month's off-peak figure an estimate too.
+         */
+        readType: (totals.get(b.peakCode)?.estimated ?? 0) > 0 ? ("ESTIMATED" as const) : ("ACTUAL" as const),
+        readSource: "AMI" as const,
+      })),
+    });
+    return eventId;
+  });
+
+  return { ok: true, buckets, intervalsRead: intervals.length, readEventId };
+}
+
+/** One interval row, as the classifier needs it. */
+export interface ClassifiableInterval {
+  intervalStart: Date;
+  lengthMinutes: number;
+  quantity: { toString(): string } | number | string;
+  quality: string;
+}
+
+export type ClassifyResult =
+  | {
+      ok: true;
+      buckets: IntervalBucket[];
+      /** Per peak code: the sum, the intervals in it, and how many were estimates. */
+      totals: Map<string, { sum: number; intervals: number; estimated: number }>;
+    }
+  | { ok: false; problems: string[] };
+
+/**
+ * Classify a period's intervals into TOU buckets, and write nothing.
+ *
+ * The roll-up's rules, extracted on 2026-11-27 so the shadow bill (spec
+ * 26, TOU-BIL-4) can price a standard customer on a TOU tariff from
+ * **exactly** the classification a real TOU bill would get — not a
+ * second implementation that could disagree with the first about a
+ * straddling interval or a missing day. It refuses on the same things:
+ * a coverage gap, a `missing` interval, one that cannot be classified,
+ * one straddling a period change.
+ */
+export function classifyIntervals(
+  calendar: LoadedTouCalendar,
+  intervals: ClassifiableInterval[],
+  period: { startDate: Date; endDate: Date },
+): ClassifyResult {
   const problems: string[] = [];
   /** peakCode → [sum, count]. A Map keeps the calendar's own codes. */
   /**
@@ -198,7 +305,7 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
     if (problems.length > shown.length) {
       shown.push(`…and ${problems.length - shown.length} more.`);
     }
-    return { ok: false, problems: shown, intervalsRead: intervals.length };
+    return { ok: false, problems: shown };
   }
 
   const buckets: IntervalBucket[] = [...totals.entries()]
@@ -209,67 +316,5 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
     }))
     .sort((a, b) => a.peakCode.localeCompare(b.peakCode));
 
-  /*
-   * Stamped at the end of the period, like a register meter's read: the
-   * bucket describes consumption up to that moment, and the loader
-   * selects reads by `readDatetime` within the billing period.
-   */
-  const readDatetime = new Date(period.endDate.getTime() - 1);
-  const readDate = new Date(readDatetime.toISOString().slice(0, 10));
-
-  const readEventId = await prisma.$transaction(async (tx) => {
-    /*
-     * Replace, so a re-run after a correction does not double the
-     * month. Only this meter's interval-derived rows for this period
-     * are removed — `reading: null` is what distinguishes them from a
-     * register meter's buckets, which have dials behind them and are
-     * not ours to delete.
-     */
-    await tx.meterRead.deleteMany({
-      where: {
-        utilityId,
-        meterId,
-        readDatetime: { gte: period.startDate, lt: period.endDate },
-        peakCode: { not: null },
-        reading: null,
-        billedAt: null,
-      },
-    });
-
-    const eventId = crypto.randomUUID();
-    await tx.meterRead.createMany({
-      data: buckets.map((b) => ({
-        utilityId,
-        meterId,
-        serviceAgreementId,
-        readEventId: eventId,
-        uomId,
-        readDate,
-        readDatetime,
-        // No dial. A sum over classified intervals has no cumulative
-        // reading, and inventing one would put a number on the bill
-        // that matches nothing on the device.
-        reading: null,
-        priorReading: null,
-        consumption: b.quantity,
-        peakCode: b.peakCode,
-        /*
-         * Measured or estimated — which is what this column is for.
-         * It held `AMI` until 2026-11-06, a *source*, which
-         * `readSource` beside it already said; so the one column that
-         * could tell a customer their on-peak charge rests on an
-         * estimate said nothing, and TOU-GAP-2's "a bill containing any
-         * estimate says so" had nothing to read.
-         *
-         * Per bucket, so an estimated on-peak hour does not make the
-         * month's off-peak figure an estimate too.
-         */
-        readType: (totals.get(b.peakCode)?.estimated ?? 0) > 0 ? ("ESTIMATED" as const) : ("ACTUAL" as const),
-        readSource: "AMI" as const,
-      })),
-    });
-    return eventId;
-  });
-
-  return { ok: true, buckets, intervalsRead: intervals.length, readEventId };
+  return { ok: true, buckets, totals };
 }

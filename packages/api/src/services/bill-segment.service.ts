@@ -360,7 +360,21 @@ export async function rateAgreementPeriod(
   utilityId: string,
   saId: string,
   period: { startDate: Date; endDate: Date },
-  opts: { substitute?: (base: engine.BaseContext) => Promise<engine.BaseContext> } = {},
+  opts: {
+    substitute?: (base: engine.BaseContext) => Promise<engine.BaseContext>;
+    /**
+     * Supply variables the loaders left unset, after they have run — the
+     * shadow bill's TOU buckets for a meter that has intervals but no
+     * bucket reads (slice 3b). Given what was loaded, so it can fill
+     * gaps without overriding a meter's own registers.
+     */
+    fill?: (ctx: {
+      base: engine.BaseContext;
+      meterIds: string[];
+      touKeys: string[];
+      vars: Map<string, unknown>;
+    }) => Promise<void>;
+  } = {},
 ): Promise<{ base: engine.BaseContext; result: ReturnType<typeof engine.rate>; meterIds: string[] }> {
   // 1. loadBase — assignments + components + snapshots
   let base = await loadBase(tx as unknown as typeof prisma, saId, period, utilityId);
@@ -460,6 +474,7 @@ export async function rateAgreementPeriod(
     period,
   });
   const vars = await registry.loadVariables([...manifestKeys, ...meterKeys, ...touKeys]);
+  if (opts.fill) await opts.fill({ base, meterIds, touKeys, vars: vars as Map<string, unknown> });
 
   // 6. rate
   const result = engine.rate({ base, vars });

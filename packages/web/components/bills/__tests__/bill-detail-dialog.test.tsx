@@ -481,14 +481,19 @@ describe("Bill detail — fees and adjustments", () => {
       },
     ],
   };
-  function routeWithShadow(shadow: unknown) {
+  /** A bill whose one segment's tariff names `comparesWith` as its comparison. */
+  function comparableBill(comparesWith: string | null) {
+    const b = bill([line()]);
+    return { ...b, segments: [{ ...b.segments[0], comparesWith }] };
+  }
+  function routeWithShadow(shadow: unknown, comparesWith: string | null = "RES-STD") {
     get.mockImplementation((path: string) => {
       if (path.includes("/shadow")) {
         return shadow instanceof Error ? Promise.reject(shadow) : Promise.resolve(shadow);
       }
       if (path.includes("/presentation")) return Promise.resolve(presentation(TOU));
       if (path.includes("/deliveries")) return Promise.resolve([]);
-      return Promise.resolve(bill([line()]));
+      return Promise.resolve(comparableBill(comparesWith));
     });
   }
 
@@ -524,12 +529,36 @@ describe("Bill detail — fees and adjustments", () => {
     );
   });
 
-  it("offers no comparison on a bill without TOU usage", async () => {
-    routeGets(presentation());
+  it("offers no comparison where the tariff names none", async () => {
+    routeWithShadow({}, null);
     renderDialog();
 
     await screen.findByText("4.71 HCF");
     expect(screen.queryByRole("button", { name: "Compare rates" })).not.toBeInTheDocument();
+  });
+
+  it("says when a TOU comparison's usage was worked out from interval data", async () => {
+    // Standard → TOU (slice 3b): a standard customer, asked what TOU would have cost.
+    routeWithShadow(
+      {
+        shadow: {
+          schedules: [{ code: "RES-TOU", name: "Residential TOU", version: 1 }],
+          total: "12.5800",
+          lines: [{ label: "peak energy", kindCode: "consumption", amount: "0.9000", quantity: "3.0000", unit: "kWh" }],
+        },
+        difference: "-0.3000",
+        touUsageFrom: "intervals",
+      },
+      "RES-TOU",
+    );
+    renderDialog();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Compare rates" }));
+
+    const panel = await screen.findByTestId("shadow-bill");
+    expect(within(panel).getByText("RES-TOU v1")).toBeInTheDocument();
+    expect(within(panel).getByText(/worked out from this meter's interval data/)).toBeInTheDocument();
+    expect(within(panel).getByTestId("shadow-difference").textContent).toMatch(/\$0\.30 less than billed/);
   });
 
   /*

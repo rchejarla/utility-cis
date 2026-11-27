@@ -46,6 +46,13 @@ export interface BillSegmentRow {
   credits: string;
   total: string;
   lines: BillSegmentLineRow[];
+  /**
+   * The comparison schedule code named by a schedule that priced this
+   * segment, or null — whether a shadow bill can be asked for (spec 26,
+   * TOU-BIL-4). Carried so the dialog offers "Compare rates" only where
+   * there is something to compare with, in either direction.
+   */
+  comparesWith: string | null;
 }
 
 export interface BillSummary {
@@ -442,6 +449,19 @@ async function assembleBillWithSegments(
       },
     },
   });
+  // Which of the schedules that priced it name a comparison — one query for the bill.
+  const comparisons = new Map(
+    (
+      await tx.rateSchedule.findMany({
+        where: {
+          utilityId,
+          id: { in: [...new Set(bill.segments.flatMap((s) => s.lines.map((l) => l.sourceScheduleId)))] },
+          comparisonScheduleCode: { not: null },
+        },
+        select: { id: true, comparisonScheduleCode: true },
+      })
+    ).map((r) => [r.id, r.comparisonScheduleCode!]),
+  );
   return {
     id: bill.id,
     utilityId: bill.utilityId,
@@ -481,6 +501,8 @@ async function assembleBillWithSegments(
       credits: s.credits.toFixed(4),
       total: s.total.toFixed(4),
       lines: s.lines.map(toBillSegmentLineRow),
+      comparesWith:
+        s.lines.map((l) => comparisons.get(l.sourceScheduleId)).find((c) => c !== undefined) ?? null,
     })),
   };
 }
