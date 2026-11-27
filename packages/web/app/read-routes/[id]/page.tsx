@@ -53,7 +53,8 @@ import { usePermission } from "@/lib/use-permission";
  * saying about one.
  */
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Local calendar day, not UTC's — see the entry page's `todayIso`.
+const today = () => new Date().toLocaleDateString("en-CA");
 
 const addressOf = (p: PremiseSummary) =>
   [p.addressLine1, p.addressLine2].filter(Boolean).join(" ") + `, ${p.city}`;

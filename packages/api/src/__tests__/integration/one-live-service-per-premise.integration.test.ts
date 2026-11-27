@@ -166,6 +166,60 @@ describe("one live service per premise and commodity (real DB)", () => {
     ).rejects.toThrow(/ONE_LIVE_SERVICE_PER_PREMISE: agreement SA-ONE already serves this premise/);
   });
 
+  /*
+   * Two CSRs opening service at one address at once. Under READ COMMITTED
+   * neither transaction's check can see the other's uncommitted point, so
+   * a check without a lock lets both commit. The first transaction is held
+   * open after its insert; the second must wait for it and then be refused
+   * — without the advisory lock (20261127090000) it commits at once and
+   * this fails with two fulfilled.
+   */
+  it("refuses the second of two openings that race at one premise", async () => {
+    const { prisma } = prismaImports;
+    const a = await agreement({ number: "SA-RACE-A" });
+    const b = await agreement({ number: "SA-RACE-B" });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    const insert = (agreementId: string, holdOpen: Promise<void>) =>
+      seedAsPlatform(async () =>
+        prisma.$transaction(
+          async (tx) => {
+            await tx.servicePoint.create({
+              data: {
+                utilityId: fixA.utilityId,
+                serviceAgreementId: agreementId,
+                premiseId: fixA.premiseId,
+                type: "METERED",
+                status: "ACTIVE",
+                startDate: new Date("2024-01-01"),
+              },
+            });
+            await holdOpen;
+          },
+          { timeout: 30_000, maxWait: 30_000 },
+        ),
+      );
+
+    const first = insert(a.id, gate);
+    await pause(750); // the first has inserted and holds the lock
+    const second = insert(b.id, Promise.resolve());
+    await pause(750); // the second is waiting on it, or — unlocked — already committed
+    release();
+    const settled = await Promise.allSettled([first, second]);
+
+    expect(settled[0].status).toBe("fulfilled");
+    expect(settled[1].status).toBe("rejected");
+    expect(String((settled[1] as PromiseRejectedResult).reason)).toMatch(
+      /ONE_LIVE_SERVICE_PER_PREMISE: agreement SA-RACE-A/,
+    );
+    const live = await seedAsPlatform(async () =>
+      prisma.servicePoint.count({ where: { serviceAgreementId: { in: [a.id, b.id] } } }),
+    );
+    expect(live).toBe(1);
+  });
+
   it("allows a different commodity at the same premise", async () => {
     const water = await agreement({ number: "SA-WATER" });
     await openPoint({ agreementId: water.id, premiseId: fixA.premiseId });

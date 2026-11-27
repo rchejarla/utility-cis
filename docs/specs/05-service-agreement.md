@@ -184,6 +184,15 @@ hand-over and is allowed. `one-live-service-per-premise.integration.test.ts` pin
 seven cases against a real database, including that an `UPDATE` reopening a closed
 point is judged too.
 
+**Concurrent openings take turns** (migration `20261127090000`, 2026-11-27). The
+trigger as first written was a plain `SELECT` under READ COMMITTED, so two CSRs
+opening service at one address at once each missed the other's uncommitted point and
+both committed — the case its own migration comment claimed to close. It now takes
+`pg_advisory_xact_lock` on (tenant, premise, commodity) before the check, so the second
+writer waits for the first and is then refused. Only writers of that one key ever wait.
+The integration suite holds one transaction open after its insert and asserts the
+second is refused.
+
 **What this section claimed until 2026-11-18, and why it was wrong.** The intent since
 April was a partial GIST exclusion constraint `no_overlapping_active_sa` (migration
 `20260427143408`) on a generated `effective_range tsrange` column. What was actually in
@@ -398,6 +407,7 @@ Migrations applied in this slice:
 | `20260427144400_sa_lifecycle_invariants` | `enforce_sa_lifecycle_invariants` BEFORE INSERT/UPDATE trigger on `service_agreement` |
 | `20260427162359_point_in_time_helpers` | `responsible_account_at()` and `meter_assignment_at()` SQL functions |
 | `20261118110000_one_live_service_per_premise` | `enforce_one_live_service_per_premise()` + the `before_one_live_service_per_premise` trigger on `service_point`. **Note that `20260427143408`'s exclusion constraint is no longer in the database** — only its generated column survived the 2026-10-18 squash. See **Effective-Range Overlap Prevention** above |
+| `20261127090000_one_live_service_lock` | `CREATE OR REPLACE` of `enforce_one_live_service_per_premise()` adding the advisory lock, so two concurrent openings at one premise cannot both pass. See **Effective-Range Overlap Prevention** above |
 | `20261118120000_restore_date_order_checks` | `chk_spm_removed_ge_added` on `service_point_meter`, which `20260427143900` added and the squash dropped, plus `chk_sp_end_ge_start` on `service_point`, which never existed — that table had no CHECK constraints at all. Both verified against the data before adding |
 
 **Pre-existing data:** the new constraints don't reject existing rows — they only block new violations. However, pre-existing orphaned `service_agreement_meter` rows (parent SA is FINAL/CLOSED but the SAM has `removed_date IS NULL`) will continue to exist until a separate cleanup is run. This is the bug `closeServiceAgreement` fixes prospectively, but historical orphans need a one-time `UPDATE service_agreement_meter SET removed_date = sa.end_date FROM service_agreement sa WHERE service_agreement_id = sa.id AND removed_date IS NULL AND sa.status IN ('FINAL', 'CLOSED')` script. **Tracked as a follow-up task; not in Slice 1.**

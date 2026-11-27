@@ -289,7 +289,7 @@ describe("Read route detail — the walk", () => {
     expect(screen.getByRole("button", { name: /sheet/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /enter readings/i })).toHaveAttribute(
       "href",
-      `/read-routes/rt-1/entry?date=${new Date().toISOString().slice(0, 10)}`,
+      `/read-routes/rt-1/entry?date=${new Date().toLocaleDateString("en-CA")}`,
     );
   });
 

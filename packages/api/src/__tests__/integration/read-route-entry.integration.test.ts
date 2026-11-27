@@ -718,6 +718,57 @@ describe("reopening for corrections", () => {
     ).resolves.toMatchObject({ reading: "160" });
   });
 
+  /*
+   * A resubmit with nothing left to post: the refused row is cleared
+   * rather than given a number. The batch's totals are still the sheet's —
+   * this pass posting nothing used to report the route's 1 posted read as
+   * 0 and judge the batch on the corrections alone.
+   */
+  it("keeps the sheet's totals when the correction posts nothing", async () => {
+    const routeId = await makeRoute();
+    const posted = await makeStop(routeId);
+    const refused = await makeStop(routeId);
+    await priorRead(refused, false);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: posted.meterId, registerId: null, reading: 150 });
+    await save(batchId, { meterId: refused.meterId, registerId: null, skipReason: "DOG" });
+    expect(await submit(batchId)).toMatchObject({ status: "PARTIAL", importedCount: 1, errorCount: 1 });
+
+    await reopen(routeId);
+    // The reader concedes the stop: the code is cleared, nothing typed.
+    await save(batchId, { meterId: refused.meterId, registerId: null });
+    const again = await submit(batchId);
+
+    expect(again).toMatchObject({ status: "COMPLETE", importedCount: 1, errorCount: 0 });
+    const batch = await seed((p) => p.importBatch.findUniqueOrThrow({ where: { id: batchId } }));
+    expect(batch).toMatchObject({ status: "COMPLETE", importedCount: 1, errorCount: 0 });
+  });
+
+  /*
+   * A submit marks billed-period rows ERROR before it posts anything, so a
+   * batch mid-submit already looks correctable. Reopening it then would
+   * hand PENDING rows to a second submit while the first is still posting
+   * them — two reads per meter, which no unique key refuses.
+   */
+  it("refuses to reopen a sheet that is still being submitted", async () => {
+    const routeId = await makeRoute();
+    const s = await makeStop(routeId);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: s.meterId, registerId: null, reading: 150 });
+    // The state a running submit is in once it has refused a row.
+    await seed(async (p) => {
+      await p.importBatch.update({ where: { id: batchId }, data: { status: "PROCESSING" } });
+      await p.importRow.updateMany({
+        where: { importBatchId: batchId },
+        data: { status: "ERROR", errorCode: "READ_BILLED" },
+      });
+    });
+
+    await expect(reopen(routeId)).rejects.toMatchObject({ statusCode: 409, code: "ENTRY_NOT_FINISHED" });
+    const batch = await seed((p) => p.importBatch.findUniqueOrThrow({ where: { id: batchId } }));
+    expect(batch.status).toBe("PROCESSING");
+  });
+
   it("refuses a sheet with nothing to correct, and a route with no entry at all", async () => {
     const routeId = await makeRoute();
     const s = await makeStop(routeId);

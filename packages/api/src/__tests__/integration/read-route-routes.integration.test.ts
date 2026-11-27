@@ -175,7 +175,7 @@ async function makeRoute(
  * data-quality case §5.1 says the route page lists.
  */
 async function makePremise(
-  opts: { accountId?: string; priorReads?: number[] } = {},
+  opts: { accountId?: string; priorReads?: number[]; multiplier?: number } = {},
 ): Promise<{ premiseId: string; meterId: string; meterNumber: string; agreementId: string }> {
   const n = ++seq;
   return seedAsPlatform(async () => {
@@ -220,6 +220,7 @@ async function makePremise(
         meterType: "MANUAL",
         status: "ACTIVE",
         installDate: new Date("2024-01-01"),
+        ...(opts.multiplier !== undefined ? { multiplier: opts.multiplier } : {}),
       },
     });
     await prisma.servicePointMeter.create({
@@ -255,7 +256,8 @@ async function makePremise(
           readDatetime: readDate,
           reading,
           priorReading,
-          consumption: reading - priorReading,
+          // As `computeConsumption` stores it: dial movement times the multiplier.
+          consumption: (reading - priorReading) * (opts.multiplier ?? 1),
           readType: "ACTUAL",
           readSource: "MANUAL",
         },
@@ -645,6 +647,28 @@ describe("entry over HTTP", () => {
     expect(band.typical).toBe("30");
     expect(Number(band.high)).toBeCloseTo(1590 + 60, 4);
     expect(band.typicalHigh).toBe("500");
+  });
+
+  /*
+   * A CT meter: the dials move 30 a month, and `consumption` stores 3,000
+   * because the multiplier is 100. The band is added to a dial reading, so
+   * it has to be in dial units — built from the stored consumption it put
+   * the low bound 1,500 above the last reading, and every ordinary read on
+   * the meter was held.
+   */
+  it("builds the band in dial units on a meter with a multiplier", async () => {
+    const route = await makeRoute();
+    const premise = await makePremise({ priorReads: [1000, 1030, 1062, 1090], multiplier: 100 });
+    await addStop(route.id, premise.premiseId, 100);
+
+    const opened = entryOpenResponseSchema.parse(
+      body(await post(`/api/v1/read-routes/${route.id}/entry`, { readDate: DAY })),
+    );
+
+    const band = opened.rows[0]!.band!;
+    expect(band.typical).toBe("30");
+    expect(Number(band.low)).toBeCloseTo(1090 + 15, 4);
+    expect(Number(band.high)).toBeCloseTo(1090 + 60, 4);
   });
 
   it("offers no band for a meter with too little history to judge one", async () => {

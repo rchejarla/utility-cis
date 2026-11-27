@@ -14,7 +14,10 @@ const fullInclude = {
   // Slice 5b.1 — billingCycle now lives on Account; nest the include so
   // existing consumers that read `sa.account.billingCycle` keep working
   // and any UI that read `sa.billingCycle` migrates explicitly.
-  account: { include: { billingCycle: true } },
+  // `customer` because the transfer wizard names the source account's
+  // holder from this list, and without it printed "(no customer)" for
+  // every agreement.
+  account: { include: { billingCycle: true, customer: true } },
   commodity: true,
   rateServiceClass: true,
   rateScheduleAssignments: {

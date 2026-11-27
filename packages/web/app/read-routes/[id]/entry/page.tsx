@@ -56,7 +56,10 @@ import { usePermission } from "@/lib/use-permission";
  * what the meter has done before, so a confirmed one goes through.
  */
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+// The operator's own calendar day, not UTC's: `toISOString()` is tomorrow
+// for anyone west of Greenwich in the evening, which opened tomorrow's
+// batch and dated its reads tomorrow. en-CA formats as YYYY-MM-DD.
+const todayIso = () => new Date().toLocaleDateString("en-CA");
 
 /** The key a row is held and errored under. Row ids are stable per batch. */
 type ByRow<T> = Record<string, T>;

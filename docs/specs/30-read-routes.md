@@ -280,6 +280,7 @@ single-read API does not — open item 5.
 | `INVALID_READING` | 400 | A reading is a number, zero or more |
 | `READ_BILLED` | 400 | The meter already has a billed read in the period |
 | `ENTRY_NOTHING_TO_CORRECT` | 409 | The sheet posted cleanly, so there is nothing to reopen |
+| `ENTRY_NOT_FINISHED` | 409 | The sheet is still being submitted; a reopen now would hand its rows to a second submit |
 
 `NOT_ENTERED` is not an HTTP code: it is the per-row `errorCode` on a staged
 row nobody typed anything against, so submit can say what it left out.
@@ -551,6 +552,13 @@ checking each claim against the code rather than against the plan.
    (`ROLLOVER`, `METER_DEFECT`, `REVERSE_FLOW`), and `ExceptionThreshold`
    (Req 93) is unbuilt. **When Req 93 lands the band comes from there and
    this rule is deleted.** It is marked as such in the code.
+
+   It is scaled from the **median** of the trailing consumptions, so one
+   confirmed outlier does not disarm it, and **in dial units**: stored
+   `consumption` is dial movement times the meter's multiplier, so it is
+   divided back before being added to the last reading. Until 2026-11-27 it
+   was not, and every ordinary reading on a meter with a multiplier other
+   than 1 was held.
 
 3. **The inbound vendor API is gated on a machine credential that does not
    exist.** Rao decided on 2026-11-09 that an API to populate `meter_read`

@@ -42,15 +42,40 @@ fe25434, hold no commit this branch lacks; they are on origin for their names
 only. All four branches are on origin.
 
 ## L1 code review (all tiers)
-- [ ] Dispatched l1-reviewer
-- Findings:
-  - Critical: **not run on this branch.**
-  - Important: **not run on this branch.**
-  - Minor: **not run on this branch.**
-- Resolution: n/a — no reviewer has been dispatched against this diff. Defects
-  were found and fixed during the build by the stream sessions themselves
-  (recorded in spec 05 and spec 30), which is not the same thing as a review
-  pass and must not be counted as one.
+- [x] Dispatched l1-reviewer (2026-11-26, a general-purpose agent with the L1
+  brief — the named reviewer agents are not installed on this laptop)
+- Findings (each re-verified against the code before acting):
+  - Critical: none.
+  - Important, all fixed:
+    1. Band mixed dial units with multiplied consumption — every ordinary read
+       on a multiplier≠1 meter held. `reading-band.ts` now divides by the
+       meter's multiplier in SQL. Test: "builds the band in dial units on a
+       meter with a multiplier".
+    2. A resubmit that posted nothing overwrote `importedCount` with 0 and
+       judged status on the corrections alone. The no-post path now takes
+       totals from the whole batch. Test: "keeps the sheet's totals when the
+       correction posts nothing".
+    3. A crash mid-submit lost every skip on the sheet (coded rows SKIPPED
+       before their `read_skip` was written; a reclaimed resubmit reads
+       PENDING only). Skips are now recorded before posting, each row leaving
+       PENDING in the skip's own transaction. **No test** — needs a crash
+       injected mid-`processBatch`, which the suite has no hook for.
+    4. Reopen accepted a batch still PROCESSING → two `processBatch` runs,
+       duplicate reads. Now 409 `ENTRY_NOT_FINISHED`. Test: "refuses to reopen
+       a sheet that is still being submitted".
+    5. One-live-service trigger did not hold under concurrency. New migration
+       `20261127090000_one_live_service_lock` adds an advisory lock. Test:
+       "refuses the second of two openings that race at one premise".
+    6. Read-route screens used the UTC date as today. Now local
+       (`toLocaleDateString("en-CA")`).
+  - Minor, **not fixed** (open): trigger fires on UPDATE of pre-existing
+    overlaps (409 on editing them); the two new date CHECKs are not in
+    `DATABASE_INVARIANTS` (generic error); rows/submit ignore `:id` and never
+    check the batch belongs to that route; `saveEntryRow` races submit (no
+    lock); `routeCode` unescaped in `Content-Disposition`; `::date` casts
+    depend on session timezone being UTC.
+- Also fixed from the unit run: `|| true` on the entry screen's empty-field
+  guard (806085f) — Enter through a coded row erased its skip reason.
 
 ## Smoke test (all tiers) — EVIDENCE REQUIRED
 - Boot command (including prerequisites):
@@ -93,31 +118,47 @@ only. All four branches are on origin.
 - [x] Test passed
 
 ## Cross-layer contract check (Tier 2+)
-- [ ] Dispatched cross-layer-auditor
-- Grep 1 — Orphan fields (UI writes → backend reads): **not run.** One is
-  already known from the build and fixed: both wizards read a flat `premise`
-  field no endpoint sends. A sweep for the same shape elsewhere has not been done.
-- Grep 2 — Orphan endpoints (backend declares → frontend calls): **not run.**
-  Known precedent on this branch: Task 9 step 4 found twelve read-route
-  endpoints that had never been registered in `app.ts`, so every service behind
-  them was unreachable. That class of gap has occurred here once already.
-- Grep 3 — Unhandled events (emitted → handled): **not run.**
-- Grep 4 — Write-only DB columns (written → read): **not run.** One is known and
-  deliberate: `service_agreement.effective_range` is maintained by the database
-  and read by nothing, since the exclusion constraint it backed was dropped by
-  the 2026-10-18 squash. Kept rather than dropped; see `schema.prisma`.
-- Grep 5 — Unread config keys (declared → read): **not run.**
-  `transfer_carries_rate_schedule` is read in `tenant-config.service.ts` and
-  `workflows.service.ts` and written from the General settings tab.
-- Orphans requiring fix: **unknown — no audit has been run.**
-- Intentional orphans with justification: `effective_range`, as above.
+- [x] Dispatched cross-layer-auditor (2026-11-26, general-purpose agent)
+- Grep 1 — Orphan fields: transfer wizard rendered `account.customer`, which
+  the service-agreement list never included → always "(no customer)".
+  **Fixed** (`fullInclude` now includes the customer). Reverse orphan, open:
+  the meter-read progress screen ignores the new `readRouteId`/`routeCode`/
+  `skipReason` fields spec 30 says it gains.
+- Grep 2 — Orphan endpoints: all 14 read-route routes registered. Open:
+  `PATCH /api/v1/read-routes/:id` has no caller — add a rename/retire control
+  or document it API-only.
+- Grep 3 — Unhandled events: none.
+- Grep 4 — Write-only columns: `read_skip.notes`, `reader_id`,
+  `read_route_id` written, never read (open, non-blocking).
+- Grep 5 — Unread config keys: none; `transfer_carries_rate_schedule` read
+  where it takes effect.
+- Docs, **open**: the architecture doc has no read-route endpoint rows, no
+  field tables for ReadRoute/ReadRouteStop/ReadSkip, and says 78 models (83).
+- Intentional orphans: `effective_range`.
 
 ## Adversarial review (Tier 2+)
-- [ ] Dispatched adversarial-reviewer
-- Blocking findings: **not run.**
-- Non-blocking findings: **not run.**
-- Reviewer's meta-notes: n/a. Three questions worth handing a reviewer, each
-  from a defect this branch has already produced once:
+- [x] Dispatched adversarial-reviewer (2026-11-26, general-purpose agent)
+- Blocking findings: B1 reopen during a running submit (= L1 #4), B2 trigger
+  race (= L1 #5). Both **fixed**, with tests.
+- Non-blocking, open unless noted:
+  1. Save racing Post can leave a typed number as SKIPPED/NOT_ENTERED (= L1 minor).
+  2. `readMeters` is built from row contents, so a refused register-1 reading
+     tells a coded register-2 "the other register was read" — neither read nor
+     skip. Same content-not-status shape as the resubmit bug.
+  3. Crash loses skips — **fixed** (= L1 #3). Still open: a crash between the
+     `meter_read` commit and the row going IMPORTED re-posts on resubmit.
+  4. UTC date — **fixed** (= L1 #6). Server still accepts future read dates.
+  5. Billed-period check uses the route's cycle, not the meter's.
+  6. Transfer carries only assignments in force on the date; scheduled future
+     rate changes are dropped — intended? spec should say.
+  7. A typed-but-not-Entered or held number is silently NOT_ENTERED on Post,
+     and NOT_ENTERED rows cannot be reopened.
+- Reviewer's meta-note worth acting on: a unique index on `meter_read`
+  `(utility_id, meter_id, register_id, read_date)` (hypertable, so it must
+  include the partition column) is the real backstop for B1, items 1, 3 and 4,
+  rather than more application guards. **Product decision for Rao.**
+- The three questions handed to the reviewer, each from a defect this branch
+  had already produced once:
   1. Does any path still partition a batch by its contents rather than by row
      status? That shape let a resubmit post a second read per meter, and
      `meter_read` has no unique key on (meter, read date).
@@ -166,8 +207,14 @@ only. All four branches are on origin.
 - [x] Checklist committed
 - [ ] Ready to ship
 
-**Not ready to ship.** The smoke test passed on 2026-11-26 (above). Still
-required: the three Tier 3 reviewer passes, plus typecheck and the unit suites. See `docs/specs/05-service-agreement.md` for the one
+**Not ready to ship yet — closer.** Smoke test, typecheck, unit suites (api
+1261, web 918 with `NODE_OPTIONS=--no-experimental-webstorage` on Node 26),
+the four affected integration suites and the three e2e specs all pass after
+the fixes above; all three reviews ran and every Important/blocking finding is
+fixed. Before shipping: decide the `meter_read` unique-index question, decide
+which open non-blocking items to take now (adversarial #2 and the save/submit
+race are the ones that can lose data), and bring the architecture doc up to
+date. See `docs/specs/05-service-agreement.md` for the one
 open product question (`createServiceAgreement` and move-in write no
 rate-schedule assignment, and the billing executor files that condition
 quietly).

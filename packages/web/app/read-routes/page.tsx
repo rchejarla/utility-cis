@@ -32,7 +32,8 @@ import type { Column } from "@/components/ui/data-table";
  */
 
 /** Today, UTC, as the sheet's date. A reader's walk is today's walk. */
-const today = () => new Date().toISOString().slice(0, 10);
+// Local calendar day, not UTC's — see the entry page's `todayIso`.
+const today = () => new Date().toLocaleDateString("en-CA");
 
 const ORIGIN_OPTIONS = [
   { label: "Ours", value: "LOCAL" },

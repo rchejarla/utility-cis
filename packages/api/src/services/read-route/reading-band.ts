@@ -119,21 +119,35 @@ export async function historyForRows(
   if (rows.length === 0) return out;
   const meterIds = [...new Set(rows.map((r) => r.meterId))];
 
+  /*
+   * **`consumption` is divided back to dial movement here**, because the
+   * band is added to a dial reading. `computeConsumption` stores the dial
+   * difference *times the meter's multiplier* (meter-read.service.ts), so
+   * on a CT meter with multiplier 100 a typical movement of 12 is stored
+   * as 1200 — and a band built from that held every ordinary reading on
+   * every meter whose multiplier is not 1. The current multiplier is the
+   * right divisor: it is the one the reader's number will be compared
+   * under. NULLIF keeps a misconfigured zero from dividing; such a row
+   * drops out as non-positive below.
+   */
   const reads = await prisma.$queryRaw<
     { meter_id: string; register_id: string | null; reading: unknown; consumption: unknown; read_date: Date }[]
   >`
     SELECT meter_id, register_id, reading, consumption, read_date
     FROM (
-      SELECT meter_id, register_id, reading, consumption, read_date,
+      SELECT mr.meter_id, mr.register_id, mr.reading,
+             mr.consumption / NULLIF(m.multiplier, 0) AS consumption,
+             mr.read_date,
              row_number() OVER (
-               PARTITION BY meter_id, register_id
-               ORDER BY read_date DESC, read_datetime DESC
+               PARTITION BY mr.meter_id, mr.register_id
+               ORDER BY mr.read_date DESC, mr.read_datetime DESC
              ) AS rn
-      FROM meter_read
-      WHERE utility_id = ${utilityId}::uuid
-        AND meter_id = ANY(${meterIds}::uuid[])
-        AND reading IS NOT NULL
-        AND read_date < ${onDate}::date
+      FROM meter_read mr
+      JOIN meter m ON m.id = mr.meter_id AND m.utility_id = mr.utility_id
+      WHERE mr.utility_id = ${utilityId}::uuid
+        AND mr.meter_id = ANY(${meterIds}::uuid[])
+        AND mr.reading IS NOT NULL
+        AND mr.read_date < ${onDate}::date
     ) ranked
     WHERE rn <= ${TRAILING_READS}
     ORDER BY meter_id, register_id, read_date DESC`;
