@@ -63,6 +63,19 @@ export const assignTouCalendarSchema = z
 
 export type AssignTouCalendarInput = z.infer<typeof assignTouCalendarSchema>;
 
+/**
+ * Naming (or clearing) the schedule a shadow bill compares this one against
+ * (spec 26, TOU-BIL-4) — a **code**, since the other tariff versions on its
+ * own. Draft-only, like the calendar.
+ */
+export const assignComparisonScheduleSchema = z
+  .object({
+    comparisonScheduleCode: z.string().trim().min(1).max(50).nullable(),
+  })
+  .strict();
+
+export type AssignComparisonScheduleInput = z.infer<typeof assignComparisonScheduleSchema>;
+
 export type ReviseRateScheduleInput = z.infer<typeof reviseRateScheduleSchema>;
 
 export const rateScheduleSortFields = [

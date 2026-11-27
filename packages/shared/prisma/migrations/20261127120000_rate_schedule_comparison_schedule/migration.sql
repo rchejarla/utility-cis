@@ -1,0 +1,19 @@
+-- The schedule a shadow bill compares against (spec 26, TOU-BIL-4).
+--
+-- On a TOU schedule it names the standard rate ("what would this have cost
+-- on the standard rate?"); on a standard schedule it names the TOU
+-- alternative ("what would TOU have cost?"). The two are always opposite
+-- kinds — validated in the service when the code is set, since it needs a
+-- lookup.
+--
+-- A code rather than an id, because the other tariff gets new versions on
+-- its own schedule; which version a shadow bill uses is resolved for the
+-- billed period. No foreign key: a code is not unique across versions.
+--
+-- The simpler alternative, a per-tenant setting naming one standard
+-- schedule, cannot express a tenant with a residential and a commercial
+-- TOU tariff that each compare against a different standard rate.
+--
+-- Nullable and unbackfilled: no existing schedule has a comparison, and a
+-- shadow bill for one says so (NO_COMPARISON_SCHEDULE).
+ALTER TABLE "rate_schedule" ADD COLUMN "comparison_schedule_code" VARCHAR(50);
