@@ -229,7 +229,18 @@ export type EntryRowSave = z.infer<typeof entryRowSaveSchema>;
 export const entryBandSchema = z.object({
   low: z.string(),
   high: z.string(),
-  /** The consumption range the bounds were built from, for "typical 28–34". */
+  /**
+   * The consumption the bounds are scaled from: the median of the
+   * meter's recent ones.
+   *
+   * The screen has to be able to name this. A hold explained only by the
+   * observed range is a hold the range does not account for — 300 on a
+   * meter that has seen 28 one month and 500 another is held, and "it has
+   * used between 28 and 500" reads as the argument for letting it
+   * through.
+   */
+  typical: z.string(),
+  /** The range actually observed, either side of `typical`. */
   typicalLow: z.string(),
   typicalHigh: z.string(),
 });

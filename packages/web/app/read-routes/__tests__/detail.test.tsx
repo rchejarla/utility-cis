@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
@@ -289,7 +289,27 @@ describe("Read route detail — the walk", () => {
     expect(screen.getByRole("button", { name: /sheet/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /enter readings/i })).toHaveAttribute(
       "href",
-      "/read-routes/rt-1/entry",
+      `/read-routes/rt-1/entry?date=${new Date().toISOString().slice(0, 10)}`,
+    );
+  });
+
+  /*
+   * The date picker decides which day's sheet prints, and the entry link
+   * sits against it. Without the day, entry opens a batch for *today* on
+   * mount and posts the numbers off a 1 June sheet with today's read
+   * date — silently, because the only thing that would say so is the
+   * header the typist is not looking at.
+   */
+  it("carries the chosen day into entry, so the sheet typed in is the sheet printed", async () => {
+    serve();
+    renderPage();
+
+    await walkRows();
+    fireEvent.change(screen.getByLabelText("For"), { target: { value: "2026-06-01" } });
+
+    expect(screen.getByRole("link", { name: /enter readings/i })).toHaveAttribute(
+      "href",
+      "/read-routes/rt-1/entry?date=2026-06-01",
     );
   });
 });

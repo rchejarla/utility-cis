@@ -215,7 +215,15 @@ export default function ReadRouteDetailPage() {
               />
               <RouteSheetButton routeId={route.id} routeCode={route.code} onDate={sheetDate} />
               {canCreate && (
-                <Link href={`/read-routes/${route.id}/entry`} style={primaryLink}>
+                /*
+                 * The day travels with the link. The picker beside it
+                 * decides which day's sheet prints, and entry opens a
+                 * batch for the day in its URL **on mount** — so without
+                 * this, numbers read off a 1 June sheet posted with
+                 * today's read date, and the only thing that said so was
+                 * a header nobody typing looks at.
+                 */
+                <Link href={`/read-routes/${route.id}/entry?date=${sheetDate}`} style={primaryLink}>
                   Enter readings
                 </Link>
               )}

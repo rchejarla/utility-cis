@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
@@ -57,8 +57,8 @@ const ROUTE = {
   cycleCode: "C-01",
 };
 
-/** Trailing consumption 28–32, so the band is +14 to +64 on 1090. */
-const BAND = { low: "1104", high: "1154", typicalLow: "28", typicalHigh: "32" };
+/** Trailing consumption 28–32, typically 30, so the band is +15 to +60 on 1090. */
+const BAND = { low: "1105", high: "1150", typical: "30", typicalLow: "28", typicalHigh: "32" };
 
 function row(over: Record<string, unknown> = {}) {
   return {
@@ -271,6 +271,47 @@ describe("Read route entry — the keyboard", () => {
     expect(patch).not.toHaveBeenCalled();
   });
 
+  /*
+   * Deleting a staged number is an edit, and the only gesture available
+   * for it: there is no blur handler on the reading field, and the
+   * obscure workaround (pick a reason, then pick "—") writes and unwrites
+   * a skip to get there. Without this, the number stays in `raw_data` and
+   * Post writes the reading the operator can see they deleted.
+   */
+  it("clears the staged number on the server when the field is emptied", async () => {
+    serve({ rows: [row({ reading: "1120" }), SECOND] });
+    renderPage();
+
+    const [first, second] = await inputs();
+    await userEvent.clear(first!);
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/read-routes/rt-1/entry/b-1/rows", {
+        meterId: "m-1",
+        registerId: null,
+      }),
+    );
+    expect(second).toHaveFocus();
+  });
+
+  /*
+   * The other side of it: a coded row's reading field is empty because
+   * the row is a code, so Enter passing through must not clear the reason
+   * somebody chose. An empty body clears both.
+   */
+  it("leaves a coded row's reason alone when Enter passes through its empty field", async () => {
+    serve({ rows: [row({ skipReason: "DOG" }), SECOND] });
+    renderPage();
+
+    const [first, second] = await inputs();
+    await userEvent.click(first!);
+    await userEvent.keyboard("{Enter}");
+
+    expect(second).toHaveFocus();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
   it("stays on the last row rather than wrapping to the top", async () => {
     serve();
     renderPage();
@@ -317,6 +358,12 @@ describe("Read route entry — a number that looks wrong", () => {
     // The consumption this number implies, against the range the meter
     // has actually used.
     expect(within(held).getByText(/7,910/)).toBeInTheDocument();
+    // What it typically uses, which is what the bound is built from, and
+    // the observed range either side of it. Naming only the range would
+    // leave a hold the range cannot explain — 300 on a meter that has
+    // seen 28 and 500 is held, and "it has used between 28 and 500"
+    // reads as an argument for letting it through.
+    expect(within(held).getByText("30")).toBeInTheDocument();
     expect(within(held).getByText(/28/)).toBeInTheDocument();
     expect(within(held).getByText(/32/)).toBeInTheDocument();
   });
@@ -331,6 +378,56 @@ describe("Read route entry — a number that looks wrong", () => {
     await screen.findByText(/that looks wrong/i);
 
     await userEvent.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/read-routes/rt-1/entry/b-1/rows", {
+        meterId: "m-1",
+        registerId: null,
+        reading: 9000,
+      }),
+    );
+    expect(second).toHaveFocus();
+  });
+
+  /*
+   * A held row is the one case where Enter does not advance, so it is
+   * also the one case where a typist's "number, Enter" rhythm leaves the
+   * key down or taps it twice. Key-repeat is never a confirmation: the
+   * browser fires repeat keydowns while the key is physically held, and
+   * taking one as the answer to "that looks wrong" posts the wild number
+   * without anybody reading the question.
+   */
+  it("does not take a held-down Enter as the confirmation", async () => {
+    serve();
+    renderPage();
+
+    const [first] = await inputs();
+    await userEvent.click(first!);
+    await userEvent.keyboard("9000{Enter}");
+    await screen.findByText(/that looks wrong/i);
+
+    fireEvent.keyDown(first!, { key: "Enter", repeat: true });
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(screen.getByText(/that looks wrong/i)).toBeInTheDocument();
+  });
+
+  /*
+   * And a target that is not a keystroke at all, for the hold only. The
+   * keyboard stays the whole interface for entry (§5.7) — this is the one
+   * place the screen asks a question, and a question deserves something
+   * to click.
+   */
+  it("takes the number as typed when the hold's own button is used", async () => {
+    serve();
+    renderPage();
+
+    const [first, second] = await inputs();
+    await userEvent.click(first!);
+    await userEvent.keyboard("9000{Enter}");
+    const held = await screen.findByTestId("held-row-1");
+
+    await userEvent.click(within(held).getByRole("button", { name: /as typed/i }));
 
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith("/api/v1/read-routes/rt-1/entry/b-1/rows", {
@@ -645,6 +742,64 @@ describe("Read route entry — posting the route", () => {
         readDate: "2026-06-05",
       }),
     );
+  });
+
+  /*
+   * The post succeeded; reading the outcomes back did not. Those are two
+   * requests, and the first one wrote `meter_read` rows — so telling the
+   * operator the post failed is the one answer that is certainly wrong,
+   * and it took the result banner and the whole sheet off the screen with
+   * it.
+   */
+  it("keeps the result when reading the outcomes back fails, rather than calling the post a failure", async () => {
+    serve();
+    let opens = 0;
+    post.mockImplementation(async (url: string) => {
+      if (url.includes("/submit")) {
+        return {
+          batchId: "b-1",
+          status: "COMPLETE",
+          importedCount: 2,
+          errorCount: 0,
+          skipsRecorded: 0,
+          notEntered: 0,
+          alreadySubmitted: false,
+        };
+      }
+      if (++opens > 1) throw new Error("Network error");
+      return { batchId: "b-1", rows: TWO_ROWS };
+    });
+    renderPage();
+
+    await entryRows();
+    await userEvent.click(screen.getByRole("button", { name: /post the route/i }));
+
+    expect(await screen.findByText(/2 readings posted/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not post this route/i)).not.toBeInTheDocument();
+    // The sheet is still there to look at, not replaced by an error page.
+    expect(await entryRows()).toHaveLength(2);
+  });
+
+  /*
+   * After a reopen the batch is PENDING again, but only the rows that
+   * were refused are: `processBatch` runs the PENDING rows and nothing
+   * else, so a correction typed into a row that already posted is
+   * accepted by `saveEntryRow`, never reprocessed, and leaves the staged
+   * row disagreeing with the `meter_read` that exists.
+   */
+  it("does not invite a correction to a row that already posted", async () => {
+    serve({
+      rows: [
+        row({ reading: "1120", status: "PENDING" }),
+        row({ rowId: "row-2", rowIndex: 2, meterId: "m-2", reading: "2030", status: "IMPORTED" }),
+      ],
+    });
+    renderPage();
+
+    const [refused, already] = await inputs();
+    expect(refused).toBeEnabled();
+    expect(already).toBeDisabled();
+    expect(within(screen.getByTestId("entry-row-2")).getByText(/posted/i)).toBeInTheDocument();
   });
 
   it("offers no correction when the sheet posted cleanly, which the server refuses anyway", async () => {

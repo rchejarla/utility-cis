@@ -641,6 +641,83 @@ describe("reopening for corrections", () => {
     expect(rows.every((r) => r.status === "IMPORTED")).toBe(true);
   });
 
+  /*
+   * The sequence that could post a read twice, and the plan's own Review
+   * Focus item 2 by a route the plan did not consider.
+   *
+   * A bill lands between the two submits — the ordinary case on a route
+   * whose window closes while a correction is outstanding. The rows that
+   * already posted still carry their number, so partitioning over the
+   * whole batch put them in `readingRows`; their meters are now billed,
+   * so they went on to `frozen`; and an `updateMany` with no status
+   * filter turned reads that are in the table into `ERROR` rows saying
+   * "nothing was posted for this row". That left them eligible for a
+   * second reopen, which is the way back to `PENDING` — and `meter_read`
+   * has no unique key on (meter, read date).
+   */
+  it("does not refuse the rows that already posted when a bill lands between the two submits", async () => {
+    const routeId = await makeRoute();
+    const posted = await makeStop(routeId);
+    const refused = await makeStop(routeId);
+    await priorRead(refused, false); // unbilled, so the coded row's skip is refused
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: posted.meterId, registerId: null, reading: 150 });
+    await save(batchId, { meterId: refused.meterId, registerId: null, skipReason: "DOG" });
+    expect(await submit(batchId)).toMatchObject({ importedCount: 1, errorCount: 1 });
+
+    // The billing run: the read that posted is billed where it sits.
+    await seed((p) =>
+      p.meterRead.updateMany({
+        where: { meterId: posted.meterId },
+        data: { billedAt: new Date("2026-06-07T00:00:00Z") },
+      }),
+    );
+    await reopen(routeId);
+    await save(batchId, { meterId: refused.meterId, registerId: null, reading: 160 });
+
+    const again = await submit(batchId);
+
+    expect(again).toMatchObject({ importedCount: 2, errorCount: 0 });
+    const rows = await seed((p) => p.importRow.findMany({ where: { importBatchId: batchId } }));
+    expect(rows.filter((r) => r.status === "ERROR")).toHaveLength(0);
+    expect(await seed((p) => p.meterRead.count({ where: { meterId: posted.meterId } }))).toBe(1);
+    // And nothing is left for a second reopen to admit, which is what
+    // closes the road to the second read.
+    await expect(reopen(routeId)).rejects.toMatchObject({ code: "ENTRY_NOTHING_TO_CORRECT" });
+  });
+
+  /*
+   * The batch is PENDING again while most of its rows are facts.
+   * `processBatch` runs the PENDING rows and nothing else, so a write
+   * accepted against a posted row is a write nothing will ever post —
+   * and `raw_data` then disagrees with the `meter_read` that exists.
+   */
+  it("refuses a correction to a row that already posted", async () => {
+    const routeId = await makeRoute();
+    const posted = await makeStop(routeId);
+    const refused = await makeStop(routeId);
+    await priorRead(refused, false);
+    const { batchId } = await open(routeId);
+    await save(batchId, { meterId: posted.meterId, registerId: null, reading: 150 });
+    await save(batchId, { meterId: refused.meterId, registerId: null, skipReason: "DOG" });
+    await submit(batchId);
+    await reopen(routeId);
+
+    await expect(
+      save(batchId, { meterId: posted.meterId, registerId: null, reading: 151 }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "ENTRY_ROW_POSTED" });
+
+    const row = await seed((p) =>
+      p.importRow.findFirstOrThrow({ where: { importBatchId: batchId, status: "IMPORTED" } }),
+    );
+    expect((row.rawData as { reading: string }).reading).toBe("150");
+    // The row that *was* refused is still correctable: that is the whole
+    // point of the reopen.
+    await expect(
+      save(batchId, { meterId: refused.meterId, registerId: null, reading: 160 }),
+    ).resolves.toMatchObject({ reading: "160" });
+  });
+
   it("refuses a sheet with nothing to correct, and a route with no entry at all", async () => {
     const routeId = await makeRoute();
     const s = await makeStop(routeId);

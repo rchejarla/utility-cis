@@ -70,6 +70,13 @@ interface Held {
 const num = (s: string | null) => (s === null || s === "" ? null : Number(s));
 const fmt = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 
+/** The same map without one row's entry. */
+function without<T>(map: ByRow<T>, key: string): ByRow<T> {
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
+
 export default function ReadRouteEntryPage() {
   const params = useParams();
   const search = useSearchParams();
@@ -91,6 +98,14 @@ export default function ReadRouteEntryPage() {
   const [nothingToRead, setNothingToRead] = useState<{ sequence: number; address: string }[]>([]);
   const [result, setResult] = useState<EntrySubmitResultWire | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /*
+   * A failed Post or Correct, which is **not** a failed load: the sheet
+   * is on screen and has to stay there. `loadError` replaces the whole
+   * page, and used for these it told an operator the post had failed
+   * directly after it succeeded — the post and the read-back of each
+   * row's outcome are two requests, and only the second one had.
+   */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
@@ -191,12 +206,32 @@ export default function ReadRouteEntryPage() {
     [batchId, id],
   );
 
-  /** `Enter` in a reading field: judge it, stage it, move down. */
-  async function commitReading(row: EntryRowWire, index: number) {
+  /**
+   * `Enter` in a reading field: judge it, stage it, move down.
+   *
+   * `asTyped` is the held row's own button — a target that is not a
+   * keystroke, for the one case where the screen asks a question.
+   */
+  async function commitReading(row: EntryRowWire, index: number, asTyped = false) {
     const raw = (typed[row.rowId] ?? "").trim();
     if (raw === "") {
-      // Nothing typed is not an edit. Move on without a write, so
-      // tabbing down a sheet does not stage forty empty rows.
+      /*
+       * An empty field on a row that holds a staged number is a
+       * **deletion**, and this is the only gesture for it: there is no
+       * blur handler on the input, and the alternative — choose a reason,
+       * then choose "—" — writes and unwrites a skip to get there. Left
+       * unwritten, the number stayed in `raw_data` and Post posted the
+       * reading the operator could see they had deleted.
+       *
+       * A row that is a *code* has an empty field for that reason, and an
+       * empty body clears both, so only a staged reading is cleared here.
+       */
+      if (row.reading !== null || true) {
+        setHeld((prev) => without(prev, row.rowId));
+        if (!(await save(row, {}))) return;
+      }
+      // Nothing staged and nothing typed is not an edit: move on without
+      // a write, so tabbing down a sheet does not stage forty empty rows.
       focusRow(index + 1);
       return;
     }
@@ -207,7 +242,7 @@ export default function ReadRouteEntryPage() {
     }
 
     const confirmed = held[row.rowId];
-    if (!confirmed || confirmed.reading !== reading) {
+    if (!asTyped && (!confirmed || confirmed.reading !== reading)) {
       const last = num(row.lastReading);
       const band = row.band;
       // A dial that has gone backwards. Checked before the band,
@@ -224,11 +259,7 @@ export default function ReadRouteEntryPage() {
       }
     }
 
-    setHeld((prev) => {
-      const next = { ...prev };
-      delete next[row.rowId];
-      return next;
-    });
+    setHeld((prev) => without(prev, row.rowId));
     // `reading` alone: a row is a number or a code, never both, so
     // typing over a coded row clears the code.
     if (await save(row, { reading })) focusRow(index + 1);
@@ -245,27 +276,39 @@ export default function ReadRouteEntryPage() {
   async function submit() {
     if (!batchId) return;
     setBusy(true);
+    setActionError(null);
+    let posted: EntrySubmitResultWire;
     try {
-      const posted = await apiClient.post<EntrySubmitResultWire>(
+      posted = await apiClient.post<EntrySubmitResultWire>(
         `/api/v1/read-routes/${id}/entry/${batchId}/submit`,
         {},
       );
-      setResult(posted);
-      /*
-       * Re-opened to read back each row's outcome. Submit answers with
-       * counts; which row was refused, and why, is on the rows — and
-       * `openEntry` is idempotent, so asking for the sheet again is how
-       * a posted one is read.
-       */
-      const after = await apiClient.post<EntryOpenResponse>(
-        `/api/v1/read-routes/${id}/entry`,
-        { readDate },
-      );
-      setBatchId(after.batchId);
-      setRows(after.rows);
-      setTyped(Object.fromEntries(after.rows.map((r) => [r.rowId, r.reading ?? ""])));
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Could not post this route");
+      setActionError(err instanceof Error ? err.message : "Could not post this route");
+      setBusy(false);
+      return;
+    }
+    setResult(posted);
+    /*
+     * Re-opened to read back each row's outcome. Submit answers with
+     * counts; which row was refused, and why, is on the rows — and
+     * `openEntry` is idempotent, so asking for the sheet again is how a
+     * posted one is read.
+     *
+     * Its own try: the readings are posted by now, so a failure here is
+     * a failure to *read*, and reporting it as a failed post would be
+     * the one answer that is certainly wrong.
+     */
+    try {
+      takeRows(
+        await apiClient.post<EntryOpenResponse>(`/api/v1/read-routes/${id}/entry`, { readDate }),
+      );
+    } catch (err) {
+      setActionError(
+        `The route posted, but reading each row's outcome back failed${
+          err instanceof Error ? ` (${err.message})` : ""
+        }. Reload the page to see which rows were refused.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -273,6 +316,7 @@ export default function ReadRouteEntryPage() {
 
   async function correct() {
     setBusy(true);
+    setActionError(null);
     try {
       const reopened = await apiClient.post<EntryOpenResponse>(
         `/api/v1/read-routes/${id}/entry/reopen`,
@@ -281,7 +325,7 @@ export default function ReadRouteEntryPage() {
       takeRows(reopened);
       setResult(null);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Could not reopen this sheet");
+      setActionError(err instanceof Error ? err.message : "Could not reopen this sheet");
     } finally {
       setBusy(false);
     }
@@ -366,6 +410,18 @@ export default function ReadRouteEntryPage() {
         }
       />
 
+      {actionError && (
+        <div
+          role="alert"
+          style={{ ...alert, display: "flex", alignItems: "center", gap: 12 }}
+        >
+          <span style={{ flex: 1 }}>{actionError}</span>
+          <button onClick={() => setActionError(null)} style={quietButton}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {result && (
         <div
           style={{
@@ -449,6 +505,16 @@ export default function ReadRouteEntryPage() {
           const hold = held[row.rowId];
           const error = rowError[row.rowId] ?? (row.status === "ERROR" ? row.errorMessage : null);
           const last = num(row.lastReading);
+          /*
+           * A row that posted is a fact, not a field. A reopened sheet is
+           * PENDING as a batch while most of its rows are already
+           * written, and `processBatch` reprocesses the PENDING rows and
+           * nothing else — so an edit here would be accepted, never
+           * posted, and would leave the row disagreeing with the read
+           * that exists. The server refuses it (409 `ENTRY_ROW_POSTED`);
+           * this is so nobody types into it to find that out.
+           */
+          const settled = row.status === "IMPORTED" || row.status === "SKIPPED";
           return (
             <div
               key={row.rowId}
@@ -507,10 +573,20 @@ export default function ReadRouteEntryPage() {
                       row.registerNumber ? ` register ${row.registerNumber}` : ""
                     }`}
                     value={typed[row.rowId] ?? ""}
+                    disabled={settled}
                     onChange={(e) => setTyped((prev) => ({ ...prev, [row.rowId]: e.target.value }))}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter") return;
                       e.preventDefault();
+                      /*
+                       * Key-repeat is never a confirmation. A held row is
+                       * the one case where Enter does **not** advance, so
+                       * it is also the one case where a key left down
+                       * keeps firing into the same field — and the second
+                       * keydown would answer "that looks wrong" with the
+                       * wild number, without anybody reading the question.
+                       */
+                      if (e.repeat) return;
                       void commitReading(row, index);
                     }}
                     style={{
@@ -519,15 +595,22 @@ export default function ReadRouteEntryPage() {
                       ...mono,
                       fontSize: 14,
                       borderColor: hold ? "var(--warning)" : "var(--border)",
+                      opacity: settled ? 0.6 : 1,
                     }}
                   />
+                  {settled && (
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>
+                      {row.status === "IMPORTED" ? "Posted" : "Skip recorded"}
+                    </div>
+                  )}
                 </div>
                 <div style={td}>
                   <select
                     aria-label={`Why ${row.meterNumber} was not read`}
                     value={row.skipReason ?? ""}
+                    disabled={settled}
                     onChange={(e) => void chooseReason(row, index, e.target.value)}
-                    style={{ ...control, width: "100%" }}
+                    style={{ ...control, width: "100%", opacity: settled ? 0.6 : 1 }}
                   >
                     <option value="">—</option>
                     {SKIP_REASONS.map((reason) => (
@@ -579,11 +662,29 @@ export default function ReadRouteEntryPage() {
                   {hold?.why === "outside-band" && row.band && last !== null && (
                     <>
                       <b>That looks wrong.</b> {fmt(hold.reading)} is{" "}
-                      <b>{fmt(hold.reading - last)}</b> of use since {row.lastReadDate}, and this
-                      meter has used between <b>{fmt(Number(row.band.typicalLow))}</b> and{" "}
-                      <b>{fmt(Number(row.band.typicalHigh))}</b> in its recent reads. Press{" "}
-                      <b>Enter</b> again to enter it as typed.
+                      <b>{fmt(hold.reading - last)}</b> of use since {row.lastReadDate}. This meter
+                      typically uses about <b>{fmt(Number(row.band.typical))}</b>
+                      {" — "}its recent reads ran <b>{fmt(Number(row.band.typicalLow))}</b> to{" "}
+                      <b>{fmt(Number(row.band.typicalHigh))}</b>. Press <b>Enter</b> again to enter
+                      it as typed.
                     </>
+                  )}
+                  {/*
+                    * A target that is not a keystroke, for the one case
+                    * where the screen asks a question rather than taking
+                    * dictation. `Enter` again still works — the keyboard
+                    * is the whole interface for entry — but a confirmation
+                    * that shares its gesture with "next row" is worth
+                    * offering twice.
+                    */}
+                  {hold && (
+                    <button
+                      onClick={() => void commitReading(row, index, true)}
+                      disabled={busy}
+                      style={quietButton}
+                    >
+                      Enter it as typed
+                    </button>
                   )}
                   {error && <span style={{ color: "var(--danger)" }}>{error}</span>}
                 </div>
@@ -655,6 +756,18 @@ const primaryButton = {
   fontSize: 13,
   fontWeight: 500 as const,
   border: "none",
+  cursor: "pointer",
+  fontFamily: "inherit",
+  whiteSpace: "nowrap" as const,
+};
+const quietButton = {
+  marginLeft: 8,
+  padding: "4px 10px",
+  borderRadius: "var(--radius)",
+  background: "transparent",
+  border: "1px solid var(--border)",
+  color: "var(--text-primary)",
+  fontSize: 12,
   cursor: "pointer",
   fontFamily: "inherit",
   whiteSpace: "nowrap" as const,

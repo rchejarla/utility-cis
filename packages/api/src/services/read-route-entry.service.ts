@@ -38,8 +38,11 @@ import { recordSkips } from "./read-skip.service.js";
  *
  * **A refused stop is corrected, not retyped.**
  * `reopenEntryForCorrections` puts the batch and its `ERROR` rows back to
- * `PENDING` and leaves `IMPORTED` and `SKIPPED` rows alone, which is also
- * what stops the second submit re-posting what already posted.
+ * `PENDING` and leaves `IMPORTED` and `SKIPPED` rows alone. A row's own
+ * status is then what says whether this sheet is still asking about it:
+ * `saveEntryRow` refuses a write to a row that has already posted, and
+ * `submitEntry` partitions the `PENDING` rows rather than the batch — the
+ * two together are what stop a resubmit touching what already posted.
  *
  * **A batch of this kind must never be run through the generic imports
  * paths.** Every guard here — the billed-period refusal, holding coded and
@@ -386,6 +389,23 @@ export async function saveEntryRow(
   if (!row) {
     throw httpError(404, "ENTRY_ROW_NOT_FOUND", `Meter ${input.meterId} is not a row of this sheet`);
   }
+  /*
+   * A reopened sheet is PENDING as a batch while most of its rows are
+   * facts. Accepting a write to one of those was silent: `processBatch`
+   * runs the `PENDING` rows and nothing else, so the correction would
+   * never be posted, and `raw_data` would then disagree with the
+   * `meter_read` that exists — the row saying 151 beside a read of 150.
+   * Refused here, where the screen can say so in the row.
+   */
+  if (row.status !== "PENDING") {
+    throw httpError(
+      409,
+      "ENTRY_ROW_POSTED",
+      row.status === "IMPORTED"
+        ? "This row has already posted; a reopened sheet corrects the rows it refused, not the ones it wrote"
+        : `This row is already recorded as ${row.status.toLowerCase()}; reopening the sheet does not reopen it`,
+    );
+  }
 
   if (input.reading !== undefined) {
     const billed = await metersBilledInWindow(utilityId, routeId, readDate, [input.meterId]);
@@ -467,9 +487,35 @@ export async function submitEntry(
     orderBy: { rowIndex: "asc" },
   });
   const staged = rows.map((r) => ({ row: r, raw: r.rawData as unknown as StagedRaw }));
-  const readingRows = staged.filter((s) => s.raw.reading !== "");
-  const codedRows = staged.filter((s) => s.raw.reading === "" && s.raw.skipReason !== "");
-  const blankRows = staged.filter((s) => s.raw.reading === "" && s.raw.skipReason === "");
+  /*
+   * **This submit is about the `PENDING` rows only**, which on a first
+   * submit is all of them.
+   *
+   * On a resubmit after `reopenEntryForCorrections` it is the corrected
+   * rows, and partitioning over the whole batch instead was wrong in a
+   * way that compounded. The rows that already posted still carry their
+   * number, so they landed in `readingRows`; a billing run between the
+   * two submits then put their meters in `metersBilledInWindow`, so they
+   * landed in `frozen`, and an `updateMany` with no status filter turned
+   * eight `IMPORTED` rows into `ERROR` — the screen reporting "nothing
+   * was posted for this row" about reads that are in the table. Worse,
+   * those rows were then `ERROR`, so a second reopen admitted them,
+   * returned them to `PENDING`, and a third submit posted a *second*
+   * read per meter: `meter_read` has no unique key on (meter, read date),
+   * and `computeConsumption` would bill both.
+   */
+  const pending = staged.filter((s) => s.row.status === "PENDING");
+  const readingRows = pending.filter((s) => s.raw.reading !== "");
+  const codedRows = pending.filter((s) => s.raw.reading === "" && s.raw.skipReason !== "");
+  const blankRows = pending.filter((s) => s.raw.reading === "" && s.raw.skipReason === "");
+  /*
+   * Whether a meter was read is a fact about the **sheet**, not about
+   * this submit: a register posted in the first submit still means the
+   * meter was read, so a coded row for its other register must not
+   * become a skip now. Same reason `recordCount` counts the sheet's
+   * reading rows rather than this pass's.
+   */
+  const sheetReadingRows = staged.filter((s) => s.raw.reading !== "");
 
   // Held back from processBatch, which would reject each for having no number.
   if (blankRows.length) {
@@ -508,7 +554,10 @@ export async function submitEntry(
     });
   }
   // The batch's records are the rows that are posted as readings.
-  await prisma.importBatch.update({ where: { id: batchId }, data: { recordCount: readingRows.length } });
+  await prisma.importBatch.update({
+    where: { id: batchId },
+    data: { recordCount: sheetReadingRows.length },
+  });
 
   let status: string;
   let importedCount = 0;
@@ -537,7 +586,7 @@ export async function submitEntry(
   }
 
   // Skips: a meter is skipped only if no row of it, in any register, carries a number.
-  const readMeters = new Set(readingRows.map((s) => s.raw.meterId));
+  const readMeters = new Set(sheetReadingRows.map((s) => s.raw.meterId));
   // One entry per meter, set by its first coded row; later rows of the
   // same meter ride along with it.
   const skippedMeters = new Map<string, { reason: SkipReason; notes: string; rowIds: string[] }>();
@@ -625,10 +674,13 @@ export async function submitEntry(
  * told apart from posting it a second time.
  *
  * The `ERROR` rows go back to `PENDING` with their error cleared;
- * `IMPORTED` and `SKIPPED` rows are left exactly as they are, and that is
- * what prevents a re-post — `processBatch` selects `PENDING` rows and
- * nothing else, the same mechanism the double-submit protection already
- * rests on, so no second guard is added here.
+ * `IMPORTED` and `SKIPPED` rows are left exactly as they are. That is
+ * necessary but, on its own, was not sufficient: `processBatch` selects
+ * `PENDING` rows, but `submitEntry`'s own partitions ran over the whole
+ * batch, so a resubmit could still mark a posted row `ERROR` — and an
+ * `ERROR` row is one this function admits, which made the second reopen
+ * the way back to posting it twice. The row-status filters in
+ * `submitEntry` and `saveEntryRow` are the rest of the guard.
  */
 export async function reopenEntryForCorrections(
   utilityId: string,

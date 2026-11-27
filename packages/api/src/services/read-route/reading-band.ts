@@ -41,11 +41,11 @@ const TRAILING_READS = 6;
 const MIN_READS_FOR_A_BAND = 3;
 
 /**
- * How far outside the observed range still counts as ordinary. Asymmetric
- * on purpose: a half-month of usage is a plausible meter swap or a vacant
- * month, while a doubling is the leak this exists to catch. These are
- * judgement, not measurement — the honest version of them is Req 93's
- * per-utility thresholds.
+ * How far from what the meter typically uses still counts as ordinary.
+ * Asymmetric on purpose: a half-month of usage is a plausible meter swap
+ * or a vacant month, while a doubling is the leak this exists to catch.
+ * These are judgement, not measurement — the honest version of them is
+ * Req 93's per-utility thresholds.
  */
 const LOW_FACTOR = 0.5;
 const HIGH_FACTOR = 2;
@@ -73,6 +73,29 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10);
  * in binary floating point, and `String()` of that is not a reading.
  */
 const quantity = (n: number) => String(Number(n.toFixed(4)));
+
+/**
+ * The middle consumption, which is what the bounds are scaled from.
+ *
+ * **Not the smallest and largest.** Scaling the bounds from `min` and
+ * `max` lets one month set them for the next six reads, and it fails in
+ * the direction that matters: a burst-pipe month of 500 against a normal
+ * 30 — a number this check is *designed* to let through once somebody
+ * confirms it — would put the high bound at twice 500, so a later 10×
+ * misread of 300 posts in silence. The escape hatch would disarm the
+ * check. The median moves by one position instead, and a meter needs
+ * half its recent months to be wild before it stops holding anything.
+ *
+ * Seasonality is still unhandled: an irrigation meter reading 5 in
+ * winter and 60 in summer has no single typical month, and no statistic
+ * over six reads invents one. That is Req 93's per-utility thresholds,
+ * not this file's.
+ */
+const median = (xs: number[]): number => {
+  const sorted = [...xs].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+};
 
 /**
  * The trailing reads of each `(meter, register)` before `onDate`, and the
@@ -170,14 +193,17 @@ function fromHistory(
   if (used.length < MIN_READS_FOR_A_BAND || !latest) {
     return { lastReading, lastReadDate, band: null };
   }
-  const low = Math.min(...used) * LOW_FACTOR;
-  const high = Math.max(...used) * HIGH_FACTOR;
+  const typical = median(used);
   return {
     lastReading,
     lastReadDate,
     band: {
-      low: quantity(latest.reading + low),
-      high: quantity(latest.reading + high),
+      low: quantity(latest.reading + typical * LOW_FACTOR),
+      high: quantity(latest.reading + typical * HIGH_FACTOR),
+      typical: quantity(typical),
+      // The observed range, reported beside the typical rather than used
+      // as the bound: it is what the operator recognises their own meter
+      // by, and it says how settled the typical is.
       typicalLow: quantity(Math.min(...used)),
       typicalHigh: quantity(Math.max(...used)),
     },

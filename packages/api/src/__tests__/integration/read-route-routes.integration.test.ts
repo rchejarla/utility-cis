@@ -617,11 +617,34 @@ describe("entry over HTTP", () => {
     expect(row.lastReading).toBe("1090");
     expect(row.lastReadDate).toBe("2026-04-03");
     expect(row.address).toContain("Willson Avenue");
-    // Trailing consumptions are 30, 32, 28: the band is half the
-    // smallest to twice the largest, added to the last reading.
+    // Trailing consumptions are 30, 30, 32, 28 — typically 30 — and the
+    // band is half that to twice it, added to the last reading.
     expect(row.band).not.toBeNull();
-    expect(Number(row.band!.low)).toBeCloseTo(1090 + 14, 4);
-    expect(Number(row.band!.high)).toBeCloseTo(1090 + 64, 4);
+    expect(row.band!.typical).toBe("30");
+    expect(Number(row.band!.low)).toBeCloseTo(1090 + 15, 4);
+    expect(Number(row.band!.high)).toBeCloseTo(1090 + 60, 4);
+  });
+
+  /*
+   * A burst pipe in the window, which is the number this check exists to
+   * let through once somebody confirms it. Scaling the bounds from the
+   * largest consumption would then put the high bound at twice 500 for
+   * the next six reads — so the following month's 10× misread would post
+   * in silence, the escape hatch having disarmed the check. The observed
+   * range is still reported, because it is what the operator recognises
+   * their own meter by.
+   */
+  it("judges the band on what the meter typically uses, not on its worst month", async () => {
+    const { route } = await routeWithStop([1000, 1030, 1062, 1562, 1590]);
+
+    const opened = entryOpenResponseSchema.parse(
+      body(await post(`/api/v1/read-routes/${route.id}/entry`, { readDate: DAY })),
+    );
+
+    const band = opened.rows[0]!.band!;
+    expect(band.typical).toBe("30");
+    expect(Number(band.high)).toBeCloseTo(1590 + 60, 4);
+    expect(band.typicalHigh).toBe("500");
   });
 
   it("offers no band for a meter with too little history to judge one", async () => {
