@@ -321,6 +321,13 @@ agreement, account, and when that meter was last read at all, because
 "never" is a new service and "last July" is a meter somebody has stopped
 reaching.
 
+**Route filter and the reason, 2026-11-27** (spec 30 §5.9). A second picker
+offers the chosen cycle's read routes and narrows the answer to one
+(`readRouteId`; the endpoint refuses another cycle's route). Each row also
+shows its **Route** and **Why not read** — the open skip's reason, such as a
+locked gate — because a meter behind a locked gate and a meter nobody went
+to are different mornings' work.
+
 `GET /api/v1/meter-reads/progress?billingCycleId=…[&asOf=&window=&page=&limit=&readRouteId=]`,
 gated on `meter_reads:VIEW`. Counted as **meter assignments**, not
 meters: one meter serving two agreements is two readings to take.

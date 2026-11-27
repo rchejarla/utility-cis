@@ -68,12 +68,20 @@ only. All four branches are on origin.
        "refuses the second of two openings that race at one premise".
     6. Read-route screens used the UTC date as today. Now local
        (`toLocaleDateString("en-CA")`).
-  - Minor, **not fixed** (open): trigger fires on UPDATE of pre-existing
-    overlaps (409 on editing them); the two new date CHECKs are not in
-    `DATABASE_INVARIANTS` (generic error); rows/submit ignore `:id` and never
-    check the batch belongs to that route; `saveEntryRow` races submit (no
-    lock); `routeCode` unescaped in `Content-Disposition`; `::date` casts
-    depend on session timezone being UTC.
+  - Minor, **all fixed 2026-11-27** (e4b47bc), each with a test:
+    - trigger refused any edit of a pre-existing overlap → an UPDATE that
+      keeps or narrows its own dates is let through (`20261127110000`);
+      widening still judged.
+    - date CHECKs gave "Database error" → 400 `DATE_ORDER_VIOLATION` with a
+      sentence, by constraint name (they are CHECKs, not trigger markers).
+    - rows/submit ignored `:id` → `assertEntryOnRoute`, 404 on a mismatch.
+    - `saveEntryRow` raced submit → batch row locked (f789931).
+    - `routeCode` raw in `Content-Disposition` → ASCII fallback plus
+      RFC 5987 `filename*`.
+    - `::date` on a bound JS Date → bound as `YYYY-MM-DD` text in both
+      read-route queries. (Same pattern exists in `ar/statement-snapshot.ts`,
+      `payment-plan/lifecycle.ts` and `effective-dating-queries.ts`, which
+      predate this branch — not touched; worth a separate look.)
 - Also fixed from the unit run: `|| true` on the entry screen's empty-field
   guard (806085f) — Enter through a coded row erased its skip reason.
 
@@ -121,15 +129,18 @@ only. All four branches are on origin.
 - [x] Dispatched cross-layer-auditor (2026-11-26, general-purpose agent)
 - Grep 1 — Orphan fields: transfer wizard rendered `account.customer`, which
   the service-agreement list never included → always "(no customer)".
-  **Fixed** (`fullInclude` now includes the customer). Reverse orphan, open:
-  the meter-read progress screen ignores the new `readRouteId`/`routeCode`/
-  `skipReason` fields spec 30 says it gains.
-- Grep 2 — Orphan endpoints: all 14 read-route routes registered. Open:
-  `PATCH /api/v1/read-routes/:id` has no caller — add a rename/retire control
-  or document it API-only.
+  **Fixed** (`fullInclude` now includes the customer). Reverse orphan: the
+  meter-read progress screen ignored `readRouteId`/`routeCode`/`skipReason`.
+  **Fixed 2026-11-27** (574ed0b): route filter plus Route and Why-not-read
+  columns.
+- Grep 2 — Orphan endpoints: all 14 read-route routes registered.
+  `PATCH /api/v1/read-routes/:id` had no caller. **Fixed 2026-11-27**: rename
+  and retire on the route page.
 - Grep 3 — Unhandled events: none.
 - Grep 4 — Write-only columns: `read_skip.notes`, `reader_id`,
-  `read_route_id` written, never read (open, non-blocking).
+  `read_route_id` written, never read. **Kept on purpose** — they are what the
+  skip was, unrecoverable later, for a skip report or field-visit work order;
+  documented as such in spec 30's ReadSkip section.
 - Grep 5 — Unread config keys: none; `transfer_carries_rate_schedule` read
   where it takes effect.
 - Docs: the architecture doc had no read-route endpoint rows, no field tables
@@ -158,14 +169,23 @@ only. All four branches are on origin.
     while Correct's reopen was in flight was wiped when it answered (the e2e
     journey lost this race twice). Fields are disabled while a post or reopen
     reloads the rows. Unit test added.
-  3. Crash loses skips — **fixed** (= L1 #3). Still open: a crash between the
-     `meter_read` commit and the row going IMPORTED re-posts on resubmit.
-  4. UTC date — **fixed** (= L1 #6). Server still accepts future read dates.
-  5. Billed-period check uses the route's cycle, not the meter's.
-  6. Transfer carries only assignments in force on the date; scheduled future
-     rate changes are dropped — intended? spec should say.
-  7. A typed-but-not-Entered or held number is silently NOT_ENTERED on Post,
-     and NOT_ENTERED rows cannot be reopened.
+  3. Crash loses skips — **fixed** (= L1 #3). A crash between the
+     `meter_read` commit and the row going IMPORTED can no longer re-post:
+     the resubmit meets `meter_read_one_original_per_instant` and the row is
+     `ERROR` / `READ_ALREADY_POSTED`. **Closed by the index**, no further code.
+  4. UTC date — **fixed** (= L1 #6). Future read dates — **fixed 2026-11-27**:
+     400 `READ_DATE_IN_FUTURE`, a day's slack for tenants east of UTC.
+  5. Billed-period check used the route's cycle — **fixed 2026-11-27**: the
+     meter's own, via `windowsByMeter` as `recordSkips` does. Test: "judges the
+     billed period on the meter's own cycle, not the route's".
+  6. Transfer dropped scheduled rate changes — **fixed 2026-11-27**: those
+     starting after the transfer are carried with their own start. Spec 05
+     says so. Test: "carries a rate change the source had scheduled".
+  7. Typed-but-not-Entered or held numbers lost at Post — **fixed 2026-11-27**:
+     the screen blocks Post and names the meters (a server-refused number does
+     not block), and reopen now returns NOT_ENTERED rows, with an "Enter the
+     rows left out" button. The "nothing to read" load failure is said, not
+     swallowed.
 - Reviewer's meta-note worth acting on: a unique index on `meter_read` as the
   real backstop rather than more application guards. **Done 2026-11-27**
   (Rao's call): `meter_read_one_original_per_instant` on (utility,
@@ -250,13 +270,21 @@ were failing too — their fixtures opened two live agreements at one premise,
 which 703b9da's trigger refuses; those suites had not run since. Fixed in
 the fixtures, not the trigger.
 
-Before shipping: decide
-which open non-blocking items to take now (the two data-loss ones — adversarial
-#2 and the save/submit race — were fixed 2026-11-27). The architecture doc
-was brought up to date the same day. See `docs/specs/05-service-agreement.md` for the one
-open product question (`createServiceAgreement` and move-in write no
-rate-schedule assignment, and the billing executor files that condition
-quietly).
+**Every review finding is now addressed (2026-11-27)** — fixed with a test,
+closed by the `meter_read` index, or (the three `read_skip` columns) kept on
+purpose and documented. Backend e4b47bc, screens 574ed0b; API unit 1264, web
+927, the five affected integration suites, and the three e2e specs green.
+
+**What still stands between this and "ready to ship":**
+1. **The Tier 3 runbook/rollback gate** — no runbook beyond the boot steps,
+   and the rollback is written but untested, because there is no staging
+   environment. That is a fact about the deployment, not something more code
+   on this branch can close; it needs a decision on how this product ships.
+2. **One open product question** in `docs/specs/05-service-agreement.md`:
+   `createServiceAgreement` and move-in write no rate-schedule assignment, and
+   the billing executor files that condition quietly.
+3. **Not run since the last changes:** the full integration suite (127 files)
+   — only the suites these changes touch were re-run.
 
 Signed: Claude Opus 5 (session of 2026-11-26) — as the author of the handoff
 record only, not as a reviewer of this branch.

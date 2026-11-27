@@ -193,6 +193,19 @@ writer waits for the first and is then refused. Only writers of that one key eve
 The integration suite holds one transaction open after its insert and asserts the
 second is refused.
 
+**An update that keeps or narrows a point's own dates is let through** (migration
+`20261127110000`, 2026-11-27). Same agreement, same premise, start no earlier and end no
+later: such a row overlaps nothing it did not overlap before, so there is nothing to
+check. Without this, the overlaps that predate the trigger were untouchable — every edit
+to one met the overlap already there and was refused, even the edit that ends it.
+Widening, moving premise and changing agreement are still judged, and so is the
+reopen-a-closed-point case above.
+
+**Date-order CHECKs answer in words.** `chk_sa_end_ge_start`, `chk_sp_end_ge_start` and
+`chk_spm_removed_ge_added` reach a caller as **400 `DATE_ORDER_VIOLATION`** with a
+sentence (`middleware/error-handler.ts`), not as "Database error". A transfer or close
+backdated to before the service began is how a CSR meets them.
+
 **What this section claimed until 2026-11-18, and why it was wrong.** The intent since
 April was a partial GIST exclusion constraint `no_overlapping_active_sa` (migration
 `20260427143408`) on a generated `effective_range tsrange` column. What was actually in
@@ -408,6 +421,7 @@ Migrations applied in this slice:
 | `20260427162359_point_in_time_helpers` | `responsible_account_at()` and `meter_assignment_at()` SQL functions |
 | `20261118110000_one_live_service_per_premise` | `enforce_one_live_service_per_premise()` + the `before_one_live_service_per_premise` trigger on `service_point`. **Note that `20260427143408`'s exclusion constraint is no longer in the database** — only its generated column survived the 2026-10-18 squash. See **Effective-Range Overlap Prevention** above |
 | `20261127090000_one_live_service_lock` | `CREATE OR REPLACE` of `enforce_one_live_service_per_premise()` adding the advisory lock, so two concurrent openings at one premise cannot both pass. See **Effective-Range Overlap Prevention** above |
+| `20261127110000_one_live_service_update_narrowing` | `CREATE OR REPLACE` of the same function: an UPDATE that keeps or narrows a point's own dates at the same premise and agreement skips the check, so pre-existing overlaps can be edited |
 | `20261118120000_restore_date_order_checks` | `chk_spm_removed_ge_added` on `service_point_meter`, which `20260427143900` added and the squash dropped, plus `chk_sp_end_ge_start` on `service_point`, which never existed — that table had no CHECK constraints at all. Both verified against the data before adding |
 
 **Pre-existing data:** the new constraints don't reject existing rows — they only block new violations. However, pre-existing orphaned `service_agreement_meter` rows (parent SA is FINAL/CLOSED but the SAM has `removed_date IS NULL`) will continue to exist until a separate cleanup is run. This is the bug `closeServiceAgreement` fixes prospectively, but historical orphans need a one-time `UPDATE service_agreement_meter SET removed_date = sa.end_date FROM service_agreement sa WHERE service_agreement_id = sa.id AND removed_date IS NULL AND sa.status IN ('FINAL', 'CLOSED')` script. **Tracked as a follow-up task; not in Slice 1.**
@@ -425,7 +439,9 @@ agreement opens on the target account.
 premise with its own open meters; and, when the tenant's
 `UtilityConfig.transfer_carries_rate_schedule` is true — the default — the
 `SAScheduleAssignment` rows in force on the transfer date, re-dated to the transfer
-date with their own expiration kept. Not `billing_cycle_id`, which left the SA in
+date with their own expiration kept, **and those scheduled to start after it**,
+keeping their own start (2026-11-27; before that a rate change the source had booked
+for next month was silently dropped). Not `billing_cycle_id`, which left the SA in
 slice 5b.1: the target account owns the cycle. The operator's `reason`, where they
 gave one, reaches both the closure reason and the audit row.
 

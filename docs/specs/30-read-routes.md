@@ -123,6 +123,16 @@ cannot express it; it lives in the migration.
 **Index:** `(utility_id, read_route_id, read_date)` — a route's day, for
 the report.
 
+**Written but not yet read, on purpose:** `notes`, `reader_id` and
+`read_route_id`. The only reader of `read_skip` today is reading progress,
+for `meter_id` and `skip_reason`. The three are kept because they are what
+the skip *was* — who could not get in, on which walk, and what they wrote —
+which a skip report or a field-visit work order will want, and which cannot
+be recovered afterwards if not recorded at the time. The cross-layer audit
+of 2026-11-26 flagged them as write-only; this is the answer, not an
+oversight. The route index above is for that report and is likewise unused
+until it exists.
+
 **Why it keys on a meter while a stop keys on a premise.** The grains
 differ on purpose: a stop says *where to go*, a skip says *what was not
 read*. A skip is the absence of a read, so it keys like a read —
@@ -273,13 +283,14 @@ single-read API does not — open item 5.
 | `METER_NOT_ASSIGNED` | 400 | The meter has no agreement on that date |
 | `METER_NOT_FOUND` | 404 | |
 | `READ_SKIP_CYCLE_UNSUPPORTED` | 501 | A non-monthly cycle has no read window yet |
-| `ENTRY_NOT_FOUND` | 404 | No entry was opened for that route and day |
+| `ENTRY_NOT_FOUND` | 404 | No entry was opened for that route and day, or the batch in the path is not that route's |
+| `READ_DATE_IN_FUTURE` | 400 | A route cannot be read on a day that has not happened |
 | `ENTRY_CLOSED` | 409 | The sheet has been submitted; correct it instead |
 | `ENTRY_ROW_NOT_FOUND` | 404 | That meter is not a row of this sheet |
 | `ENTRY_ROW_AMBIGUOUS` | 400 | A row is a reading or a code for why there is none, not both |
 | `INVALID_READING` | 400 | A reading is a number, zero or more |
 | `READ_BILLED` | 400 | The meter already has a billed read in the period |
-| `ENTRY_NOTHING_TO_CORRECT` | 409 | The sheet posted cleanly, so there is nothing to reopen |
+| `ENTRY_NOTHING_TO_CORRECT` | 409 | No row was refused or left out, so there is nothing to reopen |
 | `ENTRY_NOT_FINISHED` | 409 | The sheet is still being submitted; a reopen now would hand its rows to a second submit |
 
 `OTHER_REGISTER_REFUSED` is a per-row `errorCode`, not an HTTP code: a coded
@@ -446,14 +457,37 @@ importer is audited with `actorName: "Import"` and a null actor.
     again, per row, because billing can run between the two — and a row
     refused there goes `ERROR` while its neighbours still post.
 
+    **The window is the meter's own cycle's, not the route's** (2026-11-27).
+    A stop may serve an account on another cycle (rule 3), and judging it on
+    the route's window refused its reading for a bill outside its own period.
+    It uses `windowsByMeter`, the same lookup `recordSkips` uses, so the two
+    refusals agree.
+
 14. **A refused stop is corrected, not retyped.**
-    `reopenEntryForCorrections` puts the batch and its `ERROR` rows back to
-    `PENDING` and leaves `IMPORTED` and `SKIPPED` rows exactly as they are.
-    That is also what prevents a re-post: `processBatch` selects `PENDING`
-    rows and nothing else, which is the same mechanism rule 10 rests on, so
-    no second guard was added. It admits only a batch holding at least one
-    `ERROR` row — a sheet that posted cleanly has nothing to correct, and
-    reopening one could not be told apart from posting it twice.
+    `reopenEntryForCorrections` puts the batch back to `PENDING`, along with
+    its `ERROR` rows **and its rows that posted with nothing entered**
+    (`SKIPPED` / `NOT_ENTERED`, added 2026-11-27 — nothing was posted for
+    them, and without it a number lost at Post could never be added). It
+    leaves `IMPORTED` rows and recorded skips exactly as they are. That is
+    also what prevents a re-post: `processBatch` selects `PENDING` rows and
+    nothing else, which is the same mechanism rule 10 rests on. It admits
+    only a **finished** batch (`ENTRY_NOT_FINISHED` while a submit runs)
+    holding at least one such row — a sheet with neither has nothing to
+    correct, and reopening one could not be told apart from posting it twice.
+
+    The backstop under all of it is the database: since 2026-11-27
+    `meter_read_one_original_per_instant` refuses the same read posted twice
+    (spec 08 rule 6), and a row that meets it is `ERROR` /
+    `READ_ALREADY_POSTED` rather than a second read.
+
+14a. **A sheet cannot be opened for a day that has not happened**
+    (`READ_DATE_IN_FUTURE`, 2026-11-27). One day of slack past the UTC date,
+    because a utility east of Greenwich is already on tomorrow. The screens
+    take "today" as the operator's local date.
+
+14b. **The batch in a path belongs to the route in it.** Saving a row and
+    submitting check it, and a mismatch is a 404 `ENTRY_NOT_FOUND` — the
+    pairing does not exist.
 
 15. **An entry batch must never be driven through the generic imports
     paths.** Every guard above sits *above* `processBatch`, so the imports
@@ -519,6 +553,13 @@ premises on no route; a data-quality list of stops whose account is on
 another cycle (rule 3); print the sheet; open entry for a date. No
 resequence control, because there is nothing behind one yet (open item 6).
 
+**Rename and retire** (2026-11-27, EDIT): the name inline, and *Retire
+route* / *Put back in use* behind a confirmation — the only way a route
+leaves use, since there is no DELETE. This is the caller
+`PATCH /read-routes/:id` lacked. Code and cycle are not inline fields: a
+vendor route's code is what its imports match on, and moving a route to
+another cycle changes which window every sheet of it means.
+
 ### Route entry (`/read-routes/:id/entry`)
 
 The sheet, plus the two things paper cannot do: it knows each meter's own
@@ -528,10 +569,23 @@ advances, the skip reason reachable without the mouse. Progress reads
 entered-of-total. Submit posts the route as a whole and reports what landed;
 a refused row is corrected in place and the sheet resubmitted.
 
+Three guards added 2026-11-27:
+- **Post waits for unsaved numbers.** A number typed but never committed with
+  `Enter`, or held by the band and not confirmed, blocks Post and is named
+  by meter — it used to post as nothing entered. A number the server refused
+  does not block: the row already says why.
+- **"Enter the rows left out"** reopens a sheet whose only problem is rows
+  left out (rule 14).
+- **The fields are shut while a post or reopen reloads the rows**, because the
+  reload replaces every typed value and a number typed into it was wiped.
+- A failure to load the stops with nothing to read is **said**, not shown as
+  an empty list (rule 17).
+
 ### Reading Progress (`/meter-reads/progress`)
 
-Gains a route filter and, per row, the route code and the skip reason behind
-an outstanding read — so the screen can say *why* instead of just
+**Built 2026-11-27.** A route filter of the chosen cycle's routes (passing
+`readRouteId`), and per row the **Route** and **Why not read** — the route
+code and the open skip's reason — so the screen says *why* instead of just
 *missing*. See spec 08.
 
 ## Open items

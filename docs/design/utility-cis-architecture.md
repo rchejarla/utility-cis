@@ -924,7 +924,9 @@ The design principle is **defense in depth**: Zod returns nice errors at the API
 | Trigger | Rule |
 |---|---|
 | `before_sa_lifecycle_invariants` on `service_agreement` | a terminal status must carry an `end_date`, and an `end_date` may not be set on a still-live agreement without moving the status with it |
-| `before_one_live_service_per_premise` on `service_point` (2026-11-18) | two `PENDING`/`ACTIVE` agreements may not both serve one premise for one commodity over overlapping days. The key spans both tables — `premise_id` is on the point, `commodity_id` on the agreement — which is why no exclusion constraint can express it. It replaces `no_overlapping_active_sa`, which spec 05 and `schema.prisma` both described and the database did not contain; see spec 05. **Takes `pg_advisory_xact_lock` on (tenant, premise, commodity) before its check** (`20261127090000`): without it two concurrent openings at one address each missed the other's uncommitted point under READ COMMITTED and both committed |
+| `before_one_live_service_per_premise` on `service_point` (2026-11-18) | two `PENDING`/`ACTIVE` agreements may not both serve one premise for one commodity over overlapping days. The key spans both tables — `premise_id` is on the point, `commodity_id` on the agreement — which is why no exclusion constraint can express it. It replaces `no_overlapping_active_sa`, which spec 05 and `schema.prisma` both described and the database did not contain; see spec 05. **Takes `pg_advisory_xact_lock` on (tenant, premise, commodity) before its check** (`20261127090000`): without it two concurrent openings at one address each missed the other's uncommitted point under READ COMMITTED and both committed. **Lets through an UPDATE that keeps or narrows the row's own dates** at the same premise and agreement (`20261127110000`), so overlaps that predate the trigger can still be edited and ended |
+
+**Date-order CHECKs** (`chk_sa_end_ge_start`, `chk_sp_end_ge_start`, `chk_spm_removed_ge_added`) write no sentence of their own, so `middleware/error-handler.ts` maps each by name to a **400 `DATE_ORDER_VIOLATION`** with one (`DATE_ORDER_CHECKS`). A new CHECK a form can trip belongs in that map.
 
 **Both raise `check_violation` with a marker, and that choice is load-bearing.** Prisma recognises `unique_violation` (23505) and replaces the message with its own "Unique constraint failed", so the sentence naming the conflict never reaches the caller; 23514 passes through. `middleware/error-handler.ts` matches the marker and answers **409** with the trigger's own words — without that branch these fall to the generic arms and arrive as a 400 "Database error" or a 500, which is a refusal with a reason reported as a fault with none. A trigger added by a later migration must be added to `DATABASE_INVARIANTS` there, or its reason goes nowhere.
 
@@ -1055,16 +1057,16 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | GET | `/api/v1/read-routes` | Read Routes (list, with cycle code and stop count; VIEW) |
 | POST | `/api/v1/read-routes` | Read Routes (create; EDIT — route maintenance is EDIT, entry is CREATE) |
 | GET | `/api/v1/read-routes/:id` | Read Routes |
-| PATCH | `/api/v1/read-routes/:id` | Read Routes (rename, retire via `active`; `origin` not accepted). **No caller in the web app yet** |
+| PATCH | `/api/v1/read-routes/:id` | Read Routes (rename, retire via `active`; `origin` not accepted). Called by the route page's rename and retire controls |
 | GET | `/api/v1/read-routes/:id/stops` | Read Routes (stops in walking order, with address and the cycles billed there) |
 | POST | `/api/v1/read-routes/:id/stops` | Read Routes (add a stop; refuses a premise already on any route) |
 | DELETE | `/api/v1/read-routes/:id/stops/:stopId` | Read Routes |
 | GET | `/api/v1/read-routes/:id/unsequenced` | Read Routes (the tray: premises on no route at all) |
 | GET | `/api/v1/read-routes/:id/sheet` | Read Routes (`onDate`; PDF, or `format=json` for the data including stops with nothing to read). Not persisted |
-| POST | `/api/v1/read-routes/:id/entry` | Read Routes (open keyed entry for `readDate`; idempotent per route and day, 201 either way; CREATE) |
-| PATCH | `/api/v1/read-routes/:id/entry/:batchId/rows` | Read Routes (stage a row: a reading, a skip code, or neither to clear it. Locks the batch row, so it cannot race Post) |
-| POST | `/api/v1/read-routes/:id/entry/:batchId/submit` | Read Routes (post the sheet: skips first, then readings through `processBatch`; a second call reports the stored result) |
-| POST | `/api/v1/read-routes/:id/entry/reopen` | Read Routes (`readDate`; returns refused rows to PENDING. 409 `ENTRY_NOTHING_TO_CORRECT` on a clean sheet, `ENTRY_NOT_FINISHED` while a submit is running) |
+| POST | `/api/v1/read-routes/:id/entry` | Read Routes (open keyed entry for `readDate`; idempotent per route and day, 201 either way; CREATE. 400 `READ_DATE_IN_FUTURE` past today, with a day's slack for tenants east of UTC) |
+| PATCH | `/api/v1/read-routes/:id/entry/:batchId/rows` | Read Routes (stage a row: a reading, a skip code, or neither to clear it. Locks the batch row, so it cannot race Post. 404 if the batch is not `:id`'s) |
+| POST | `/api/v1/read-routes/:id/entry/:batchId/submit` | Read Routes (post the sheet: skips first, then readings through `processBatch`; a second call reports the stored result. 404 if the batch is not `:id`'s) |
+| POST | `/api/v1/read-routes/:id/entry/reopen` | Read Routes (`readDate`; returns refused rows and rows left with nothing entered to PENDING. 409 `ENTRY_NOTHING_TO_CORRECT` when there are neither, `ENTRY_NOT_FINISHED` while a submit is running) |
 | GET | `/api/v1/read-routes/:id/progress` | Read Routes (the route's own cycle; `window=reading` by default here) |
 | GET | `/api/v1/meter-data-exceptions` | Meter Reads (interval-coverage queue — days an interval meter's data does not cover; spec 26) |
 | POST | `/api/v1/meter-data-exceptions/:id/accept` | Meter Reads (bill the month as it stands; audited, and the pre-run check stops blocking those minutes) |
