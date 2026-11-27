@@ -112,7 +112,7 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 | GET | `/portal/api/accounts` | portal_accounts | List customer's accounts |
 | GET | `/portal/api/accounts/:accountId` | portal_accounts | Account detail with agreements, meters, premises |
 | GET | `/portal/api/accounts/:accountId/bills` | portal_accounts | The account's **posted** bills, with settlement fields (`overdue`, `partPaid`, `charge.openAmount`) |
-| GET | `/portal/api/agreements/:id/usage` | portal_usage | Meter reads for an agreement (accepts `from`, `to` YYYY-MM params) |
+| GET | `/portal/api/agreements/:id/usage` | portal_usage | Meter reads for an agreement (accepts `from`, `to` YYYY-MM params), each with its `peakCode` (null for a total read), plus `monthly` — the month totals, computed server-side by the rating engine's rule |
 | GET | `/portal/api/bills/:id/document` | accounts | The customer's own bill PDF, streamed through the API |
 | GET | `/portal/api/profile` | portal_profile | Customer contact info |
 | PATCH | `/portal/api/profile` | portal_profile | Update email, phone, altPhone |
@@ -146,6 +146,8 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 4. **Unified identity:** Portal customers and admin staff share the same `CisUser` table, `Role` system, `UtilityModule` system, and JWT format. The only distinction is the `customerId` FK and the role's module permissions.
 
 5. **Usage data visibility:** Customers can view meter read data for their active service agreements via the usage page. Date range is configurable (from/to month pickers, default trailing 12 months). UOM is frozen on each read and displayed alongside consumption.
+
+   **A month's usage is counted once, by the rating engine's rule** (2026-11-27). A TOU meter's month holds a total read *and* one row per TOU period that reconcile to it; the page used to add every row, so a TOU customer saw roughly double what they used and were billed for. The endpoint now returns `monthly`: per meter, the total read wins and the TOU buckets stand in only where there is no total (an interval meter writes only buckets) — the same rule as `meter-loader.ts`, applied server-side so the portal and the bill cannot disagree. The table labels each row's TOU period (a Period column, shown only when the agreement has TOU rows) and shows "—" for a bucket's reading, which has no dial behind it and printed `0`.
 
 6. **Bills are real, and only posted ones are shown** (since 2026-10-22). The portal reads `Bill` rows through `GET /portal/api/accounts/:accountId/bills`; an unposted bill is withheld, because it has raised no receivable and the customer does not owe it. Settlement state comes from the shared `BillStatusPill`, which reads `overdue`, `partPaid` and `charge.openAmount` as the API decides them — working it out in the browser from the money columns is the specific bug that component exists to prevent.
 
