@@ -283,8 +283,9 @@ purpose and documented. Backend e4b47bc, screens 574ed0b; API unit 1264, web
 2. **One open product question** in `docs/specs/05-service-agreement.md`:
    `createServiceAgreement` and move-in write no rate-schedule assignment, and
    the billing executor files that condition quietly.
-3. **Not run since the last changes:** the full integration suite (127 files)
-   — only the suites these changes touch were re-run.
+3. ~~Not run since the last changes: the full integration suite.~~ **Run
+   2026-11-27 on 69bd392, one file at a time: 126/126 files, 1612 tests
+   passed, 0 failed, 0 skipped** (10:22–11:11).
 
 Signed: Claude Opus 5 (session of 2026-11-26) — as the author of the handoff
 record only, not as a reviewer of this branch.
