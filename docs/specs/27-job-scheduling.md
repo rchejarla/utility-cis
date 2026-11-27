@@ -1,6 +1,6 @@
 # 27 — Job Scheduling
 
-**Status:** proposed, 2026-10-30. Nothing in this spec is built.
+**Status (corrected 2026-11-27):** Built: the scheduler view (2026-10-30); queue pause and resume and the two concurrency limits (2026-10-30); the billing dispatcher with its alerts and metrics (2026-10-31). Not built: editable cadence (slice 4), which waits on spec 24 steps 2–3. *Said "proposed … nothing in this spec is built" until 2026-11-27, though its own slice table marks slices 1–3 shipped.*
 
 **Audience:** whoever builds scheduler visibility and the billing
 dispatcher. Read [24 — Platform Worker Control](24-platform-worker-control.md)

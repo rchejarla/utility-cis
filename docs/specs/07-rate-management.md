@@ -1,7 +1,7 @@
 # Rate Management
 
 **Module:** 07 — Rate Management
-**Status:** Built (v1) — Migrating to v2
+**Status (corrected 2026-11-27):** Built on the **v2 component model**, which is live — the v1 rate-type/config columns are gone (design: spec 07b). Not built: rebilling when a read is corrected (slice 5d). *Said "Built (v1) — Migrating to v2" until 2026-11-27.*
 **Entities:** RateSchedule, BillingCycle (v1) plus the v2 entities listed below
 
 > **⚠️ v2 migration in progress.** The single-blob `rate_type` + `rate_config` model documented below is being replaced with a normalised component-based model. Work is split across 5 slices. The full v2 design is in [`07b-rate-model-v2-design.md`](./07b-rate-model-v2-design.md). The slice-1 schema additions (`rate_component_kind`, `rate_assignment_role`, plus more entities coming) are landing now; this doc will be rewritten when v2 is complete.

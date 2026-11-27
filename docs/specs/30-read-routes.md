@@ -1,7 +1,7 @@
 # Read Routes
 
 **Module:** 30 — Read Routes
-**Status:** Phase 2 — schema, route and stop maintenance, the shared row predicate, route provenance on imported reads, skips and their healing, per-route progress, the printed sheet and server-side entry are all built and tested. The HTTP surface and the three screens land with the UI work. Route provenance on *ingest* stays provisional until a real vendor export is mapped (see **Open items**).
+**Status:** Phase 2 — schema, route and stop maintenance, the shared row predicate, route provenance on imported reads, skips and their healing, per-route progress, the printed sheet and server-side entry are all built and tested — and since 2026-11-27 so are the HTTP surface, the list, detail (with rename and retire) and entry screens, and the route filter on reading progress, merged to main. Route provenance on *ingest* stays provisional until a real vendor export is mapped (see **Open items**).
 **Entities:** ReadRoute, ReadRouteStop, ReadSkip (plus `MeterRead.route_id`)
 **Design:** `docs/superpowers/specs/2026-11-08-read-routes-and-reading-system-design.md` — this spec is that document rewritten as what is true.
 

@@ -1,7 +1,7 @@
 # Notifications
 
 **Module:** 13 — Notifications
-**Status:** Phase 3 — design complete, implementation starting
+**Status (corrected 2026-11-27):** Built: templates with an editor and the send log at `/notifications`, the background send job with SMS quiet hours, email through apptor-connect mail (per-tenant `notifications.mailIntegration`; console when unset), and sends from delinquency, bill delivery and billing notices. Not built: real SMS delivery (console only — no SMS integration to bind yet), Notifications tabs on account and customer, the portal welcome email, delivery-status webhooks, customer opt-in/opt-out, platform-originated mail. *Said "design complete, implementation starting" until 2026-11-27. The provider table below that names SendGrid/Twilio keys in tenant settings contradicts CLAUDE.md's rule that no credential lives here — apptor-connect holds them.*
 **Entities:** `NotificationTemplate`, `Notification` (send log / outbox)
 
 ## Overview

@@ -1,6 +1,6 @@
 # 28 — Legacy CIS Overlay
 
-**Status:** proposed, 2026-10-31. Nothing in this spec is built.
+**Status (corrected 2026-11-27):** Built (2026-11-02): an overlay mode per tenant, with billing, posting, collections and sending refused server-side; mirrored records read-only for staff; notes on records; switching to full mode from the platform API; imports that update by legacy key. Not built: hiding the refused controls in the UI, a console control for the mode switch, the SFTP pickup and connector pack, charge-code mapping, shadow-rating, exceptions, workflows, bill explanations. *Said "proposed … nothing in this spec is built" until 2026-11-27.*
 
 **Audience:** whoever builds the overlay offer — import, shadow-rating,
 exception handling and the apptor-workflow templates. Read

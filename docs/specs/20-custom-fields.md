@@ -1,7 +1,7 @@
 # Custom Fields
 
 **Module:** 20 — Custom Fields
-**Status:** Phase 1 (backend + Customer pilot) — see roadmap
+**Status (corrected 2026-11-27):** Built: custom fields on customers, accounts, premises, service agreements and meters, with admin settings, create and detail forms, and import columns (2026-11-01). Not built: searchable fields and filters, a date-and-time type, cleanup when an option is removed, field-level permissions and audit. *Said "Phase 1 (backend + Customer pilot)" until 2026-11-27.*
 **Entities:** CustomFieldSchema, plus `custom_fields` jsonb column on Customer/Account/Premise/ServiceAgreement/Meter
 
 ## Overview

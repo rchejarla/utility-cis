@@ -1,7 +1,7 @@
 # Service Requests
 
 **Module:** 14 — Service Requests
-**Status:** Slice B in progress (Phase 4)
+**Status (corrected 2026-11-27):** Built: staff-created service requests end to end — SLAs, the queue, detail and new screens, SLA settings, the account tab (slice B, 2026-04-23); work orders raised by delinquency (2026-10-25); a nightly sweep that flags SLA breaches. Not built: portal submission, routing to external systems, attachment upload, billing on completion, escalation notifications (escalation fields are stored, nothing sends on them), repeat detection, fee waivers. *Said "Slice B in progress" until 2026-11-27; the "Deferred" list below still names the breach sweep, which is built.*
 **Entities:** ServiceRequest ✓, Sla ✓, ServiceRequestTypeDef ✓ (slice B); ServiceRequestCounter (internal plumbing for SR-YYYY-NNNNNN numbering)
 
 ## Slice B scope (2026-04-23)

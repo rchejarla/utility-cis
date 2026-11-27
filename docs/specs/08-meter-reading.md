@@ -1,7 +1,7 @@
 # Meter Reading
 
 **Module:** 08 — Meter Reading
-**Status:** Phase 2 — CRUD + exception queue + import center UI complete; rollover detection + correction chain landed; bulk import backend and configurable thresholds are follow-ups
+**Status (corrected 2026-11-27):** Built: read entry, list, detail, corrections and the exception queue; multi-register reads; rollover and reverse-flow detection; bulk read import through the shared import pipeline (spec 22); interval import and coverage (spec 26); reading progress with a route filter; one original read per instant enforced by the database. Not built: tenant-configurable exception thresholds (Req 93), estimated reads, rebill on correction, the meter-detail read history tab. *Said bulk import was a follow-up until 2026-11-27; it shipped with spec 22. Parts of the body (the Import Center section, the API table's "planned" import endpoint, Phase 2.5 "planned") predate that and are stale.*
 **Entities:** MeterRead, MeterEvent, ImportBatch
 
 ## Overview

@@ -1,6 +1,8 @@
 # Rate Model v2 — Design Sketch
 
-**Status:** DESIGN ONLY. No code, no migration, no schema change. This document explores how a future rate model could be shaped.
+**Status (corrected 2026-11-27):** **Built — the v2 rate model is live.** Stacked rate components, schedule assignments to service agreements, indices, service classes, water-quality-average values, the rating engine with its loaders and golden tariff tests (Bozeman, NorthWestern Energy, SMUD), the component editor, and bill segments rated through the engine; tier proration shipped 2026-10-15; the v1 rate-type/config columns are gone. Not built: rebilling when a read is corrected (slice 5d) and the optional bill-grouping layer.
+
+*This line said "DESIGN ONLY. No code, no migration, no schema change" until 2026-11-27, long after the design below was built. The body is kept as the design record.*
 
 **Purpose:** Sketch a data model that can express the Bozeman tariffs in [`07a-bozeman-rate-reference.md`](./07a-bozeman-rate-reference.md) without code branches per rate type. Surface the design questions before any implementation work.
 

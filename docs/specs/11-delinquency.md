@@ -1,7 +1,7 @@
 # Delinquency
 
 **Module:** 11 — Delinquency
-**Status:** Phase 3 — design complete, implementation starting
+**Status (corrected 2026-11-27):** Built: rules, the escalation ladder and its dispatcher, notices, the dashboard, the shut-off queue, the rules editor with fee and work-order fields, late fees and work orders raised by tiers (2026-10-25), reconnection when the balance clears, payment plans and plan terms (2026-10-29). Not built: a Delinquency tab on account detail, an aging dashboard, the reconnection fee (seeded, never charged), seasonal and hours-of-day shut-off windows. *Said "design complete, implementation starting" until 2026-11-27.*
 **Entities:** `DelinquencyRule`, `DelinquencyAction`; new columns on `Account`
 
 ## Overview

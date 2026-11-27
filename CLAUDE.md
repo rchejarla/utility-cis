@@ -43,14 +43,15 @@ docs/specs/
 ├── 04-account-management.md         — Account, deposits, status
 ├── 05-service-agreement.md          — ServiceAgreement, meter assignments
 ├── 06-commodity-and-uom.md          — Commodity, UnitOfMeasure
-├── 07-rate-management.md            — RateSchedule, rate types, versioning
+├── 07-rate-management.md            — RateSchedule, components, assignments, versioning (v2 component model live)
+├── 07b-rate-model-v2-design.md      — Rate model v2 design (built; rebill on correction outstanding)
 ├── 08-meter-reading.md              — MeterRead, imports, exceptions
 ├── 09-billing.md                    — BillingCycle, billing execution
 ├── 10-payments-and-collections.md   — Payments, late fees, payment plans
-├── 11-delinquency.md                — Rules, notices, shut-off
+├── 11-delinquency.md                — Rules, notices, shut-off, fees, work orders, payment plans (aging dashboard and seasonal windows not built)
 ├── 12-solid-waste.md                — Container, cart management
-├── 13-notifications.md              — Templates, email + SMS (no postal channel)
-├── 14-service-requests.md           — SR lifecycle, SLAs
+├── 13-notifications.md              — Templates, send log, email via apptor-connect; SMS console-only (no postal channel)
+├── 14-service-requests.md           — SR lifecycle, SLAs, breach sweep, delinquency work orders (portal intake and escalation not built)
 ├── 15-customer-portal.md            — Self-service portal (Phase 4.1 MVP complete)
 ├── 20-custom-fields.md              — Custom fields (Phase 1+2 complete)
 ├── 21-saaslogic-billing.md          — SaaSLogic payment collection (design; unblocked, needs vendor answers)
@@ -66,7 +67,7 @@ docs/specs/
 ├── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (slices 1-3 shipped in full; slice 4 waits on spec 24 steps 2-3)
 ├── 28-legacy-cis-overlay.md         — Run a utility's existing CIS alongside this one and shadow-rate it (operating mode, mirrored-record rules and the legacy-key mirror shipped; the connector pack waits on a pilot)
 ├── 29-rate-modeling.md              — The rate engine as an independent offer to rate-study consultants (proposed; nothing built)
-└── 30-read-routes.md                — Read routes, the printed sheet, keyboard entry, skips (schema and services shipped; the screens land with the UI work)
+└── 30-read-routes.md                — Read routes, the printed sheet, keyboard entry, skips (schema, services, routes and screens shipped)
 ```
 
 ### Master Design Document
