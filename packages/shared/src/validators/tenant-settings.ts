@@ -162,6 +162,23 @@ export const billDocumentSettingsSchema = z
 export type BillDocumentSettings = z.infer<typeof billDocumentSettingsSchema>;
 
 /**
+ * What the customer portal shows beyond the customer's own records.
+ *
+ * `showRateComparison` (spec 26, TOU-BIL-4, slice 4): whether a customer
+ * may see the shadow bill — what a posted bill would have cost on the
+ * tariff's comparison schedule. **Off by default**: a utility decides
+ * whether to tell customers a cheaper rate existed, and it is not this
+ * system's place to decide that for it the day the feature ships.
+ */
+export const portalSettingsSchema = z
+  .object({
+    showRateComparison: z.boolean().optional(),
+  })
+  .strict();
+export type PortalSettings = z.infer<typeof portalSettingsSchema>;
+export const DEFAULT_PORTAL_SETTINGS: Required<PortalSettings> = { showRateComparison: false };
+
+/**
  * Umbrella schema used by the tenant-config PATCH route. Each namespace
  * is optional so a patch only has to include the block it's changing.
  * Unknown top-level keys are rejected so typos fail loudly.
@@ -174,6 +191,7 @@ export const tenantSettingsNamespacesSchema = z
     billing: billingIntegrationSettingsSchema.optional(),
     issuer: issuerSettingsSchema.optional(),
     billDocuments: billDocumentSettingsSchema.optional(),
+    portal: portalSettingsSchema.optional(),
   })
   .strict();
 export type TenantSettingsNamespaces = z.infer<typeof tenantSettingsNamespacesSchema>;

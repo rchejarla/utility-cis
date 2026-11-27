@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { StatCard } from "@/components/ui/stat-card";
 import { apiClient } from "@/lib/api-client";
 import { BillPdfButton } from "@/components/bills/bill-pdf-button";
@@ -39,7 +39,25 @@ interface PortalBill extends BillStatusFields {
   periodStart: string;
   periodEnd: string;
   total: string;
+  /** The utility shows rate comparisons and this bill's tariff names one (spec 26, TOU-BIL-4). */
+  rateComparison?: boolean;
 }
+
+/** One part of a bill, compared with its tariff's comparison rate. */
+interface Comparison {
+  segmentId: string;
+  periodStart: string;
+  periodEnd: string;
+  actualTotal: string;
+  actualRate: string;
+  comparisonRate: string | null;
+  comparisonTotal: string | null;
+  difference: string | null;
+  touUsageFrom: "registers" | "intervals" | null;
+  unavailable: string | null;
+}
+
+type ComparisonState = { loading: true } | { comparisons: Comparison[] } | { failed: true };
 
 /** A bill with the account it belongs to, for the combined list. */
 interface Row extends PortalBill {
@@ -54,6 +72,15 @@ export function BillsList() {
   const [accountCount, setAccountCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [compared, setCompared] = useState<Record<string, ComparisonState>>({});
+
+  const compare = (billId: string) => {
+    setCompared((c) => ({ ...c, [billId]: { loading: true } }));
+    apiClient
+      .get<{ comparisons: Comparison[] }>(`/portal/api/bills/${billId}/rate-comparison`)
+      .then((res) => setCompared((c) => ({ ...c, [billId]: { comparisons: res.comparisons } })))
+      .catch(() => setCompared((c) => ({ ...c, [billId]: { failed: true } })));
+  };
 
   useEffect(() => {
     let live = true;
@@ -141,7 +168,8 @@ export function BillsList() {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id}>
+              <Fragment key={r.id}>
+              <tr>
                 <Td>
                   <span
                     style={{
@@ -183,13 +211,41 @@ export function BillsList() {
                   <BillStatusPill bill={r} />
                 </Td>
                 <Td>
-                  <BillPdfButton
-                    billId={r.id}
-                    billNumber={r.billNumber}
-                    surface="portal"
-                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <BillPdfButton
+                      billId={r.id}
+                      billNumber={r.billNumber}
+                      surface="portal"
+                    />
+                    {r.rateComparison && !compared[r.id] && (
+                      <button
+                        type="button"
+                        onClick={() => compare(r.id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          color: "var(--accent-primary)",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          textDecoration: "underline",
+                        }}
+                      >
+                        Compare rates
+                      </button>
+                    )}
+                  </div>
                 </Td>
               </tr>
+              {compared[r.id] && (
+                <tr>
+                  <Td colSpan={showAccount ? 8 : 7}>
+                    <ComparisonPanel state={compared[r.id]!} />
+                  </Td>
+                </tr>
+              )}
+              </Fragment>
             ))}
             {!loading && rows.length === 0 && (
               <tr>
@@ -205,6 +261,55 @@ export function BillsList() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A bill compared with another rate, in the customer's terms: what the
+ * other rate would have charged, and which way it went. Never a
+ * recommendation — the utility decides what to say about switching.
+ */
+function ComparisonPanel({ state }: { state: ComparisonState }) {
+  const box: React.CSSProperties = {
+    whiteSpace: "normal",
+    fontSize: 13,
+    color: "var(--text-secondary)",
+    lineHeight: 1.5,
+  };
+  if ("loading" in state) return <div style={box}>Working out the comparison…</div>;
+  if ("failed" in state) {
+    return <div style={box}>The comparison could not be loaded just now. Please try again shortly.</div>;
+  }
+  return (
+    <div data-testid="rate-comparison" style={{ ...box, display: "flex", flexDirection: "column", gap: 6 }}>
+      {state.comparisons.map((c) => {
+        if (c.unavailable || c.comparisonTotal === null || c.difference === null) {
+          return <div key={c.segmentId}>{c.unavailable}</div>;
+        }
+        const diff = parseFloat(c.difference);
+        const amount = fmt(Math.abs(diff).toFixed(2));
+        return (
+          <div key={c.segmentId}>
+            {`${ymd(c.periodStart)} → ${ymd(c.periodEnd)}: `}
+            on <b>{c.comparisonRate}</b> this would have cost <b>{fmt(c.comparisonTotal)}</b>, against{" "}
+            {fmt(c.actualTotal)} on {c.actualRate}.{" "}
+            <span data-testid="rate-comparison-verdict">
+              {diff === 0
+                ? "The same either way."
+                : diff > 0
+                  ? `Your rate saved you ${amount}.`
+                  : `${c.comparisonRate} would have been ${amount} less.`}
+            </span>
+            {c.touUsageFrom === "intervals" && (
+              <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                {" "}
+                Worked out from your meter&apos;s hourly readings.
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

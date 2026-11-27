@@ -149,7 +149,7 @@ beforeEach(() =>
     await resetDb();
     fix = await makeTenantFixture(prisma, TENANT_A);
     await ensurePrincipal(prisma, TENANT_A);
-    for (const moduleKey of ["agreements", "rate_schedules", "billing"]) {
+    for (const moduleKey of ["agreements", "rate_schedules", "billing", "settings", "portal_billing", "portal_accounts"]) {
       await prisma.utilityModule.create({ data: { utilityId: fix.utilityId, moduleKey } });
     }
     await (await import("../../services/rbac.service.js")).invalidateTenantModulesCache(fix.utilityId);
@@ -523,5 +523,143 @@ describe("PUT /api/v1/rate-schedules/:id/comparison-schedule", () => {
 
     expect(res.statusCode, res.body).toBe(201);
     expect(res.json().comparisonScheduleCode).toBe("RES-STD");
+  });
+});
+
+/*
+ * The shadow bill in the customer portal (slice 4): behind a tenant switch
+ * that is off by default, on the customer's own posted bills only, and a
+ * 404 for every reason it is not shown.
+ */
+describe("portal rate comparison", () => {
+  let customerId: string;
+  let portalUserId: string;
+  let strangerUserId: string;
+  let strangerCustomerId: string;
+
+  const portalToken = (actorId: string, customer: string) => {
+    const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+    const payload = Buffer.from(
+      JSON.stringify({
+        sub: actorId,
+        utility_id: TENANT_A,
+        email: "customer@example.com",
+        name: "Portal Customer",
+        role: "portal",
+        customer_id: customer,
+      }),
+    ).toString("base64url");
+    return `${header}.${payload}.fake-signature`;
+  };
+
+  beforeEach(() =>
+    asPlatform(async () => {
+      const { prisma } = prismaImports;
+      const mkCustomer = (firstName: string) =>
+        prisma.customer.create({
+          data: { utilityId: fix.utilityId, customerType: "INDIVIDUAL", firstName, lastName: "Test" },
+        });
+      const mine = await mkCustomer("Ada");
+      const stranger = await mkCustomer("Grace");
+      customerId = mine.id;
+      strangerCustomerId = stranger.id;
+      await prisma.account.update({ where: { id: fix.accountId }, data: { customerId } });
+      // Upserted: the per-test reset does not clear roles (the staff
+      // principal's lives there too), so a create collides on the second test.
+      const permissions = { portal_billing: ["VIEW"], portal_accounts: ["VIEW"] };
+      const role = await prisma.role.upsert({
+        where: { utilityId_name: { utilityId: fix.utilityId, name: "Portal Customer" } },
+        update: { permissions },
+        create: { utilityId: fix.utilityId, name: "Portal Customer", permissions },
+      });
+      const mkUser = async (email: string, customer: string) => {
+        const u = await prisma.cisUser.create({
+          data: { utilityId: fix.utilityId, email, name: email, isActive: true, customerId: customer },
+        });
+        await prisma.userRole.create({ data: { utilityId: fix.utilityId, userId: u.id, roleId: role.id } });
+        return u.id;
+      };
+      // Unique per test: users, like roles, outlive the per-test reset.
+      const run = Math.random().toString(36).slice(2, 8);
+      portalUserId = await mkUser(`ada-${run}@example.com`, mine.id);
+      strangerUserId = await mkUser(`grace-${run}@example.com`, stranger.id);
+    }),
+  );
+
+  /** A July TOU bill on the customer's account, posted unless said otherwise. */
+  async function postedBill(posted = true) {
+    await month("2026-07-31", 1000, 200, 800);
+    const seg = await bill("2026-07-01", "2026-07-31");
+    return asPlatform(async () => {
+      const { prisma } = prismaImports;
+      const b = await prisma.bill.create({
+        data: {
+          utilityId: fix.utilityId,
+          accountId: fix.accountId,
+          billingCycleId: fix.billingCycleId,
+          periodStart: new Date("2026-07-01"),
+          periodEnd: new Date("2026-07-31"),
+          billDate: new Date("2026-07-31"),
+          dueDate: new Date("2026-08-20"),
+          subtotal: seg.total,
+          taxes: "0",
+          credits: "0",
+          total: seg.total,
+          billNumber: `B-PORTAL-${posted ? "P" : "U"}`,
+          postedAt: posted ? new Date() : null,
+        },
+      });
+      await prisma.billSegment.update({ where: { id: seg.id }, data: { billId: b.id } });
+      return b.id;
+    });
+  }
+
+  const asCustomer = (url: string, actor = portalUserId, customer = customerId) =>
+    app.inject({ method: "GET", url, headers: { authorization: `Bearer ${portalToken(actor, customer)}` } });
+
+  const turnOn = async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/tenant-config",
+      headers: headers(),
+      payload: { portal: { showRateComparison: true } },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().settings.portal).toEqual({ showRateComparison: true });
+  };
+
+  it("shows nothing until the utility turns it on", async () => {
+    const billId = await postedBill();
+
+    const list = await asCustomer(`/portal/api/accounts/${fix.accountId}/bills`);
+    expect(list.statusCode, list.body).toBe(200);
+    expect(list.json().data[0].rateComparison).toBe(false);
+    expect((await asCustomer(`/portal/api/bills/${billId}/rate-comparison`)).statusCode).toBe(404);
+  });
+
+  it("compares the customer's posted bill once it is on", async () => {
+    const billId = await postedBill();
+    await turnOn();
+
+    expect((await asCustomer(`/portal/api/accounts/${fix.accountId}/bills`)).json().data[0].rateComparison).toBe(true);
+    const res = await asCustomer(`/portal/api/bills/${billId}/rate-comparison`);
+
+    expect(res.statusCode, res.body).toBe(200);
+    const [c] = res.json().comparisons;
+    expect(c).toMatchObject({ actualRate: "RES-TOU", comparisonRate: "RES-STD", unavailable: null });
+    expect(Number(c.actualTotal)).toBe(134);
+    expect(Number(c.comparisonTotal)).toBe(130);
+    expect(c.difference).toBe("-4.0000");
+  });
+
+  it("is a 404 for someone else's bill, and for one not yet posted", async () => {
+    await turnOn();
+    const posted = await postedBill();
+
+    const stranger = await asCustomer(`/portal/api/bills/${posted}/rate-comparison`, strangerUserId, strangerCustomerId);
+    expect(stranger.statusCode).toBe(404);
+
+    await asPlatform(() => prismaImports.prisma.bill.update({ where: { id: posted }, data: { postedAt: null } }));
+    expect((await asCustomer(`/portal/api/bills/${posted}/rate-comparison`)).statusCode).toBe(404);
   });
 });
