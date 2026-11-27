@@ -50,6 +50,7 @@ const numberFormatsSchema = z
 const updateBodySchema = z
   .object({
     requireHoldApproval: z.boolean().optional(),
+    transferCarriesRateSchedule: z.boolean().optional(),
     numberFormats: numberFormatsSchema.optional(),
     settings: z.record(z.unknown()).optional(),
     branding: brandingSettingsSchema.optional(),
@@ -82,6 +83,7 @@ export async function tenantConfigRoutes(app: FastifyInstance) {
       // settings object so unrelated keys stay intact.
       const merged: Parameters<typeof updateTenantConfig>[1] = {
         requireHoldApproval: patch.requireHoldApproval,
+        transferCarriesRateSchedule: patch.transferCarriesRateSchedule,
       };
       const touchesSettings =
         patch.numberFormats !== undefined ||

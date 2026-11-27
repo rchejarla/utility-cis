@@ -764,7 +764,43 @@ describe("POST /api/v1/imports/:id/retry", () => {
       });
       expect(res.statusCode).toBe(400);
       expect(JSON.parse(res.body).error.code).toBe("NOT_RETRYABLE");
-  
+
+    }));
+
+  it("refuses a typed-in route sheet, whose guards are not in processBatch", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const batch = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "API",
+          fileName: null,
+          recordCount: 10,
+          importedCount: 7,
+          errorCount: 3,
+          status: "PARTIAL",
+          mapping: {
+            kind: "read-route-entry",
+            routeId: "00000000-0000-4000-8000-00000000f00d",
+            readDate: "2026-06-05",
+          },
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: new Date(),
+          completedAt: new Date(),
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/imports/${batch.id}/retry`,
+        headers: headers(),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe("ENTRY_NOT_RETRYABLE");
+      // Refused before anything is written: a retry must not even unfinalise it.
+      const after = await prisma.importBatch.findUniqueOrThrow({ where: { id: batch.id } });
+      expect(after.status).toBe("PARTIAL");
+      expect(after.completedAt).not.toBeNull();
     }));
 });
 
@@ -813,7 +849,81 @@ describe("reclaimZombieBatches", () => {
       });
       expect(staleAfter.status).toBe("PENDING");
       expect(freshAfter.status).toBe("PROCESSING");
-  
+
+    }));
+});
+
+/**
+ * The re-enqueue half of the sweep, which is where the one exception
+ * lives: a typed-in route sheet is reclaimed like anything else but never
+ * handed to the worker, because every guard that kind of batch has sits
+ * above `processBatch` (the billed-period refusal, holding coded rows
+ * back, the skip loop). `enqueueSafely` is mocked for the whole file, so
+ * these assert on the call rather than on the dev Redis.
+ */
+describe("reclaimAndEnqueueZombies", () => {
+  const stale = () => new Date(Date.now() - 10 * 60 * 1000);
+
+  async function staleBatch(
+    kind: "file" | "entry",
+  ): Promise<string> {
+    const { prisma } = prismaImports;
+    const batch = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: kind === "entry" ? "API" : "MANUAL_UPLOAD",
+        fileName: kind === "entry" ? null : "stale.csv",
+        recordCount: 5,
+        status: "PROCESSING",
+        mapping:
+          kind === "entry"
+            ? {
+                kind: "read-route-entry",
+                routeId: "00000000-0000-4000-8000-00000000f00d",
+                readDate: "2026-06-05",
+              }
+            : { meterNumber: "meterNumber", readDatetime: "readDatetime", reading: "reading" },
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: stale(),
+      },
+    });
+    return batch.id;
+  }
+
+  async function enqueuedBatchIds(): Promise<string[]> {
+    const { enqueueSafely } = await import("../../lib/queues.js");
+    const { reclaimAndEnqueueZombies } = await import("../../workers/import-worker.js");
+    vi.mocked(enqueueSafely).mockClear();
+    await reclaimAndEnqueueZombies();
+    return vi
+      .mocked(enqueueSafely)
+      .mock.calls.map((call) => (call[2] as { batchId: string }).batchId);
+  }
+
+  it("flips a stale file batch and re-enqueues it", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const batchId = await staleBatch("file");
+
+      expect(await enqueuedBatchIds()).toEqual([batchId]);
+
+      const after = await prisma.importBatch.findUniqueOrThrow({ where: { id: batchId } });
+      expect(after.status).toBe("PENDING");
+    }));
+
+  it("flips a stale route-entry batch to PENDING without enqueuing it", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const entryId = await staleBatch("entry");
+      const fileId = await staleBatch("file");
+
+      // The file batch is here as the control: the sweep ran, and skipped
+      // only the one kind.
+      expect(await enqueuedBatchIds()).toEqual([fileId]);
+
+      const after = await prisma.importBatch.findUniqueOrThrow({ where: { id: entryId } });
+      expect(after.status).toBe("PENDING");
     }));
 });
 

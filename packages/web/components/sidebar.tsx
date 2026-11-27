@@ -29,6 +29,7 @@ import {
   faGear,
   faBars,
   faBolt,
+  faRoute,
   faTriangleExclamation,
   faDumpster,
   faPauseCircle,
@@ -219,6 +220,12 @@ export const navSections: NavSection[] = [
       { href: "/premises", label: "Premises", icon: faLocationDot, module: "premises" },
       { href: "/meters", label: "Meters", icon: faGauge, module: "meters" },
       { href: "/meter-reads", label: "Meter Reads", icon: faBolt, module: "meter_reads" },
+      /*
+       * Beside Meter Reads, and on the same module: a route is how the
+       * reads in that log were collected, and the two screens are worked
+       * on the same mornings by the same person.
+       */
+      { href: "/read-routes", label: "Read Routes", icon: faRoute, module: "meter_reads" },
       { href: "/meter-events", label: "Meter Events", icon: faTriangleExclamation, module: "meter_events" },
       { href: "/service-requests", label: "Service Requests", icon: faClipboardCheck, module: "service_requests" },
       { href: "/accounts", label: "Accounts", icon: faUser, module: "accounts" },

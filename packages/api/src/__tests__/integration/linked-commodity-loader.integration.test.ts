@@ -363,6 +363,21 @@ describe("LinkedCommodityLoader", () => {
       // Build the standard fixture, then add a SECOND water SA on the
       // same account+premise. The loader should refuse rather than
       // silently picking one.
+      //
+      // **Its service point is dated before the other's**, and that is
+      // required rather than incidental since 2026-11-18:
+      // `before_one_live_service_per_premise` refuses two *overlapping*
+      // live points at one premise for one commodity, so the version of
+      // this fixture that opened both on 2026-01-01 can no longer be
+      // written at all. `[)`, so ending where the other begins is a
+      // clean hand-over and is allowed.
+      //
+      // The ambiguity under test is untouched by that, because the
+      // sibling query filters on `status` and `servicePoints.some.premiseId`
+      // and **no dates at all** — so both agreements are still siblings
+      // and the loader must still refuse to pick one. That is also why
+      // its guard is not dead code now the trigger exists: rows
+      // predating the trigger are in exactly this shape.
       const { fix, currentSaId, siblingCommodityCode } = await makeLinkedFixture();
       const secondSibling = await prismaImports.prisma.serviceAgreement.create({
         data: {
@@ -370,7 +385,7 @@ describe("LinkedCommodityLoader", () => {
           agreementNumber: "SA-SIBLING-DUP",
           accountId: fix.accountId,
           commodityId: fix.commodityId, // same water commodity
-          startDate: new Date("2026-01-01"),
+          startDate: new Date("2025-01-01"),
           status: "ACTIVE",
         },
       });
@@ -381,7 +396,8 @@ describe("LinkedCommodityLoader", () => {
           premiseId: fix.premiseId,
           type: "METERED",
           status: "ACTIVE",
-          startDate: new Date("2026-01-01"),
+          startDate: new Date("2025-01-01"),
+          endDate: new Date("2026-01-01"),
         },
       });
 

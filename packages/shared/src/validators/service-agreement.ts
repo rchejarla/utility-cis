@@ -40,7 +40,6 @@ export const createServiceAgreementSchema = z.object({
   startDate: z.string().date(),
   endDate: z.string().date().optional(),
   status: agreementStatusEnum.default("PENDING"),
-  readSequence: z.number().int().optional(),
   meters: z.array(meterAssignmentSchema).min(1),
   // Tenant-configurable custom fields. Validated server-side.
   customFields: z.record(z.unknown()).optional(),
@@ -53,10 +52,14 @@ export const createServiceAgreementSchema = z.object({
 // child meter assignments atomically. Keeping these fields out of the
 // PATCH schema is the first line of defense; the DB-level lifecycle
 // invariant trigger (`enforce_sa_lifecycle_invariants`) is the second.
-// `.strict()` so passing a removed field returns 422 instead of being
-// silently stripped — the deprecation needs to be visible.
+// `.strict()` so passing a removed field is refused instead of being
+// silently stripped — the deprecation needs to be visible. The refusal
+// is a 400 `VALIDATION_ERROR`: the route `.parse()`s this schema and
+// `middleware/error-handler.ts` maps every `ZodError` to 400. That now
+// covers `readSequence`, here and in the create schema above: the
+// column is gone (spec 30), and a reader's order lives in
+// `read_route_stop.sequence`.
 export const updateServiceAgreementSchema = z.object({
-  readSequence: z.number().int().optional(),
   customFields: z.record(z.unknown()).optional(),
 }).strict();
 

@@ -10,6 +10,7 @@ import type {
 } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate, writeAuditRow } from "../lib/audit-wrap.js";
+import { resolveSkipsForRead } from "./read-skip.service.js";
 
 /**
  * Meter-read business logic. The service layer owns the rules the spec
@@ -414,8 +415,8 @@ export async function createMeterRead(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "MeterRead" },
     EVENT_TYPES.METER_CREATED,
-    (tx) =>
-      tx.meterRead.create({
+    async (tx) => {
+      const row = await tx.meterRead.create({
         data: {
           utilityId,
           meterId: data.meterId,
@@ -435,7 +436,11 @@ export async function createMeterRead(
           readerId: actorId,
         },
         include: fullInclude,
-      }),
+      });
+      // A number now exists for this meter: heal any open skip in the window.
+      await resolveSkipsForRead(tx, utilityId, data.meterId, readDate);
+      return row;
+    },
   );
 }
 
@@ -558,6 +563,9 @@ export async function createMeterReadEvent(
         }),
       ),
     );
+
+    // The read event produced numbers for this meter: heal any open skip.
+    await resolveSkipsForRead(tx, utilityId, data.meterId, readDate);
 
     // Skip path: one MeterEvent per skipped register. The enum doesn't
     // have a bespoke "register skipped" type today; OTHER + a descriptive

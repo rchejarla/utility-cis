@@ -59,6 +59,9 @@ let commodityCode: string;
 let accountNumber: string;
 let premiseAddress: string;
 let premiseZip: string;
+/** A second address, for the CSVs that carry two rows. See `beforeEach`. */
+let premiseAddress2: string;
+let premiseZip2: string;
 let meterNumber: string;
 let rateScheduleCode: string;
 
@@ -210,6 +213,39 @@ beforeEach(() =>
     });
     premiseAddress = premise.addressLine1;
     premiseZip = premise.zip;
+
+    /*
+     * A second premise, because several CSVs here carry **two** rows.
+     *
+     * Those rows are about something else — an optional meter column, a
+     * service-point type default, a blank legacy key — and they used to
+     * put both agreements at this fixture's one premise, for the same
+     * commodity, each open-ended. Since 2026-11-18
+     * `before_one_live_service_per_premise` refuses that: two live
+     * agreements claiming one supply is two bills for it, and the
+     * importer reports the second as a row error, which turned
+     * `COMPLETE` into `PARTIAL`.
+     *
+     * Giving the second row its own address keeps each test's actual
+     * subject intact. It is also what the CSVs would have looked like
+     * all along had the April exclusion constraint not gone missing —
+     * its documented key covered `PENDING`/`ACTIVE` pairs too, so these
+     * rows would have been refused then as well.
+     */
+    const second = await prisma.premise.create({
+      data: {
+        utilityId: fixA.utilityId,
+        addressLine1: "9 Second Import Way",
+        city: "Testville",
+        state: "TS",
+        zip: "00000",
+        premiseType: "RESIDENTIAL",
+        commodityIds: [fixA.commodityId],
+        status: "ACTIVE",
+      },
+    });
+    premiseAddress2 = second.addressLine1;
+    premiseZip2 = second.zip;
     const meter = await prisma.meter.findUniqueOrThrow({
       where: { id: fixA.meterId },
       select: { meterNumber: true },
@@ -282,8 +318,10 @@ describe("POST /api/v1/imports — service_agreement happy path", () => {
         `SA-IMP-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},` +
         `2026-01-01,ACTIVE,${meterNumber},${rateScheduleCode}\n` +
         // Second row: no meter, no rate code — both optional, and an
-        // agreement that has neither is still a valid agreement.
-        `SA-IMP-2,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},` +
+        // agreement that has neither is still a valid agreement. At the
+        // second premise, so it is not a second live service at the
+        // first one.
+        `SA-IMP-2,${accountNumber},${commodityCode},${premiseAddress2},${premiseZip2},` +
         `2026-02-01,PENDING,,\n`;
 
       const res = await postCsv(csv);
@@ -390,8 +428,9 @@ describe("POST /api/v1/imports — an unmetered service", () => {
         header +
         `SA-SW-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,NON_BADGED\n` +
         // Blank still means METERED, so nothing already loading water
-        // agreements changes behaviour.
-        `SA-SW-2,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-02-01,ACTIVE,\n`;
+        // agreements changes behaviour. Second premise, so the two rows
+        // are not two live services at one address.
+        `SA-SW-2,${accountNumber},${commodityCode},${premiseAddress2},${premiseZip2},2026-02-01,ACTIVE,\n`;
 
       const { body, contentType } = buildMultipart([
         { name: "kind", value: "service_agreement" },
@@ -427,7 +466,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
   /** Header and mapping carrying the legacy id. */
   const LK_HEADER =
     "legacy_id,account_number,commodity_code,premise_address,premise_zip," +
-    "start_date,status,read_sequence\n";
+    "start_date,status\n";
   const LK_MAPPING = {
     legacy_id: "legacyKey",
     account_number: "accountNumber",
@@ -436,7 +475,6 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
     premise_zip: "premiseZip",
     start_date: "startDate",
     status: "status",
-    read_sequence: "readSequence",
   };
 
   function post(csv: string, mapping: Record<string, string> = LK_MAPPING) {
@@ -455,9 +493,17 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
     });
   }
 
-  const row = (over: { key?: string; start?: string; status?: string; seq?: string } = {}) =>
-    `${over.key ?? "LEG-1"},${accountNumber},${commodityCode},${premiseAddress},${premiseZip},` +
-    `${over.start ?? "2026-01-01"},${over.status ?? "PENDING"},${over.seq ?? "10"}\n`;
+  /**
+   * `second: true` puts the row at the other premise — for the one case
+   * that sends two rows at once, which would otherwise be two live
+   * agreements for one supply at one address.
+   */
+  const row = (
+    over: { key?: string; start?: string; status?: string; second?: boolean } = {},
+  ) =>
+    `${over.key ?? "LEG-1"},${accountNumber},${commodityCode},` +
+    `${over.second ? premiseAddress2 : premiseAddress},${over.second ? premiseZip2 : premiseZip},` +
+    `${over.start ?? "2026-01-01"},${over.status ?? "PENDING"}\n`;
 
   it("updates in place the second time, instead of reporting a duplicate", () =>
     seedAsPlatform(async () => {
@@ -479,7 +525,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
 
       // The next cycle's export: same legacy id, service has started.
       const second = JSON.parse(
-        (await post(LK_HEADER + row({ status: "ACTIVE", seq: "25" }))).body,
+        (await post(LK_HEADER + row({ status: "ACTIVE" }))).body,
       );
       expect(second.errorCount).toBe(0);
       expect(second.importedCount).toBe(1);
@@ -490,7 +536,6 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
       expect(all).toHaveLength(1);
       expect(all[0].id).toBe(created.id);
       expect(all[0].status).toBe("ACTIVE");
-      expect(all[0].readSequence).toBe(25);
       // The number it was generated with is untouched — the legacy id
       // is the handle, not the agreement number.
       expect(all[0].agreementNumber).toBe(created.agreementNumber);
@@ -523,7 +568,8 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
       // A CSV carries a cell for every declared column. Blank is
       // absence, not a key — two blank rows must not match each other.
       const { prisma } = prismaImports;
-      const csv = LK_HEADER + row({ key: "" }) + row({ key: "", start: "2026-03-01" });
+      const csv =
+        LK_HEADER + row({ key: "" }) + row({ key: "", start: "2026-03-01", second: true });
 
       const result = JSON.parse((await post(csv)).body);
       expect(result.errorCount).toBe(0);
@@ -560,7 +606,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
 
       const csv =
         LK_HEADER +
-        `LEG-1,OTHER-ACCT,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,10\n`;
+        `LEG-1,OTHER-ACCT,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE\n`;
       const result = JSON.parse((await post(csv)).body);
       expect(codesOf(result)).toEqual([{ rowIndex: 1, code: "LEGACY_KEY_CONFLICT" }]);
 

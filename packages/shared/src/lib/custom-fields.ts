@@ -558,7 +558,6 @@ export const CORE_FIELD_KEYS: Record<CustomFieldEntityType, readonly string[]> =
     "start_date",
     "end_date",
     "status",
-    "read_sequence",
   ],
 };
 

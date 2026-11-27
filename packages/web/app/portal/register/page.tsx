@@ -32,7 +32,7 @@ export default function PortalRegisterPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("http://localhost:3001/portal/api/auth/register", {
+      const res = await fetch("http://localhost:4001/portal/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // The tenant is required, not discovered: an account number is

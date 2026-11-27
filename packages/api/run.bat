@@ -45,7 +45,7 @@ if errorlevel 1 (
 )
 
 echo Starting the API in dev mode.
-echo   api:      http://localhost:3001
+echo   api:      http://localhost:4001
 echo   database and redis: from packages/api/.env
 echo.
 echo Background workers are not started here. Run them with

@@ -1,6 +1,6 @@
 import { getSession } from "next-auth/react";
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
 
 const TOKEN_KEY = "cis_token";
 const USER_KEY = "cis_user";

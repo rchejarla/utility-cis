@@ -14,6 +14,7 @@ import { enqueueSafely, QUEUE_NAMES } from "../lib/queues.js";
 import { withQueueTimeout } from "../lib/queue-inspect.js";
 import { readQueueAttachment } from "./queue-health.service.js";
 import { IMPORT_WORKER_JOB_NAME } from "../workers/import-worker.js";
+import { entrySheetOf } from "./read-route-entry.service.js";
 
 /**
  * Generic bulk-import engine. Drives every kind handler through the
@@ -305,6 +306,9 @@ export async function cancelImport(
  * regardless of original batch size — the operator already saw a
  * terminal state and isn't watching a wizard, so there's no need to
  * branch on row count.
+ *
+ * Refuses a typed-in route sheet outright: its guards are not in
+ * `processBatch` and so are not in any retry.
  */
 export async function retryImport(
   utilityId: string,
@@ -314,6 +318,25 @@ export async function retryImport(
   const batch = await prisma.importBatch.findFirstOrThrow({
     where: { id: batchId, utilityId },
   });
+  /*
+   * A typed-in route sheet is never retried from here, at any status and
+   * at any scope. Every guard that kind has — the refusal of a period
+   * already billed above all — sits above `processBatch`, so this path
+   * would post a read behind a posted bill: a frozen-period rejection
+   * leaves a PARTIAL batch whose errored rows are exactly the ones that
+   * must not be re-run, and `scope: "errors-only"` is precisely those.
+   * Correcting and resubmitting it belongs on the route's entry screen,
+   * which holds the guards.
+   */
+  const sheet = entrySheetOf(batch);
+  if (sheet) {
+    throw Object.assign(
+      new Error(
+        `Batch ${batchId} is a typed-in route sheet; correct and resubmit it on the entry screen for route ${sheet.routeId} on ${sheet.readDate}`,
+      ),
+      { statusCode: 400, code: "ENTRY_NOT_RETRYABLE" },
+    );
+  }
   const retryable = ["FAILED", "PARTIAL", "CANCELLED"];
   if (!retryable.includes(batch.status)) {
     throw Object.assign(

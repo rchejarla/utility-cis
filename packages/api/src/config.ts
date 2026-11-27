@@ -75,7 +75,7 @@ export const configSchema = z.object({
 
   // Web app URL — used for CORS origin and password-reset / portal
   // links in outbound notifications.
-  WEB_URL: z.string().default("http://localhost:3000"),
+  WEB_URL: z.string().default("http://localhost:4000"),
 
   // ─── apptor-connect ───────────────────────────────────────────────
   // The integration layer for this stack. One deployment-level key,

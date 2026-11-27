@@ -135,8 +135,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
       billingCycle: { select: { billDayOfMonth: true, readDayOfMonth: true } },
     },
   });
-  const premise = await p.premise.findFirst({ where: { utilityId }, orderBy: { createdAt: "asc" } });
-  if (!account || !premise) return { skipped: "no account or premise to attach a service to" };
+  if (!account) return { skipped: "no account to attach a service to" };
 
   const billWindow = cycleWindow(account.billingCycle);
 
@@ -205,7 +204,49 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
    * months in one segment the first time anybody ran the cycle — the
    * same catch-up the seeded bills were rewritten to prevent.
    */
-  async function makeService({ meterNumber, agreementNumber, meterType, programmedCalendarId }) {
+  /*
+   * Each sample service gets **its own premise**, created here.
+   *
+   * This used to read one premise — `findFirst` ordered by `createdAt`
+   * — and attach all three services to it. Two things were wrong with
+   * that, and both were found on 2026-11-18:
+   *
+   *  - **Three live ELECTRIC agreements at one address.** That is three
+   *    bills for one supply, and it is now refused outright by
+   *    `before_one_live_service_per_premise` (spec 05), so this seeder
+   *    would fail on its second `makeService` call.
+   *  - **An electric meter at a premise with no electric service.** The
+   *    base seed's premises carry water, sewer, stormwater and solid
+   *    waste in `commodity_ids`; none lists ELECTRIC. The
+   *    meter-premise commodity match rule (spec 02) is enforced in the
+   *    service layer, and this seeder writes through Prisma, so it went
+   *    straight past it.
+   *
+   * The old `orderBy: { createdAt: "asc" }` was not even deterministic:
+   * the base seed writes its premises together, so they share a
+   * timestamp and which one came back was arbitrary.
+   */
+  async function makeService({
+    meterNumber,
+    agreementNumber,
+    meterType,
+    programmedCalendarId,
+    addressLine1,
+  }) {
+    const premise = await p.premise.create({
+      data: {
+        utilityId,
+        addressLine1,
+        city: "Bozeman",
+        state: "MT",
+        zip: "59715",
+        premiseType: "RESIDENTIAL",
+        // ELECTRIC, because that is what is metered here.
+        commodityIds: [electric.id],
+        status: "ACTIVE",
+      },
+    });
+
     const agreement = await p.serviceAgreement.create({
       data: {
         utilityId,
@@ -295,8 +336,18 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
   const TOTAL_PRIOR = TOU_REGISTERS.reduce((t, r) => t + r.prior, 0);
 
   const REGISTER_SAMPLES = [
-    { meterNumber: "TOU-REG-001", agreementNumber: "SA-TOU-REG-001", unattributed: 0 },
-    { meterNumber: "TOU-REG-002", agreementNumber: "SA-TOU-REG-002", unattributed: 15 },
+    {
+      meterNumber: "TOU-REG-001",
+      agreementNumber: "SA-TOU-REG-001",
+      addressLine1: "1201 W Koch St",
+      unattributed: 0,
+    },
+    {
+      meterNumber: "TOU-REG-002",
+      agreementNumber: "SA-TOU-REG-002",
+      addressLine1: "1203 W Koch St",
+      unattributed: 15,
+    },
   ];
 
   /*
@@ -312,6 +363,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     const reg = await makeService({
       meterNumber: sample.meterNumber,
       agreementNumber: sample.agreementNumber,
+      addressLine1: sample.addressLine1,
       meterType: "AMR",
       programmedCalendarId: calendarId,
     });
@@ -384,6 +436,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
   const ami = await makeService({
     meterNumber: "TOU-AMI-001",
     agreementNumber: "SA-TOU-AMI-001",
+    addressLine1: "1205 W Koch St",
     meterType: "AMI",
     programmedCalendarId: null,
   });
@@ -448,4 +501,6 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
   };
 }
 
-module.exports = { seedTouService };
+// `cycleWindow` too: seed.js anchors its own read series on the window in
+// force, by the same rule, rather than keeping a third copy of it.
+module.exports = { seedTouService, cycleWindow };

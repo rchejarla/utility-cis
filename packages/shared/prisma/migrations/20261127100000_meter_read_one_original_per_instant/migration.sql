@@ -1,0 +1,61 @@
+-- One original read per agreement, meter, register, peak code and instant.
+--
+-- ## Why
+--
+-- `meter_read` had no unique key at all beyond its primary key, so
+-- nothing in the database stopped the same read being posted twice. The
+-- read-route work produced that bug more than once — a resubmit that
+-- partitioned by content, a reopen during a running submit, a save racing
+-- Post — and each was closed in application code (spec 30). Those guards
+-- are necessary, but each was found only after it had failed, and
+-- `computeConsumption` bills a duplicate in full. This is the backstop:
+-- whatever path writes the second copy, the database refuses it.
+--
+-- The simpler alternative — keep adding application guards — is what
+-- this branch did, and the shape keeps recurring because the invariant
+-- belongs to the table, not to any one writer. There are eight writers
+-- (manual, multi-register, import, correction, interval rollup, move-in,
+-- move-out, transfer).
+--
+-- ## The key, and why each column is in it
+--
+-- `read_datetime` — required: it is the hypertable's partition column,
+-- and TimescaleDB refuses a unique index that omits it. So this cannot
+-- say "one read per day"; it says "this exact read, once". That is still
+-- the duplicate every incident produced: route entry stamps each read at
+-- T12:00Z on its day, and a re-posted import row carries its own
+-- timestamp again.
+--
+-- `service_agreement_id` — a transfer writes a FINAL read on the source
+-- agreement and an opening read on the new one, for one meter at one
+-- instant. Both are correct; without this column the index refuses
+-- every transfer that records readings.
+--
+-- `register_id` — a multi-register read event writes one row per
+-- register at one instant.
+--
+-- `peak_code` — the interval rollup writes one row per TOU bucket for a
+-- meter at one instant (the end of the period), distinguished only by
+-- this.
+--
+-- `NULLS NOT DISTINCT` (PostgreSQL 15+) — `register_id` and `peak_code`
+-- are NULL on most reads, and a plain unique index treats NULLs as
+-- distinct, so it would have constrained nothing on an ordinary
+-- single-register meter.
+--
+-- `WHERE corrects_read_id IS NULL` — a correction is a new row carrying
+-- the original's instant by default (`correctMeterRead`), by design: the
+-- original is never mutated. Corrections are not originals, so they are
+-- left out; a chain of them stays possible.
+--
+-- Verified against the dev database on 2026-11-27: no existing rows
+-- violate it, and TimescaleDB 2.32 accepts a partial NULLS NOT DISTINCT
+-- unique index on the hypertable.
+--
+-- Prisma can express none of this (partial, NULLS NOT DISTINCT), so it
+-- lives only here — and `migrate dev` would propose dropping it. Use
+-- `migrate deploy`.
+CREATE UNIQUE INDEX "meter_read_one_original_per_instant"
+  ON "meter_read" ("utility_id", "service_agreement_id", "meter_id", "register_id", "peak_code", "read_datetime")
+  NULLS NOT DISTINCT
+  WHERE ("corrects_read_id" IS NULL);

@@ -195,6 +195,34 @@ describe("the dev seed produces a database that can bill", () => {
     // never deleted. No seeded database had a row in either until a bill
     // was rendered and a run was started by hand, after which the seed
     // could not run at all. The run above has just created both.
+    //
+    // Read routes are the same family: the seed writes none, the
+    // read-route scenario script does, and a stop holds its premise and a
+    // route its billing cycle under RESTRICT. Left here so the rerun meets
+    // them — without the cleanup for them, it fails on deleting premises.
+    await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const cycle = await prisma.billingCycle.findFirstOrThrow({
+        where: { utilityId: UTILITY_ID, cycleCode: "R01" },
+      });
+      const premise = await prisma.premise.findFirstOrThrow({ where: { utilityId: UTILITY_ID } });
+      const meter = await prisma.meter.findFirstOrThrow({ where: { utilityId: UTILITY_ID } });
+      const route = await prisma.readRoute.create({
+        data: { utilityId: UTILITY_ID, code: "RERUN-1", name: "Rerun", billingCycleId: cycle.id },
+      });
+      await prisma.readRouteStop.create({
+        data: { utilityId: UTILITY_ID, readRouteId: route.id, premiseId: premise.id, sequence: 100 },
+      });
+      await prisma.readSkip.create({
+        data: {
+          utilityId: UTILITY_ID,
+          meterId: meter.id,
+          readRouteId: route.id,
+          readDate: new Date("2026-01-08"),
+          skipReason: "DOG",
+        },
+      });
+    });
     const rerun = () =>
       execSync("node seed.js", {
         cwd: REPO_ROOT,

@@ -6,7 +6,7 @@ const { PrismaClient } = require("./packages/shared/src/generated/prisma");
 const { seedDelinquencyLadder } = require("./seed/delinquency-ladder.js");
 const { seedPaymentPlan } = require("./seed/payment-plan.js");
 const { seedTouCalendar } = require("./seed/tou-calendar.js");
-const { seedTouService } = require("./seed/tou-service.js");
+const { seedTouService, cycleWindow } = require("./seed/tou-service.js");
 
 /*
  * `@prisma/adapter-pg` and `pg` are declared by `packages/shared`, and
@@ -121,6 +121,17 @@ async function main() {
   if (p.serviceRequestCounter) await p.serviceRequestCounter.deleteMany({});
   if (p.sla) await p.sla.deleteMany({});
   await p.meterRead.deleteMany({});
+  // Read routes (spec 30). The seed creates none, but
+  // `packages/api/scripts/seed-read-route-scenarios.ts` does, and a stop
+  // holds its premise and a route its billing cycle under RESTRICT — so
+  // once that script had run, this file could not delete a premise and no
+  // reseed got past the cleanup. Same family as bill_document and
+  // billing_run above: rows the seed never writes and so never cleared.
+  // After the reads, which point at the route; skips before routes, which
+  // they point at.
+  if (p.readSkip) await p.readSkip.deleteMany({});
+  if (p.readRouteStop) await p.readRouteStop.deleteMany({});
+  if (p.readRoute) await p.readRoute.deleteMany({});
   if (p.attachment) await p.attachment.deleteMany({});
 
   // AR ledger + bills. Four RESTRICT parents, so this block has to precede
@@ -939,9 +950,31 @@ async function main() {
    * from it downstream — which period a run may close on, which bill
    * covers it — was then a day out from what this file says.
    */
+  /*
+   * **Anchored on the billing window in force, not on the calendar
+   * month.** The newest read belongs to the month *after* the window a run
+   * would bill today, so it is next period's read; the demo bills end one
+   * period before that window (`billPeriodEnd`, below), so a run has
+   * exactly one month to bill and leaves one read over.
+   *
+   * This was the current calendar month until 2026-11-27, which is the
+   * same thing only from the 1st to the 9th. From R01's bill day on, the
+   * window in force ends on *this* month's 10th, so it swallowed both
+   * unbilled reads at once: the first run billed a 61-day catch-up and
+   * left nothing for the next period. `dev-seed.integration.test.ts`
+   * failed on those two counts for the back two-thirds of every month.
+   *
+   * `cycleWindow` is `computeBillPeriod`'s rule, already used by the TOU
+   * fixture; R01's days because the accounts these reads are on bill on
+   * it. On the 10th–31st the newest read is up to a month ahead of today —
+   * as it already was on the 1st–7th, when the current month's 8th had
+   * not arrived yet. A next-period read has to sit after the window, and
+   * on the bill day itself nothing after the window has happened.
+   */
+  const R01_WINDOW = cycleWindow({ billDayOfMonth: 10, readDayOfMonth: 8 });
   const READ_DAY_UTC = new Date(Date.UTC(
-    new Date().getUTCFullYear(),
-    new Date().getUTCMonth(),
+    R01_WINDOW.endDate.getUTCFullYear(),
+    R01_WINDOW.endDate.getUTCMonth() + 1,
     15,
   ));
   const saList = await p.serviceAgreement.findMany({

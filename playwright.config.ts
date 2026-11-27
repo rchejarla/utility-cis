@@ -34,7 +34,97 @@ import { defineConfig } from "@playwright/test";
  * optimisation to argue about — it is the only one that works. It is
  * also what the runner is tested against, which is the better default
  * anyway.
+ *
+ * ## The suite assumes a warm `.next`
+ *
+ * **From a build cache that does not exist yet, three tests fail — and
+ * none of them at sign-in.** Measured on 2026-11-18 by deleting
+ * `packages/web/.next` and running: `interval-import` exceeded the
+ * per-test 120s, the read-routes list test lost a 15s `expect` on a
+ * heading, and the journey got as far as enumerating days (which needs a
+ * token and eight authenticated calls, so the login path held). Each
+ * failure names its own budget. Warm, `interval-import` runs in 1.2-1.6m
+ * against that 2m budget.
+ *
+ * **Run it once to warm the cache, or build first.** The budgets are
+ * deliberately not raised to cover a first-ever route compile: that
+ * condition happens once per checkout and then never again, while a
+ * longer budget makes every genuine hang slower to report on every run.
+ * Nothing automated meets it — `.github/workflows/ci.yml` runs the
+ * typechecks, the three unit suites and the integration suite, and has no
+ * Playwright step at all.
+ *
+ * **For whoever adds an e2e step to CI later:** a runner is cold every
+ * single time, so warm the build in a prior step. Do not raise these
+ * numbers to absorb it. If it ever needs a real fix, the fix is compiling
+ * the routes outside any test's budget — `globalSetup` machinery — and
+ * not inflating the budget that exists to catch a hang.
+ *
+ * ## An unhydrated page impersonates a broken one
+ *
+ * **Playwright's actionability checks do not cover "React has attached
+ * the handler."** They cover visible, enabled, stable and
+ * receives-events, and a server-rendered control passes all four before
+ * any of its JavaScript has run. A click delivered in that gap is
+ * swallowed in total silence: no request, no error, nothing in the
+ * console, nothing different on the page. Whatever the click was supposed
+ * to cause then times out tens of seconds later, pointing nowhere near
+ * the cause — a swallowed sign-in reads as a broken login or a CORS
+ * problem.
+ *
+ * **On an idle machine the handler always wins the race**, so a spec with
+ * this bug passes indefinitely and starts failing the day something else
+ * is using the CPU. That is the worst available shape for a flake: it
+ * arrives long after the code that caused it, and it arrives as a
+ * different problem.
+ *
+ * Measured rather than inferred, on 2026-11-18 with the machine down to
+ * ~7 GB free and 18 node processes: a click issued immediately after
+ * `goto` produced **no POST to `/auth/dev-login` at all**, left
+ * `cis_token` null and stayed on `/login`, with React's own DevTools
+ * console banner arriving *after* the click; the same script with a
+ * six-second wait signed in. `support/dev-stack.ts`'s `signIn` therefore
+ * **retries the click until it takes** rather than waiting a fixed time,
+ * which would be wasted on a fast machine and still a guess on a slow
+ * one.
+ *
+ * **It is not specific to sign-in, and not specific to automation.** Any
+ * spec here that clicks a React control straight after navigating has the
+ * same latent flake. And it caught a second session the same day from the
+ * other direction: driving the merged tree by hand, three screenshots in
+ * a row came back blank, were reported as a page that "renders chrome but
+ * the content area is empty", and a diagnosis was begun — on a page that
+ * had simply not hydrated yet. The accessibility tree showed the content
+ * was all there. So before concluding a page is broken, confirm it has
+ * hydrated: read the tree, or wait for something only the client could
+ * have produced.
  */
+/**
+ * Both halves of the stack, derived once.
+ *
+ * **`webServer` used to name 4001 and 4000 outright while `baseURL` was
+ * overridable**, which made a `reuseExistingServer` health check prove
+ * nothing: a run pointed elsewhere by `E2E_BASE_URL` checked one stack and
+ * tested another, and reported success for finding the wrong one. That is
+ * not hypothetical — every early run of the read-routes journey satisfied
+ * this block from the coordinator's stack on 4000/4001 while testing
+ * against its own on 4010/4011. The outcome was harmless and the evidence
+ * was worthless, which is the problem: ruling out "this passed against a
+ * stack nobody meant to exercise" is most of why a browser suite exists.
+ *
+ * Two stacks on non-default ports is now an ordinary state here —
+ * `dev_worktrees.bat` makes worktrees that expect exactly that — so the
+ * API's health URL comes from its own variable rather than assuming it sits
+ * one port above the web app.
+ *
+ * The `command`s below only ever start a stack on whatever ports the
+ * packages' own env says, so **a run pointed elsewhere must already have
+ * its stack up**. It will now fail naming the URL it waited for instead of
+ * passing against a different one.
+ */
+const WEB_URL = process.env.E2E_BASE_URL ?? "http://localhost:4000";
+const API_URL = process.env.E2E_API_URL ?? "http://localhost:4001";
+
 export default defineConfig({
   testDir: "./e2e",
   /*
@@ -50,11 +140,18 @@ export default defineConfig({
    * thing under test.
    */
   retries: 0,
+  /*
+   * **These two stay low on purpose.** A long budget hides a hang: the
+   * only thing a generous per-test timeout buys is a slower report of
+   * every genuine one, on every run. They are the numbers a warm stack
+   * needs, and the cold-cache paragraph above is where the cost of that
+   * choice is written down rather than paid for in silence.
+   */
   timeout: 120_000,
   expect: { timeout: 15_000 },
   reporter: [["list"]],
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
+    baseURL: WEB_URL,
     headless: true,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
@@ -64,13 +161,13 @@ export default defineConfig({
     {
       // Already running in normal use; started here when it is not.
       command: "pnpm --filter @utility-cis/api dev",
-      url: "http://localhost:3001/health",
+      url: `${API_URL}/health`,
       reuseExistingServer: true,
       timeout: 120_000,
     },
     {
       command: "pnpm --filter @utility-cis/web dev",
-      url: "http://localhost:3000/login",
+      url: `${WEB_URL}/login`,
       reuseExistingServer: true,
       timeout: 180_000,
     },

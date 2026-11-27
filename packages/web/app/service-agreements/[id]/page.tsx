@@ -28,7 +28,6 @@ interface ServiceAgreement {
   status: string;
   startDate: string;
   endDate?: string;
-  readSequence?: number;
   customFields?: Record<string, unknown>;
   // Slice 5b.1: billingCycle now lives on Account; SA detail surfaces it
   // by reading sa.account.billingCycle (read-only at the SA layer).
@@ -112,18 +111,6 @@ const fieldStyle = {
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
 
-const inputStyle = {
-  padding: "6px 10px",
-  fontSize: "13px",
-  background: "var(--bg-deep)",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius)",
-  color: "var(--text-primary)",
-  fontFamily: "inherit",
-  outline: "none",
-  width: "100%",
-};
-
 // BR-SA-006: PENDING → ACTIVE → FINAL → CLOSED (no skipping)
 const STATUS_TRANSITIONS: Record<string, string[]> = {
   PENDING: ["ACTIVE"],
@@ -153,7 +140,6 @@ export default function ServiceAgreementDetailPage({
   const [stopDialog, setStopDialog] = useState<{ endDate: string } | null>(null);
   const [closeBillDialog, setCloseBillDialog] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
   const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
@@ -297,16 +283,12 @@ export default function ServiceAgreementDetailPage({
 
   const handleEdit = async () => {
     if (!sa) return;
-    setEditForm({
-      readSequence: sa.readSequence != null ? String(sa.readSequence) : "",
-    });
     setEditCustomFields({ ...(sa.customFields ?? {}) });
     setEditing(true);
   };
 
   const handleCancel = () => {
     setEditing(false);
-    setEditForm({});
     setEditCustomFields({});
   };
 
@@ -318,14 +300,26 @@ export default function ServiceAgreementDetailPage({
       // endDate is no longer settable via PATCH — it's set via the
       // close endpoint, which also cascades onto meter assignments.
       // billingCycleId moved to Account in Slice 5b.1; not editable here.
-      const readSeqVal = editForm.readSequence !== "" ? parseInt(editForm.readSequence, 10) : null;
-      if (readSeqVal !== (sa.readSequence ?? null)) changes.readSequence = readSeqVal;
+      // readSequence is gone with its column (spec 30); a reader's order
+      // is a route's, edited on the route.
 
       // Custom fields: include only when they actually changed.
       const storedCustomJson = JSON.stringify(sa.customFields ?? {});
       const editedCustomJson = JSON.stringify(editCustomFields ?? {});
       if (storedCustomJson !== editedCustomJson) {
         changes.customFields = editCustomFields;
+      }
+
+      // Nothing changed, so nothing is sent. An empty PATCH is not inert:
+      // `updated_at` moves, so it writes a ServiceAgreement UPDATE into
+      // the audit log, and the toast below would report a change that
+      // never happened. Reachable by two clicks now that custom fields
+      // are the only thing this panel edits — a tenant that has declared
+      // none sees no input at all between Edit and Save.
+      if (Object.keys(changes).length === 0) {
+        setEditing(false);
+        toast("No changes to save", "info");
+        return;
       }
 
       await apiClient.patch(`/api/v1/service-agreements/${id}`, changes);
@@ -595,21 +589,6 @@ export default function ServiceAgreementDetailPage({
                   </span>
                 )}
               </span>
-            </div>
-            <div style={fieldStyle}>
-              <span style={labelStyle}>Read Sequence</span>
-              {editing ? (
-                <input
-                  style={inputStyle}
-                  type="number"
-                  min="0"
-                  value={editForm.readSequence}
-                  onChange={(e) => setEditForm((f) => ({ ...f, readSequence: e.target.value }))}
-                  placeholder="Optional"
-                />
-              ) : (
-                <span style={valueStyle}>{sa.readSequence != null ? sa.readSequence : "—"}</span>
-              )}
             </div>
 
             {/* Tenant-configurable custom fields. */}

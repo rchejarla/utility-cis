@@ -256,6 +256,7 @@ migration and seven files. Those nine columns are now rows in
 | id | UUID | PK |
 | utility_id | UUID | Unique — one config per tenant (unique constraint) |
 | require_hold_approval | BOOLEAN | Default false. When true, ServiceSuspensions require `service_suspensions.APPROVE` permission before activation. See spec 12 rule 14. |
+| transfer_carries_rate_schedule | BOOLEAN | **Default true.** When true, a transfer of service copies the source agreement's in-force `SAScheduleAssignment` rows onto the new agreement, effective from the transfer date. When false the new agreement starts unrated and a billing run's planner holds it by name (`NO_ACTIVE_ASSIGNMENTS`). A column rather than a `settings` key because every utility has an answer: most want the tariff to follow the same service at the same premise, and the ones that re-rate on a change of responsibility want the opposite. See spec 05's transfer section. Added 2026-11-18. |
 | auto_post_bills | BOOLEAN | Default true. When false, a generated Bill waits for an explicit post. Overridable per account by the nullable `account.auto_post_bills`, where null inherits this value — so flipping this moves every account that has not opted out. |
 | settings | JSONB | Bucket for small, additive tenant flags. Current shape documented below. |
 | created_at | TIMESTAMPTZ | |
@@ -762,6 +763,8 @@ Consolidated tenant admin surface organized into tabs. The first four tabs are i
 
 - **General tab** (default landing tab) — tenant-wide on/off flags.
   - **Service Holds — Require approval before activation**: checkbox bound to `utility_config.require_hold_approval`. Explanatory copy describes the effect on the scheduler and manual activation. Save button is enabled only when the value has changed.
+  - **Transfer of Service — Carry the rate schedule**: checkbox bound to `utility_config.transfer_carries_rate_schedule`, **on by default**. Explanatory copy says what the off position costs — the new agreement starts unrated and a billing run holds it by name — so an admin turning it off knows they are choosing to re-rate on every change of responsibility. See spec 05's transfer section. Added 2026-11-18.
+  - The tab's dirty check compares **every** flag, not a named one: it was a single `initial.requireHoldApproval !== requireHoldApproval` comparison while one flag existed, and a second flag added beside it would have left Save dead for whichever was forgotten. `e2e/transfer-of-service.spec.ts` asserts Save is disabled on arrival and enabled after a toggle, and reads the saved value **back off the API** rather than off the screen that wrote it — a jsdom test mocks `apiClient`, so it cannot tell a PATCH body the route accepts from one whose key it silently drops.
 - **Users tab** — CIS user management (covered in spec 19).
 - **Roles tab** — Role and permission management (covered in spec 19).
 - **Numbering tab** — Identifier template configuration.

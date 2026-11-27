@@ -551,6 +551,13 @@ const RESET_TABLES = [
    * than work out that the cascade covers it.
    */
   "meter_data_exception",
+  /*
+   * The read-route tables cascade from `billing_cycle`, `premise` and
+   * `meter`; named for the same reason as `meter_data_exception`.
+   */
+  "read_skip",
+  "read_route_stop",
+  "read_route",
   "meter",
   "account",
   "premise",
@@ -765,6 +772,20 @@ export async function endAdminPool(): Promise<void> {
   adminPool = undefined;
   adminUrl = undefined;
   await open?.end().catch(() => {});
+}
+
+/**
+ * One statement over the owner connection, for fixture work the
+ * application role is rightly not allowed — disabling a trigger to set up
+ * data that predates it, say. Not for anything a test then asserts about.
+ */
+export async function adminQuery(sql: string, params: unknown[] = []): Promise<void> {
+  const client = await admin().connect();
+  try {
+    await client.query(sql, params);
+  } finally {
+    client.release();
+  }
 }
 
 export async function truncateTables(tables: string): Promise<void> {

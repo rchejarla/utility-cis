@@ -23,13 +23,19 @@ import userEvent from "@testing-library/user-event";
  * has.
  */
 export async function selectLoadedOption(
-  label: string,
+  /**
+   * A `TextMatch`, not a plain string: a required field's label renders
+   * with its marker appended, so the exact string a page passes to its
+   * form spec does not match the label's text content. A regex is the
+   * usual answer and was not expressible here.
+   */
+  label: string | RegExp,
   value: string,
 ): Promise<HTMLSelectElement> {
   const select = await screen.findByLabelText<HTMLSelectElement>(label);
   await waitFor(() => {
     if (!select.querySelector(`option[value="${CSS.escape(value)}"]`)) {
-      throw new Error(`Option "${value}" has not arrived in "${label}" yet`);
+      throw new Error(`Option "${value}" has not arrived in "${String(label)}" yet`);
     }
   });
   await userEvent.selectOptions(select, value);

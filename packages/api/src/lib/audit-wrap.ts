@@ -125,6 +125,36 @@ export async function writeAuditRow(
   });
 }
 
+/**
+ * `writeAuditRow` for many entities of one kind created together: one
+ * `set_config` and one `createMany` instead of two statements per row.
+ * For bulk writers (a route's skips) only; a single row has no reason
+ * to use it.
+ */
+export async function writeAuditRowsCreated(
+  tx: TxClient,
+  ctx: AuditContext,
+  eventType: string,
+  rows: Array<{ id: string }>,
+): Promise<void> {
+  if (rows.length === 0) return;
+  await tx.$executeRaw`SELECT set_config('app.current_utility_id', ${ctx.utilityId}, true)`;
+  await tx.auditLog.createMany({
+    data: rows.map((row) => ({
+      utilityId: ctx.utilityId,
+      entityType: ctx.entityType,
+      entityId: row.id,
+      action: mapEventTypeToAction(eventType),
+      actorId: ctx.actorId,
+      actorName: ctx.actorName,
+      source: ctx.source ?? null,
+      beforeState: toJsonInput(null),
+      afterState: toJsonInput(row),
+      metadata: { eventType } satisfies Prisma.InputJsonValue,
+    })),
+  });
+}
+
 export async function auditCreate<T extends WithId>(
   ctx: AuditContext,
   eventType: string,

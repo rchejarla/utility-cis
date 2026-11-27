@@ -1,0 +1,45 @@
+-- Date ordering on the two service-point tables.
+--
+-- ## Why these were missing
+--
+-- The 2026-10-18 squash collapsed 54 migrations into three files and did
+-- not carry everything forward. Spec 05's migration table says
+-- `20260427143900_sam_effective_range_exclusion` added
+-- `chk_sam_removed_ge_added` alongside the `no_double_assigned_meter`
+-- exclusion; the exclusion survived (as `spm_no_double_install`) and the
+-- CHECK did not. `service_point` has never had one at all — it held **no
+-- CHECK constraints whatsoever** — so a point whose `end_date` preceded
+-- its `start_date` was accepted, where the same mistake on an agreement
+-- is refused by `chk_sa_end_ge_start`.
+--
+-- ## The audit that found them, which is the part worth keeping
+--
+-- Comparing every `CONSTRAINT … CHECK` named in `migrations/*/migration.sql`
+-- against `pg_constraint` in the dev database on 2026-11-18: **50
+-- declared, 50 present.** The database was not stale and no reseed would
+-- have helped — what was lost was lost from the *source*, so every
+-- database created since the squash lacks these equally. Triggers and
+-- exclusion constraints were audited the same way and came back clean
+-- apart from `no_overlapping_active_sa`, which `20261118110000` replaces
+-- with a trigger on `service_point`, where the invariant was always
+-- headed (see the parked
+-- `effective-dating-constraints.integration.test.ts.pending-rewrite`).
+--
+-- So the lesson is about where to look, not about these two rows: a
+-- migration file records intent, `pg_constraint` records state, and a
+-- squash can silently drop the difference. That diff is one command and
+-- is worth re-running after any future squash.
+--
+-- Verified before adding: zero rows in either table violate these, so
+-- both apply without touching data.
+--
+-- NOT NULL is not implied — both columns are nullable, and a NULL end
+-- means "still open", which the `IS NULL` arm admits.
+-- Each `ADD CONSTRAINT … CHECK` is on **one line**, matching
+-- `database_features`. That is what makes the audit above runnable: it
+-- greps `CONSTRAINT <name> CHECK` out of the migration files, and a
+-- constraint wrapped across two lines is invisible to it — which is a
+-- silly way for the next person's audit to under-report.
+ALTER TABLE "service_point_meter" ADD CONSTRAINT "chk_spm_removed_ge_added" CHECK (removed_date IS NULL OR removed_date >= added_date);
+
+ALTER TABLE "service_point" ADD CONSTRAINT "chk_sp_end_ge_start" CHECK (end_date IS NULL OR end_date >= start_date);

@@ -210,7 +210,7 @@ Phase 1 tracks meters as either installed at a premise or removed. Full inventor
 |-----|-------------|--------|
 | 65 | Meter multiplier/scaling factors | Covered — `Meter.multiplier` and `MeterRegister.multiplier` |
 | 75-76 | Meter reading system as authoritative, API integration | Planned (Phase 2) — MeterRead CRUD |
-| 78 | Read cycle scheduling, route grouping | Covered — `BillingCycle` + `ServiceAgreement.readSequence` |
+| 78 | Read cycle scheduling, route grouping | Covered — `BillingCycle` + read routes; see spec 30 |
 | 80 | Associate reads to meters | Covered — `MeterRead.meterId` FK |
 | 81 | Multi-register meter handling | Covered — MeterRegister entity |
 | 82 | Label estimated vs actual reads | Covered — `MeterRead.readType` enum |

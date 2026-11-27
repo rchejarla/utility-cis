@@ -33,22 +33,51 @@ interface Account {
   };
 }
 
+interface Meter {
+  id: string;
+  meterNumber: string;
+  multiplier: string;
+}
+
+interface Premise {
+  id: string;
+  addressLine1: string;
+  city: string;
+}
+
+/**
+ * **The premise and the meters hang off the service point, not off the
+ * agreement.**
+ *
+ * This interface declared a flat `premise` and a flat `meters` until
+ * 2026-11-18, and `GET /api/v1/service-agreements` sends neither — it
+ * sends `servicePoints[]`, each with its own `premise` and its own
+ * `meters[].meter`. Three derived values read those absent fields, so
+ * this wizard could not work at all: the premise picker in step 2 had no
+ * options, no meters were ever listed, and `step3Valid` — `every()` over
+ * an empty array — was vacuously true, so Finish was enabled with no
+ * reads captured and the workflow was posted an empty
+ * `finalMeterReadings`.
+ *
+ * Nothing caught it because this screen has no jsdom test and had no
+ * browser test; a mock built from the old interface supplies exactly the
+ * fields the server does not. The transfer wizard had the same bug in a
+ * milder place (it displayed a bare comma) and was fixed the same day.
+ */
 interface ServiceAgreement {
   id: string;
   agreementNumber: string;
   status: string;
-  premise?: {
+  servicePoints?: Array<{
     id: string;
-    addressLine1: string;
-    city: string;
-  };
-  meters?: Array<{
-    meterId: string;
-    meter: {
-      id: string;
-      meterNumber: string;
-      multiplier: string;
-    };
+    premiseId: string;
+    endDate: string | null;
+    premise?: Premise | null;
+    meters?: Array<{
+      meterId: string;
+      removedDate: string | null;
+      meter: Meter;
+    }>;
   }>;
 }
 
@@ -95,22 +124,51 @@ export default function MoveOutWizardPage() {
 
   if (!canView) return <AccessDenied />;
 
+  /*
+   * Only the still-open points. A closed one is history: its premise is
+   * somewhere this account used to be served, and offering it as a place
+   * to move out of would finalize nothing.
+   *
+   * `closeServiceAgreement` sets `end_date` and `status = CLOSED` on
+   * every open point when an agreement reaches a terminal status, so
+   * `end_date IS NULL` is the same question as "is this point serving".
+   */
+  const openPoints = (a: ServiceAgreement) =>
+    (a.servicePoints ?? []).filter((sp) => sp.endDate === null);
+
   const premisesAtAccount = Array.from(
     new Map(
       accountAgreements
-        .filter((a) => a.premise)
-        .map((a) => [a.premise!.id, a.premise!]),
+        .flatMap(openPoints)
+        .map((sp) => sp.premise)
+        .filter((p): p is Premise => Boolean(p))
+        .map((p) => [p.id, p]),
     ).values(),
   );
 
-  const agreementsAtPremise = accountAgreements.filter(
-    (a) => a.premise?.id === premiseId,
+  /*
+   * An agreement counts as "at this premise" if **any** of its open
+   * points is there. One agreement may serve several premises — a
+   * transfer now mirrors every point (spec 05) — so a `===` against a
+   * single premise would miss an agreement that serves this one among
+   * others.
+   */
+  const agreementsAtPremise = accountAgreements.filter((a) =>
+    openPoints(a).some((sp) => sp.premiseId === premiseId),
   );
 
+  /*
+   * The meters at *this* premise, not every meter on those agreements:
+   * an agreement serving two premises would otherwise offer the other
+   * premise's meters for a final read here.
+   */
   const metersAtPremise = Array.from(
     new Map(
       agreementsAtPremise
-        .flatMap((a) => a.meters ?? [])
+        .flatMap(openPoints)
+        .filter((sp) => sp.premiseId === premiseId)
+        .flatMap((sp) => sp.meters ?? [])
+        .filter((m) => m.removedDate === null)
         .map((m) => [m.meterId, m.meter]),
     ).values(),
   );
@@ -127,6 +185,18 @@ export default function MoveOutWizardPage() {
 
   const step1Valid = accountId;
   const step2Valid = premiseId && moveOutDate;
+  /*
+   * Every listed meter needs a number before Finish is live.
+   *
+   * `every()` over an empty list is true, and that is **correct** for an
+   * unmetered service — a stormwater or solid-waste agreement has a
+   * NON_BADGED or ITEM_BASED point with no device, and such a move-out
+   * has no reads to capture. It was *wrong* until 2026-11-18 only
+   * because `metersAtPremise` was always empty: a metered move-out
+   * posted `finalMeterReadings: []` with Finish enabled and the reads
+   * never taken. The list being right is what makes this check mean
+   * something; see the note on `ServiceAgreement` above.
+   */
   const step3Valid = metersAtPremise.every((m) => readings[m.id]?.length);
 
   const submit = async () => {

@@ -44,8 +44,8 @@ if errorlevel 1 (
 
 echo.
 echo Starting in DEV mode - hot reload, no build.
-echo   API: http://localhost:3001   (tsx watch, restarts on save)
-echo   Web: http://localhost:3000   (next dev, hot module reload)
+echo   API: http://localhost:4001   (tsx watch, restarts on save)
+echo   Web: http://localhost:4000   (next dev, hot module reload)
 echo.
 echo Both run in THIS window. Ctrl-C stops them.
 echo Background workers are not started; run them with

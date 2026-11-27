@@ -22,10 +22,42 @@ import type { FinalBillResult } from "./final-bill.service.js";
  * Transfer of service: reassigns an active service agreement from one
  * account to another as of `transferDate`. The source agreement is
  * closed with an end_date and an optional FINAL meter read; a new
- * agreement is created on the target account with identical
- * premise/commodity/rateSchedule/billingCycle and an optional ACTUAL
- * meter read. Meter-read history stays linked to whichever agreement
- * owned the meter at the time.
+ * agreement is created on the target account, and an optional ACTUAL
+ * read is recorded against it. Meter-read history stays linked to
+ * whichever agreement owned the meter at the time.
+ *
+ * **What is carried:** `commodity_id`, every open service point (each
+ * at its own premise, with its own open meters), and — when the tenant's
+ * `transferCarriesRateSchedule` is on, which is the default — the
+ * rate-schedule assignments in force on the transfer date. Not
+ * `billingCycleId`, which left the SA in slice 5b.1: the target account
+ * owns the cycle, so the target's applies. Not the premise as an
+ * agreement field, because it is not one — it arrives on the service
+ * points below.
+ *
+ * This comment claimed "identical premise/commodity/rateSchedule/
+ * billingCycle" until 2026-11-17, when three of the four were wrong, and
+ * the rate schedule became true again on 2026-11-18 by being built
+ * rather than by being described. `readSequence` was the fourth, and its
+ * column is gone (spec 30).
+ *
+ * **Every open service point is mirrored, not flattened.** Until
+ * 2026-11-18 the workflow created *one* point, at the premise of the
+ * source's first open point, and copied every meter from every point
+ * onto it — so an agreement serving two premises came out serving one,
+ * with the second premise's meters hanging at the first. Nothing can
+ * create a second point on an agreement today (all four create paths
+ * make exactly one, and the overlay upsert refuses a premise change
+ * rather than adding one), so this was unreachable; it was wrong rather
+ * than merely unsupported, which is why it is a loop now instead of a
+ * refusal. Spec 05's transfer section records the decision.
+ *
+ * This does **not** make multi-premise agreements supported. The rate
+ * engine still rates a whole agreement at `servicePoints[0]`'s premise
+ * (`lib/rate-engine-loaders/load-base.ts`), and the customer graph and
+ * service-request screens still show the first point's premise. Transfer
+ * has stopped corrupting such an agreement; nothing else has learned
+ * about it.
  */
 export async function transferService(
   utilityId: string,
@@ -34,18 +66,54 @@ export async function transferService(
   sourceAgreementId: string,
   data: TransferServiceInput,
 ) {
+  // Needed before the read below, which filters the source's
+  // rate-schedule assignments to the ones in force on this day.
+  const transferDate = new Date(data.transferDate);
+
   const result = await prisma.$transaction(async (tx) => {
     const source = await tx.serviceAgreement.findFirstOrThrow({
       where: { id: sourceAgreementId, utilityId },
       include: {
         servicePoints: {
           where: { endDate: null },
+          // Oldest point first, so the mirrored agreement lists its
+          // premises in the order the source did rather than in whatever
+          // order Postgres returns. `servicePoints[0]` is the premise six
+          // other call sites read as "the agreement's premise", so which
+          // row is first is not cosmetic.
+          orderBy: { startDate: "asc" },
           include: {
             meters: {
               where: { removedDate: null },
               orderBy: { addedDate: "desc" },
               include: { meter: true },
             },
+          },
+        },
+        /*
+         * The assignments the new agreement inherits if the tenant's flag
+         * says to: those **in force** on the transfer date, and those
+         * **scheduled to start after it**.
+         *
+         * Only the first until 2026-11-27, so a rate change the source
+         * already had booked for next month — a new tariff year, a move
+         * off an introductory rate — was silently dropped: the premise
+         * was the same, the scheduled change was the utility's decision
+         * about it, and the new agreement stayed on the old rate forever.
+         *
+         * `expirationDate` is inclusive, matching the rate engine's own
+         * window filter in `load-base.ts`: an assignment expiring on the
+         * transfer date is still in force that day.
+         */
+        rateScheduleAssignments: {
+          where: {
+            OR: [
+              {
+                effectiveDate: { lte: transferDate },
+                OR: [{ expirationDate: null }, { expirationDate: { gte: transferDate } }],
+              },
+              { effectiveDate: { gt: transferDate } },
+            ],
           },
         },
       },
@@ -62,6 +130,59 @@ export async function transferService(
       );
     }
 
+    /*
+     * A transfer to the account that already holds the agreement.
+     *
+     * Refused rather than performed, because performing it is
+     * destructive and looks like a no-op: the agreement goes FINAL, a
+     * second one opens on the same account at the same premise, and the
+     * customer's service history now reads as a change of
+     * responsibility that never happened. A final bill may follow.
+     *
+     * The wizard has refused this client-side since it shipped
+     * (`app/workflows/transfer/page.tsx`), which made the rule real for
+     * anyone using the screen and no one using the API. One wrong pick
+     * in a dropdown is the whole distance to it.
+     */
+    if (source.accountId === data.targetAccountId) {
+      throw Object.assign(
+        new Error(
+          "Target account already holds this service agreement; a transfer needs a different account.",
+        ),
+        { statusCode: 400, code: "TRANSFER_TO_SAME_ACCOUNT" },
+      );
+    }
+
+    /*
+     * One reading, more than one meter: refused, because the number
+     * names no meter.
+     *
+     * `finalMeterReading` and `initialMeterReading` are single scalars
+     * written against `sourceSpms[0]` — the most recently *added* open
+     * meter. With one meter that is unambiguous. With two it silently
+     * picks by install order, so a CSR's final read lands on whichever
+     * meter happened to be fitted last, and the other meter's service
+     * ends with no final read at all.
+     *
+     * This is reachable today and has nothing to do with multiple
+     * premises: `createServiceAgreement` takes a list of meters and
+     * attaches all of them to the one point it makes. Refusing sends the
+     * operator to the reads endpoint, which can say which meter it
+     * means; the transfer itself still works without a reading.
+     */
+    if (
+      (data.finalMeterReading !== undefined || data.initialMeterReading !== undefined) &&
+      sourceSpms.length > 1
+    ) {
+      throw Object.assign(
+        new Error(
+          `This agreement has ${sourceSpms.length} meters, so a single reading does not say which meter it is for. ` +
+            "Transfer without a reading and record each meter's read directly.",
+        ),
+        { statusCode: 400, code: "TRANSFER_READING_AMBIGUOUS" },
+      );
+    }
+
     const targetAccount = await tx.account.findFirstOrThrow({
       where: { id: data.targetAccountId, utilityId },
     });
@@ -73,10 +194,11 @@ export async function transferService(
       );
     }
 
-    const transferDate = new Date(data.transferDate);
-
-    const sourcePremiseId = source.servicePoints[0]?.premiseId;
-    if (!sourcePremiseId) {
+    // Every open point moves. Zero of them is still a refusal: an
+    // agreement with no open service point has no premise to transfer,
+    // and the new agreement would serve nowhere.
+    const openSps = source.servicePoints;
+    if (openSps.length === 0) {
       throw Object.assign(
         new Error("Source agreement has no service point with a premise; cannot transfer."),
         { statusCode: 400, code: "SOURCE_AGREEMENT_NO_PREMISE" },
@@ -120,7 +242,11 @@ export async function transferService(
         saId: sourceAgreementId,
         endDate: transferDate,
         status: "FINAL",
-        reason: `Transferred to account ${data.targetAccountId}`,
+        // The operator's reason, where they gave one, so the closure
+        // itself says why and not only that it was a transfer.
+        reason: data.reason
+          ? `Transferred to account ${data.targetAccountId}: ${data.reason}`
+          : `Transferred to account ${data.targetAccountId}`,
       },
       tx,
     );
@@ -149,30 +275,93 @@ export async function transferService(
         commodityId: source.commodityId,
         startDate: transferDate,
         status: "ACTIVE",
-        readSequence: source.readSequence,
       },
     });
 
-    // Create one SP on the new SA mirroring the source's premise, then
-    // copy each open meter from the source's SPMs onto it. Primacy is
-    // implicit in the SP model (one meter at a time per SP).
-    const newSp = await tx.servicePoint.create({
-      data: {
-        utilityId,
-        serviceAgreementId: newAgreementBase.id,
-        premiseId: sourcePremiseId,
-        type: "METERED",
-        status: "ACTIVE",
-        startDate: transferDate,
-      },
-    });
-    if (sourceSpms.length > 0) {
-      await tx.servicePointMeter.createMany({
-        data: sourceSpms.map((m) => ({
+    /*
+     * Mirror each open service point onto the new agreement — its own
+     * premise, its own meters. Serial rather than a `createMany`,
+     * because each point's meters need the id of the point just created.
+     * It is one iteration for every agreement this product can currently
+     * produce.
+     *
+     * **This must stay after the close, and the database now enforces
+     * why.** `before_one_live_service_per_premise` refuses a second live
+     * point at one premise for one commodity, so creating these before
+     * the source was closed would make a transfer refuse itself. It is
+     * safe twice over as written: the source agreement is FINAL by now,
+     * which takes it out of the rule, and its points end on
+     * `transferDate` while these start on it — a hand-over, not an
+     * overlap, since the comparison is half-open.
+     *
+     * `type` is carried from the source point instead of hard-coded
+     * `METERED`, which is what this did before: a point that is not
+     * metered would have come out of a transfer claiming it was.
+     *
+     * `status` is not carried. The new points are ACTIVE because the new
+     * agreement is, and what a non-ACTIVE-but-not-ended point should
+     * become on transfer is a question nobody has had to answer yet.
+     */
+    for (const sp of openSps) {
+      const newSp = await tx.servicePoint.create({
+        data: {
           utilityId,
-          servicePointId: newSp.id,
-          meterId: m.meterId,
-          addedDate: transferDate,
+          serviceAgreementId: newAgreementBase.id,
+          premiseId: sp.premiseId,
+          type: sp.type,
+          status: "ACTIVE",
+          startDate: transferDate,
+        },
+      });
+      if (sp.meters.length > 0) {
+        await tx.servicePointMeter.createMany({
+          data: sp.meters.map((m) => ({
+            utilityId,
+            servicePointId: newSp.id,
+            meterId: m.meterId,
+            addedDate: transferDate,
+          })),
+        });
+      }
+    }
+
+    /*
+     * Carry the tariff, if the tenant says to.
+     *
+     * No row at all means every default, the way `getTenantConfig`
+     * reads it — so the absence of a config row carries the schedule
+     * rather than silently dropping it. The column default agrees.
+     *
+     * The *source's* assignments are left as they are. Its own end date
+     * says when it stopped serving, and expiring its assignments is
+     * `closeServiceAgreement`'s business if it is anybody's — that
+     * cascade is shared with move-out and every other closure path, and
+     * widening it from here would change all of them.
+     *
+     * `effectiveDate` is the later of the transfer date and the source
+     * assignment's own: an assignment in force is re-dated to the transfer
+     * date, because the new agreement did not exist before it and an
+     * earlier date would claim a period it cannot have served; one
+     * scheduled for later keeps its own start, which is the point of
+     * carrying it. `expirationDate` is carried as-is — a tariff that ends
+     * in June still ends in June.
+     */
+    const config = await tx.utilityConfig.findUnique({
+      where: { utilityId },
+      select: { transferCarriesRateSchedule: true },
+    });
+    const carried = (config?.transferCarriesRateSchedule ?? true)
+      ? source.rateScheduleAssignments
+      : [];
+    if (carried.length > 0) {
+      await tx.sAScheduleAssignment.createMany({
+        data: carried.map((a) => ({
+          utilityId,
+          serviceAgreementId: newAgreementBase.id,
+          rateScheduleId: a.rateScheduleId,
+          roleCode: a.roleCode,
+          effectiveDate: a.effectiveDate > transferDate ? a.effectiveDate : transferDate,
+          expirationDate: a.expirationDate,
         })),
       });
     }
@@ -230,6 +419,24 @@ export async function transferService(
         targetAgreementId: newAgreement.id,
         targetAccountId: data.targetAccountId,
         transferDate: data.transferDate,
+        /*
+         * What actually moved, because the two counts cannot be
+         * reconstructed afterwards. `transferCarriesRateSchedule` is a
+         * per-tenant flag somebody may turn off between one transfer and
+         * the next, and without this an unrated new agreement looks the
+         * same whether the flag was off or the source simply had no
+         * tariff.
+         */
+        servicePointsMirrored: openSps.length,
+        rateScheduleAssignmentsCarried: carried.length,
+        /*
+         * The operator's own words. The wizard has offered a "Reason"
+         * field since it shipped and this workflow read it nowhere — it
+         * passed a constructed string to the close and recorded nothing
+         * — so a CSR's "sale of property" went into a 2000-character
+         * box and was discarded on submit.
+         */
+        reason: data.reason ?? null,
       },
     );
 

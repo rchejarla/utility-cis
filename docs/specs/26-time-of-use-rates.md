@@ -1349,8 +1349,21 @@ raw intervals from the same meters. Compression is therefore entirely a
 > that predate it — rather than creating a second set,
 > because a published calendar naming one set while another is in force
 > is the divergence TOU-SEA-6 warns about, and a fresh database should
-> not open on a warning about a state nobody caused. Nothing prices it
-> yet; a TOU rate schedule is not seeded.
+> not open on a warning about a state nobody caused. Nothing in *that*
+> file prices it; the tariff and the sample services come from
+> `seed/tou-service.js`.
+>
+> **`seed/tou-service.js` creates a premise per sample service** — 1201,
+> 1203 and 1205 W Koch St, each with ELECTRIC in its `commodity_ids` —
+> for `TOU-REG-001`, `TOU-REG-002` and `TOU-AMI-001`. It used to attach
+> all three to one premise found with
+> `premise.findFirst({ orderBy: { createdAt: "asc" } })`, which put three
+> live electric agreements at one address (three bills for one supply,
+> now refused outright by `before_one_live_service_per_premise` — spec
+> 05) and put an electric meter at a premise listing no electric service,
+> since no base-seed premise carries ELECTRIC. The old pick was not even
+> deterministic: the base seed writes its premises together, so they
+> share a `created_at`. Corrected 2026-11-18.
 >
 > **Still to build:** TOU-UI-1d (the published-version diff), TOU-UI-4
 > and TOU-UI-5. With TOU-UI-3 built, the one thing standing between a

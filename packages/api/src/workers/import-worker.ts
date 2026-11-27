@@ -13,6 +13,7 @@ import {
 } from "../services/imports/process-batch.service.js";
 import { emitImportTerminalNotifications } from "../services/imports/notify.service.js";
 import { reclaimZombieBatches } from "../services/imports/zombie-sweep.service.js";
+import { entrySheetOf } from "../services/read-route-entry.service.js";
 import { prisma } from "../lib/prisma.js";
 import { runAsPlatform } from "../lib/tenant-context.js";
 
@@ -29,7 +30,9 @@ import { runAsPlatform } from "../lib/tenant-context.js";
  * On crash mid-batch: the next API/worker boot's reclaimZombieBatches
  * sweep flips the batch back to PENDING and re-enqueues; processBatch
  * scope="pending" picks up where it left off (IMPORTED rows are
- * skipped because they're not in the status filter).
+ * skipped because they're not in the status filter). A typed-in route
+ * sheet is the one exception — flipped, never re-enqueued, because its
+ * guards live above processBatch. See reclaimAndEnqueueZombies.
  */
 
 export const IMPORT_WORKER_JOB_NAME = "process-import-batch";
@@ -113,9 +116,28 @@ async function reclaimAndEnqueueZombiesUnscoped(): Promise<void> {
   for (const batchId of ids) {
     const batch = await prisma.importBatch.findUnique({
       where: { id: batchId },
-      select: { utilityId: true, createdBy: true },
+      select: { utilityId: true, createdBy: true, mapping: true },
     });
     if (!batch) continue;
+    /*
+     * A typed-in route sheet is reclaimed but never re-enqueued.
+     *
+     * The PROCESSING -> PENDING flip is how a human resumes a route the
+     * API died in the middle of submitting: `saveEntryRow` and
+     * `submitEntry` both work on a PENDING batch. Running it here would
+     * post the readings through `processBatch` with none of the entry
+     * service's guards (the billed-period refusal among them), fail every
+     * blank and coded row for having no number, and finalise the batch
+     * with its skip loop never run — so every skip on the sheet would be
+     * lost and the operator could not resubmit it.
+     */
+    if (entrySheetOf(batch)) {
+      logger.info(
+        { component: "import-worker", batchId },
+        "Reclaimed a route-entry batch; left PENDING for the operator to resubmit",
+      );
+      continue;
+    }
     const user = await prisma.cisUser.findUnique({
       where: { id: batch.createdBy },
       select: { name: true },

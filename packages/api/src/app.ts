@@ -44,6 +44,7 @@ import { userRoutes } from "./routes/users.js";
 import { roleRoutes } from "./routes/roles.js";
 import { meterReadRoutes } from "./routes/meter-reads.js";
 import { meterDataExceptionRoutes } from "./routes/meter-data-exceptions.js";
+import { readRouteRoutes } from "./routes/read-routes.js";
 import { meterEventRoutes } from "./routes/meter-events.js";
 import { containerRoutes } from "./routes/containers.js";
 import { serviceSuspensionRoutes } from "./routes/service-suspensions.js";
@@ -179,6 +180,7 @@ export async function buildApp() {
   await app.register(userRoutes);
   await app.register(roleRoutes);
   await app.register(meterReadRoutes);
+  await app.register(readRouteRoutes);
   await app.register(meterDataExceptionRoutes);
   await app.register(meterEventRoutes);
   await app.register(containerRoutes);

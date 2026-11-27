@@ -33,7 +33,6 @@ The core billing unit linking account, premise, commodity, rate schedule, billin
 | start_date | DATE | Required; when service begins |
 | end_date | DATE | Null = currently active; populated when service ends |
 | status | ENUM | `PENDING`, `ACTIVE`, `FINAL`, `CLOSED` |
-| read_sequence | INTEGER | Optional; order within a meter reading route |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -88,6 +87,7 @@ All endpoints require JWT authentication with `utility_id` claim.
 | GET | `/api/v1/service-agreements/:id` | Get agreement by ID (includes meters, premise, account) |
 | PATCH | `/api/v1/service-agreements/:id` | Update editable fields (rate, cycle, read sequence, custom fields). **Lifecycle fields (`startDate`, `endDate`, `status`) are not allowed here** — see the transitional endpoints below |
 | POST | `/api/v1/service-agreements/:id/close` | Cascading close: terminal-status the SA AND set `removed_date` on every still-open meter assignment in one transaction. Body: `{ endDate, status: FINAL\|CLOSED, reason? }` |
+| POST | `/api/v1/service-agreements/:id/transfer` | Reassign the agreement to another account as of `transferDate`. Body: `{ targetAccountId, transferDate, newAgreementNumber?, finalMeterReading?, initialMeterReading?, reason? }`. See **Transfer of service** below for what it carries and its five refusals |
 | POST | `/api/v1/service-agreements/:id/meters` | Add a meter to an existing agreement |
 | POST | `/api/v1/service-agreements/:id/meters/:meterId/remove` | Close a single meter assignment. Body: `{ removedDate, reason? }`. Emits an audit row |
 | POST | `/api/v1/service-agreements/:id/meters/swap` | Atomic swap: closes the old SAM and opens a new one in the same transaction. Body: `{ oldMeterId, newMeterId, swapDate, reason? }` |
@@ -121,7 +121,6 @@ All endpoints require JWT authentication with `utility_id` claim.
 | startDate | Yes | ISO date string |
 | endDate | No | ISO date string |
 | status | No | Default PENDING |
-| readSequence | No | integer |
 | meters | Yes | Array of meter assignments, min 1 |
 
 **Meter assignment object (within `meters` array):**
@@ -137,7 +136,6 @@ All endpoints require JWT authentication with `utility_id` claim.
 |-------|---------|
 | rateScheduleId | Yes |
 | billingCycleId | Yes |
-| readSequence | Yes |
 | customFields | Yes |
 
 The PATCH input schema is `.strict()` — passing any field not in the table above returns 422 with a Zod error. Lifecycle fields (`startDate`, `endDate`, `status`) are intentionally rejected: they go through the dedicated `POST /:id/close` endpoint, which cascades onto meter assignments atomically. Generic UPDATE setting `status=FINAL` without `endDate` (or vice versa) is also rejected at the database layer by the `enforce_sa_lifecycle_invariants` trigger (migration `20260427144400`). Fields that cannot be changed after creation under any path: `agreementNumber`, `accountId`, `premiseId`, `commodityId`.
@@ -173,9 +171,77 @@ The check is **belt + suspenders**: a partial GIST exclusion constraint `no_doub
 
 ### Effective-Range Overlap Prevention
 
-A partial GIST exclusion constraint `no_overlapping_active_sa` (migration `20260427143408`) prevents two `PENDING`/`ACTIVE` SAs from overlapping in time on the same `(utility_id, account_id, premise_id, commodity_id)`. The constraint is built on a generated `effective_range tsrange` column derived from `start_date` and `end_date`. Closed/Final SAs are exempt — historical ranges are immutable facts, and a successor SA may validly cover the same window.
+**Two live agreements may not both serve one premise for one commodity over the same
+days.** Enforced by the `before_one_live_service_per_premise` trigger on
+`service_point` (migration `20261118110000`), which raises
+`ONE_LIVE_SERVICE_PER_PREMISE` naming the agreement already there.
+`middleware/error-handler.ts` turns that into a **409** carrying the trigger's own
+sentence.
 
-A `chk_sa_end_ge_start` CHECK constraint enforces date ordering at the row level.
+Both sides must be `PENDING` or `ACTIVE`, and the windows must actually overlap —
+`[)`, so a successor starting the day the predecessor's point ends is a clean
+hand-over and is allowed. `one-live-service-per-premise.integration.test.ts` pins all
+seven cases against a real database, including that an `UPDATE` reopening a closed
+point is judged too.
+
+**Concurrent openings take turns** (migration `20261127090000`, 2026-11-27). The
+trigger as first written was a plain `SELECT` under READ COMMITTED, so two CSRs
+opening service at one address at once each missed the other's uncommitted point and
+both committed — the case its own migration comment claimed to close. It now takes
+`pg_advisory_xact_lock` on (tenant, premise, commodity) before the check, so the second
+writer waits for the first and is then refused. Only writers of that one key ever wait.
+The integration suite holds one transaction open after its insert and asserts the
+second is refused.
+
+**An update that keeps or narrows a point's own dates is let through** (migration
+`20261127110000`, 2026-11-27). Same agreement, same premise, start no earlier and end no
+later: such a row overlaps nothing it did not overlap before, so there is nothing to
+check. Without this, the overlaps that predate the trigger were untouchable — every edit
+to one met the overlap already there and was refused, even the edit that ends it.
+Widening, moving premise and changing agreement are still judged, and so is the
+reopen-a-closed-point case above.
+
+**Date-order CHECKs answer in words.** `chk_sa_end_ge_start`, `chk_sp_end_ge_start` and
+`chk_spm_removed_ge_added` reach a caller as **400 `DATE_ORDER_VIOLATION`** with a
+sentence (`middleware/error-handler.ts`), not as "Database error". A transfer or close
+backdated to before the service began is how a CSR meets them.
+
+**What this section claimed until 2026-11-18, and why it was wrong.** The intent since
+April was a partial GIST exclusion constraint `no_overlapping_active_sa` (migration
+`20260427143408`) on a generated `effective_range tsrange` column. What was actually in
+the database was **the column and nothing else** — verified on 2026-11-18:
+`pg_constraint` on `service_agreement` held two CHECKs, a non-empty-number CHECK, four
+foreign keys, the primary key and one unique key, `pg_indexes` listed no GIST index, and
+no migration on disk mentioned `btree_gist` for the table. The 2026-10-18 squash appears
+to have dropped it, leaving a generated column maintained for a constraint that was gone
+and two documents asserting a guarantee nothing held.
+
+**It is a trigger rather than that constraint for two reasons.** The constraint cannot be
+written: an exclusion is single-table and the key spans two — `premise_id` is on
+`service_point`, `commodity_id` on `service_agreement`. (The key this section used to
+describe, `(utility_id, account_id, premise_id, commodity_id)` on `service_agreement`,
+was never constructible for exactly that reason; that table has no premise. Keying it on
+account and commodity instead would have refused a legitimate case this spec covers
+elsewhere — RFP req 10, one account across several properties.) And a trigger can be
+added over data that already violates it: it judges writes, not rows, so the three live
+electric agreements sitting at one premise in the dev database were left untouched, where
+an exclusion constraint would have refused to be created at all. That matches what this
+spec already says about the April constraints — pre-existing data is not rejected, only
+new violations are blocked.
+
+**The gap it leaves, stated rather than closed:** an agreement closed with a *future*
+end date is terminal now while still delivering service until then, so a new agreement
+starting before that date is accepted and the two overlap. Closing that means deciding
+whether a terminal agreement with a future end date is still serving, which is a product
+question. Narrowing the rule to live agreements only means it refuses nothing legitimate,
+which was the property worth having first.
+
+`schema.prisma`'s comment on `effective_range` still names the old constraint; the column
+is now unused by any guard. A `chk_sa_end_ge_start` CHECK does enforce date ordering at
+the row level, and the `enforce_sa_lifecycle_invariants` trigger does fire —
+`cascade-close.integration.test.ts` proves that one against a real database. **Neither
+trigger is expressible in `schema.prisma`**, so `migrate dev` would propose dropping
+both; see the CLAUDE.md warning about that command.
 
 ### Cascade-Close on Lifecycle Transition
 
@@ -207,9 +273,11 @@ The `createServiceAgreementSchema` requires `meters` array with `min(1)`. An agr
 
 `start_date` and `end_date` define the period of service. The rate schedule and billing cycle in effect at billing time are resolved from the agreement's rate/cycle FKs. Rate schedule version history (effective dates on RateSchedule) allows the system to bill at the correct rate for a given period even if the rate changes mid-cycle.
 
-### Read Sequence
+### Read order lives on the route, not here
 
-`read_sequence` is an integer that places this agreement in order within its billing cycle's meter reading route. Lower numbers are read first. This field supports route optimization for manual meter reading.
+**`read_sequence` was removed on 2026-11-17** (spec 30), and this section used to claim it placed an agreement in order within its billing cycle's reading route. It never did. The column was write-only: settable through the importer, the API, this page and carried through transfer, and nothing in the codebase ordered or grouped by it. A column named `read_sequence` that does nothing reads as if sequencing works, which is exactly what a builder would reach for when asked to order a route.
+
+It was also pointed at the wrong entity. A reader walks to a house, so the thing with an order is the **place**, and two meters at one address are one visit. An agreement is a contract — it ends when somebody moves out, which would renumber the route. Read order is now `read_route_stop.sequence`, keyed on `premise_id`. See [30 — Read Routes](30-read-routes.md).
 
 ### Structural Immutability
 
@@ -240,10 +308,37 @@ The GET list endpoint supports filtering by `accountId` and `premiseId` to suppo
 | Agreements at Account | `/accounts/:id` (Agreements tab) | List of agreements for an account; status indicators |
 | Agreements at Premise | `/premises/:id` (Agreements tab) | List of agreements at a premise; current vs historical; Add Agreement inline form |
 | Bulk import | `/service-agreements/import` | Mounts module 22's `<ImportWizard kind="service_agreement" />`; reached from the Import button on the list page |
+| Transfer wizard | `/workflows/transfer` | Source → target panels with a diff before commit. Picks the source agreement and target account, the transfer date, an optional new agreement number, optional final/initial readings and a reason. Lists every premise the agreement serves. Refuses a same-account transfer client-side as well as server-side |
+| Move-out wizard | `/workflows/move-out` | Three steps: account → premise and date → final reads. Finalizes every live agreement on that account at that premise, in one transaction, with the closing reads |
+
+**The transfer wizard rendered `premise: ,` — a bare comma where the address belongs —
+until 2026-11-18.** Its `ServiceAgreement` interface declared a flat `premise` field,
+and neither the list nor the detail endpoint sends one in their current shape (verified
+2026-11-18; how long that has been true is not established, only that it was): a premise
+belongs to the service point. Nothing caught it because the screen
+had no browser coverage and no jsdom test at all, and a mock built from that interface
+supplies the field the server does not. It now reads `servicePoints[].premise` and lists
+**every** open point, since a transfer moves all of them. `e2e/transfer-of-service.spec.ts`
+asserts the address is on screen, which is the assertion that found this.
+
+**The move-out wizard had the same bug three times over, and could not work at all.**
+Fixed the same day. Its interface declared a flat `premise` *and* a flat `meters`, so
+`premisesAtAccount` was always empty (step 2's picker had no options, and the wizard
+could not be completed by anybody), `metersAtPremise` was always empty (no final reads
+could be entered), and `step3Valid` — `every()` over that empty array — was vacuously
+**true**, so had the picker worked, Finish would have been live with no reads captured
+and the workflow posted an empty `finalMeterReadings`. All three now read
+`servicePoints[]`, filtered to open points and, for the meters, to the chosen premise;
+`e2e/move-out.spec.ts` drives the whole wizard and reads the closing read back from the
+API. Mutation-checked both ways: inverting the open-point filter empties the premise
+picker again, and forcing `finalMeterReadings: []` still finalizes the agreement while
+writing no read — which is exactly the silent failure the vacuous check allowed.
 
 **Bulk import (shipped 2026-11-01).** `kind: "service_agreement"` in module 22 (spec 22, slice 4c), for legacy migrations and for spec 28's overlay mirror. One CSV line produces the agreement, its service point, optionally a meter install and optionally a rate-schedule assignment, in one transaction. `agreementNumber` is optional — blank generates one from the tenant template, as `createServiceAgreement` does.
 
-Two of this page's rules are enforced on the import path as well, and that is deliberate rather than incidental: a meter already installed on a `PENDING` or `ACTIVE` agreement for the same commodity is refused (`METER_ALREADY_ASSIGNED`, the same rule as **Meter Assignment Uniqueness** below), and a premise that cannot be identified uniquely from address and ZIP is a row error rather than a guess. **An import must not be a route around a rule the API enforces** — a meter serving two live agreements would feed two bills. What the import deliberately does *not* carry is **At Least One Meter Required**, and the asymmetry is the point. That rule lives in `createServiceAgreementSchema` as `meters: min(1)` — it is a Zod rule on one API payload, not a database constraint, and `createServiceAgreement` itself writes an agreement with no meters quite happily when handed an empty array. Meter uniqueness is a *correctness* invariant: break it and one meter feeds two bills, which no later event repairs. "At least one meter" is a *completeness* requirement that time satisfies — and one that is simply false for an unmetered service, so an import that enforced it could never load a solid-waste agreement. **`servicePointType` is a column (added 2026-11-01).** It was hardcoded `METERED`, following `createServiceAgreement` — right for water and simply false for an unmetered service, so every imported stormwater agreement got a metered service point with nothing metering it. The column takes `METERED` (the default, so nothing already loading water agreements changes), `ITEM_BASED` for counted things such as solid-waste containers, and `NON_BADGED` for a service priced from premise attributes with no device at all, which is what stormwater is. An unknown value is `INVALID_SERVICE_POINT_TYPE` rather than a silent fallback to metered.
+Two of this page's rules are enforced on the import path as well, and that is deliberate rather than incidental: a meter already installed on a `PENDING` or `ACTIVE` agreement for the same commodity is refused (`METER_ALREADY_ASSIGNED`, the same rule as **Meter Assignment Uniqueness** below), and a premise that cannot be identified uniquely from address and ZIP is a row error rather than a guess.
+
+**A third now reaches it from the database rather than from the handler (2026-11-18).** A row opening a live service at a premise another live agreement already serves for that commodity is refused by `before_one_live_service_per_premise`, and the importer reports it as a row error naming the conflicting agreement — the batch comes back `PARTIAL` with the other rows loaded. That is the right shape for an import: a legacy CIS holding two live agreements for one supply is a data-quality finding the migration should surface, not something to carry across silently. Terminal agreements are exempt, so importing *history* is unaffected, which is most of what a migration loads. Three fixtures in `service-agreement-import.integration.test.ts` had to change for it — each sent two rows at the same address for the same commodity, both open-ended, to exercise something unrelated (an optional meter column, a service-point type default, a blank legacy key), and each now uses a second premise. **An import must not be a route around a rule the API enforces** — a meter serving two live agreements would feed two bills. What the import deliberately does *not* carry is **At Least One Meter Required**, and the asymmetry is the point. That rule lives in `createServiceAgreementSchema` as `meters: min(1)` — it is a Zod rule on one API payload, not a database constraint, and `createServiceAgreement` itself writes an agreement with no meters quite happily when handed an empty array. Meter uniqueness is a *correctness* invariant: break it and one meter feeds two bills, which no later event repairs. "At least one meter" is a *completeness* requirement that time satisfies — and one that is simply false for an unmetered service, so an import that enforced it could never load a solid-waste agreement. **`servicePointType` is a column (added 2026-11-01).** It was hardcoded `METERED`, following `createServiceAgreement` — right for water and simply false for an unmetered service, so every imported stormwater agreement got a metered service point with nothing metering it. The column takes `METERED` (the default, so nothing already loading water agreements changes), `ITEM_BASED` for counted things such as solid-waste containers, and `NON_BADGED` for a service priced from premise attributes with no device at all, which is what stormwater is. An unknown value is `INVALID_SERVICE_POINT_TYPE` rather than a silent fallback to metered.
 
 **Overview tab fields displayed:** agreement number, status badge, account (linked), premise (linked), commodity, rate schedule (linked), billing cycle, start date, end date (if set), read sequence. All editable fields support inline editing.
 
@@ -301,10 +396,10 @@ Note: There is no transition to or from INACTIVE. The INACTIVE status is not val
 | 9 | Multiple accounts per property | Covered — multiple ServiceAgreements per Premise |
 | 10 | One account across multiple properties | Covered — Account → many ServiceAgreements → many Premises |
 | 14 | Landlord/tenant relationships | Gap (Phase 2) — `owner_account_id` planned |
-| 15 | Transfer of service | Planned (Phase 2) — move-in/move-out workflow |
+| 15 | Transfer of service | Covered — `POST /service-agreements/:id/transfer` and the `/workflows/transfer` wizard. Carries the commodity, every open service point and (by default) the tariff; see **Transfer of service** below for what it refuses and what it still does not do |
 | 58 | Future-dated rate/policy changes | Covered — RateSchedule effective dating; new version auto-expires predecessor |
 | 62 | Effective-dated enrollment with proration | Planned (Phase 3) — `start_date` exists; proration logic is Phase 3 |
-| 78 | Read cycle scheduling, route grouping | Covered — BillingCycle + `read_sequence` |
+| 78 | Read cycle scheduling, route grouping | Covered by [30 — Read Routes](30-read-routes.md) — `read_route` + `read_route_stop`, keyed on premise. **This row used to read "Covered — BillingCycle + `read_sequence`", which was never true**; that column was write-only and is gone |
 | 80 | Associate reads to meters | Covered — `MeterRead.service_agreement_id` FK |
 | 90 | New/replacement meters attached any time | Covered — ServiceAgreementMeter with `added_date`/`removed_date` |
 | 111 | Effective-dated meter/property/account associations | Covered — ServiceAgreementMeter dates |
@@ -324,7 +419,119 @@ Migrations applied in this slice:
 | `20260427143900_sam_effective_range_exclusion` | Same pattern on `service_agreement_meter` + `no_double_assigned_meter` exclusion + `chk_sam_removed_ge_added` CHECK |
 | `20260427144400_sa_lifecycle_invariants` | `enforce_sa_lifecycle_invariants` BEFORE INSERT/UPDATE trigger on `service_agreement` |
 | `20260427162359_point_in_time_helpers` | `responsible_account_at()` and `meter_assignment_at()` SQL functions |
+| `20261118110000_one_live_service_per_premise` | `enforce_one_live_service_per_premise()` + the `before_one_live_service_per_premise` trigger on `service_point`. **Note that `20260427143408`'s exclusion constraint is no longer in the database** — only its generated column survived the 2026-10-18 squash. See **Effective-Range Overlap Prevention** above |
+| `20261127090000_one_live_service_lock` | `CREATE OR REPLACE` of `enforce_one_live_service_per_premise()` adding the advisory lock, so two concurrent openings at one premise cannot both pass. See **Effective-Range Overlap Prevention** above |
+| `20261127110000_one_live_service_update_narrowing` | `CREATE OR REPLACE` of the same function: an UPDATE that keeps or narrows a point's own dates at the same premise and agreement skips the check, so pre-existing overlaps can be edited |
+| `20261118120000_restore_date_order_checks` | `chk_spm_removed_ge_added` on `service_point_meter`, which `20260427143900` added and the squash dropped, plus `chk_sp_end_ge_start` on `service_point`, which never existed — that table had no CHECK constraints at all. Both verified against the data before adding |
 
 **Pre-existing data:** the new constraints don't reject existing rows — they only block new violations. However, pre-existing orphaned `service_agreement_meter` rows (parent SA is FINAL/CLOSED but the SAM has `removed_date IS NULL`) will continue to exist until a separate cleanup is run. This is the bug `closeServiceAgreement` fixes prospectively, but historical orphans need a one-time `UPDATE service_agreement_meter SET removed_date = sa.end_date FROM service_agreement sa WHERE service_agreement_id = sa.id AND removed_date IS NULL AND sa.status IN ('FINAL', 'CLOSED')` script. **Tracked as a follow-up task; not in Slice 1.**
 
 **`tsrange` vs. `tstzrange`:** Postgres requires generation expressions to be `IMMUTABLE`. `date::timestamptz` is `STABLE` (timezone-dependent), which Postgres rejects. `date::timestamp` (without time zone) IS immutable. Since `start_date`/`end_date` are `DATE` columns with no time-of-day semantics, `tsrange` is the correct type — calendar-date overlap, no timezone reasoning needed.
+
+## Transfer of service
+
+`POST /api/v1/service-agreements/:id/transfer`, driven by the
+`/workflows/transfer` wizard. Reassigns an agreement from one account to another as
+of `transferDate`: the source goes FINAL with `end_date = transferDate` and a new
+agreement opens on the target account.
+
+**What it carries.** `commodity_id`; **every open service point**, each at its own
+premise with its own open meters; and, when the tenant's
+`UtilityConfig.transfer_carries_rate_schedule` is true — the default — the
+`SAScheduleAssignment` rows in force on the transfer date, re-dated to the transfer
+date with their own expiration kept, **and those scheduled to start after it**,
+keeping their own start (2026-11-27; before that a rate change the source had booked
+for next month was silently dropped). Not `billing_cycle_id`, which left the SA in
+slice 5b.1: the target account owns the cycle. The operator's `reason`, where they
+gave one, reaches both the closure reason and the audit row.
+
+**What it refuses.**
+
+| Code | Condition |
+|---|---|
+| `AGREEMENT_NOT_TRANSFERABLE` | the source is already FINAL or CLOSED |
+| `TRANSFER_TO_SAME_ACCOUNT` | the target account already holds the agreement |
+| `TRANSFER_READING_AMBIGUOUS` | a single `finalMeterReading`/`initialMeterReading` was supplied for an agreement with more than one open meter |
+| `TARGET_ACCOUNT_INACTIVE` | the target account is not ACTIVE |
+| `SOURCE_AGREEMENT_NO_PREMISE` | the source has no open service point |
+
+`TRANSFER_READING_AMBIGUOUS` exists because those fields are single scalars written
+against the most recently *added* open meter. With one meter that is unambiguous;
+with two it picks by install order, so a final read lands on whichever meter was
+fitted last and the other meter's service ends with no final read. This is reachable
+without multiple premises — `createServiceAgreement` attaches a list of meters to the
+one point it makes.
+
+**Mirroring replaced flattening on 2026-11-18.** Until then the workflow created
+*one* point, at the premise of the source's first open point, and copied every meter
+from every point onto it — so an agreement serving two premises came out serving one,
+with the second premise's meters attached at the first. Nothing can create a second
+point on an agreement today: all four `servicePoint.create` paths make exactly one on
+a brand-new agreement, and the overlay upsert refuses a premise change rather than
+adding a point. So the flatten was unreachable — but it was *wrong* rather than merely
+unsupported, which is why it became a loop instead of a refusal. A refusal would have
+been cheaper to write and no cheaper to own.
+
+**It does not make multi-premise agreements supported, and nothing else has learned
+about them.** The rate engine rates a whole agreement at `servicePoints[0]`'s premise
+(`lib/rate-engine-loaders/load-base.ts`), `bill-segment.service.ts` pools every point's
+meters into one segment, and the customer graph and service-request screens show the
+first point's premise. Master metering is its own feature; the blocker for a *split*
+(moving one premise out and leaving the agreement open for the rest) is that
+`SAScheduleAssignment` is keyed on the agreement, so there is no per-premise tariff to
+divide, and the pooled tier has no split point.
+
+**Coverage.** `transferService` had **no test of any kind** in either vitest config
+until 2026-11-18 — not thin coverage, zero. That is why the behaviour above went
+unnoticed and why the architecture doc could describe four cloned fields for as long as
+it did. It now has `transfer-service.integration.test.ts` (8 tests against a real
+database: the one-premise case, the mirror, the carry on and off, an expired assignment,
+and three refusals) and `e2e/transfer-of-service.spec.ts` (the wizard and the settings
+toggle in a real browser). Both were mutation-checked.
+
+## Open items
+
+1. **When does a new service get its rate-schedule assignment?** Transfer now answers
+   this for itself, but `createServiceAgreement` and move-in still write none — only
+   the service-agreement import does, from its `rate_schedule_code` column. So a
+   service created through those paths is unrated until the assignment endpoint is
+   called for it. That may well be deliberate — an assignment is its own
+   effective-dated artifact, and inventing one on create would be a guess at a tariff —
+   but it should be a stated rule rather than an absence, because of where it surfaces:
+   a billing run's **planner** blocks and names these agreements
+   (`NO_ACTIVE_ASSIGNMENTS`, with an account count and sample accounts), while the
+   **executor** classifies the same code into its skip set, where
+   `billing-run/window.ts` records that filing it as noise had already let days be
+   billed by nothing once. An agreement that gets past planning and meets the condition
+   during execution is therefore reported quietly.
+*(The two items that were here on 2026-11-18 — three live electric agreements sharing
+one premise, and two missing date-ordering CHECKs — were both fixed the same day. What
+was found is recorded under **Effective-Range Overlap Prevention** above and in the
+design doc's §4.24; the short version of each is below, because the causes are worth
+keeping.)*
+
+**The three TOU agreements came from `seed/tou-service.js`**, not from anyone's hand —
+a seeder in a directory the first search missed. It resolved one premise with
+`premise.findFirst({ orderBy: { createdAt: "asc" } })` and attached all three sample
+services to it, which was wrong three ways: three live ELECTRIC agreements at one
+address (three bills for one supply), an electric meter at a premise whose
+`commodity_ids` has no electric at all (the **meter-premise commodity match** rule,
+bypassed because the seeder writes through Prisma rather than the service), and a
+non-deterministic pick, since the base seed writes its premises together and they share
+a timestamp. Each sample now creates its own premise on W Koch St with ELECTRIC in its
+commodity list. The database was recreated and reseeded, so the old rows are gone.
+
+**The missing CHECKs were missing from the *source*, not from the database.** Every
+`CONSTRAINT … CHECK` named across `migrations/*/migration.sql` was diffed against
+`pg_constraint`: **50 declared, 50 present.** Nothing was stale and no reseed would have
+helped — the 2026-10-18 squash stopped declaring `chk_sam_removed_ge_added`, so every
+database created since lacked it equally. Triggers and exclusion constraints were
+audited the same way and came back clean apart from `no_overlapping_active_sa`.
+`20261118120000_restore_date_order_checks` restores that CHECK and adds the one
+`service_point` never had. `no_double_assigned_meter` was never lost — it is live under
+the name **`spm_no_double_install`** — so the **Meter Assignment Uniqueness** rule below
+has been enforced throughout.
+
+The lesson worth keeping is where to look: **a migration file records intent and
+`pg_constraint` records state, and a squash can quietly drop the difference.** That diff
+is one command and is worth re-running after any future squash.

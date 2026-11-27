@@ -177,6 +177,42 @@ describe("every tenant-scoped table", () => {
   });
 
   /**
+   * The read-route tables, by name. The sweeps above derive their set
+   * from the catalogue, so they would pass if one of these were
+   * silently dropped from a migration; this pins that all three exist
+   * and that every key they hold, including the one `meter_read` holds
+   * to a route, carries the tenant as its first column. None of them may have a nullable
+   * `utility_id` - that set is pinned separately below.
+   */
+  it("holds the read-route tables, with every key between them composite", async () => {
+    const { prisma } = prismaImports;
+
+    const keys = await prisma.$queryRaw<{ child: string; constraint_name: string; cols: number; first: string }[]>`
+      SELECT child.relname AS child, con.conname AS constraint_name,
+             array_length(con.conkey, 1)::int AS cols,
+             first_col.attname AS first
+      FROM pg_constraint con
+      JOIN pg_class child  ON child.oid  = con.conrelid
+      JOIN pg_attribute first_col ON first_col.attrelid = con.conrelid
+                                 AND first_col.attnum   = con.conkey[1]
+      JOIN pg_class parent ON parent.oid = con.confrelid
+      WHERE con.contype = 'f'
+        AND parent.relname <> 'utility'
+        AND (child.relname IN ('read_route', 'read_route_stop', 'read_skip')
+             OR con.conname = 'meter_read_route_id_fkey')
+      ORDER BY 1, 2`;
+
+    expect(keys.map((r) => `${r.child}.${r.constraint_name}:${r.first}+${r.cols - 1}`)).toEqual([
+      "meter_read.meter_read_route_id_fkey:utility_id+1",
+      "read_route.read_route_billing_cycle_id_fkey:utility_id+1",
+      "read_route_stop.read_route_stop_premise_id_fkey:utility_id+1",
+      "read_route_stop.read_route_stop_read_route_id_fkey:utility_id+1",
+      "read_skip.read_skip_meter_id_fkey:utility_id+1",
+      "read_skip.read_skip_read_route_id_fkey:utility_id+1",
+    ]);
+  });
+
+  /**
    * A nullable `utility_id` means "belongs to no tenant", and that is
    * meaningful for exactly two reasons: a global reference row every
    * tenant reads (§1.3), and the platform actor, whose entire definition

@@ -39,8 +39,8 @@ The Utility CIS (Customer Information System) is a multi-tenant SaaS platform fo
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | Monorepo | Turborepo + pnpm | Build orchestration, shared types |
-| API | Fastify (TypeScript) | REST API on port 3001 |
-| Admin UI | Next.js 14+ App Router | Admin UI on port 3000 |
+| API | Fastify (TypeScript) | REST API on port 4001 |
+| Admin UI | Next.js 14+ App Router | Admin UI on port 4000 |
 | UI Components | Tailwind CSS + Font Awesome Pro | Styling and icons |
 | ORM | Prisma | Type-safe DB client, migrations |
 | Database | PostgreSQL 16+ | Relational data, RLS multi-tenancy |
@@ -63,8 +63,8 @@ The Utility CIS (Customer Information System) is a multi-tenant SaaS platform fo
 utility-cis/
 ├── packages/
 │   ├── shared/              — Prisma schema, Zod validators, types, events
-│   ├── api/                 — Fastify REST API (port 3001)
-│   └── web/                 — Next.js Admin UI (port 3000)
+│   ├── api/                 — Fastify REST API (port 4001)
+│   └── web/                 — Next.js Admin UI (port 4000)
 ├── docs/
 │   ├── design/              — This document
 │   └── specs/               — Module-level functional specs
@@ -300,7 +300,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 
 ### 4.1 Entity Summary
 
-**47 core domain entities** across 14 categories (a curated summary, not the full schema: the Prisma schema defines 78 models, and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
+**50 core domain entities** across 15 categories (a curated summary, not the full schema: the Prisma schema defines 83 models as of 2026-11-27 — counted with `grep -c '^model ' schema.prisma`, which is how to re-check it — and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
 
 | Category | Entities |
 |----------|----------|
@@ -317,6 +317,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 | **Delinquency** | DelinquencyRule, DelinquencyAction |
 | **Service Requests** | ServiceRequest, Sla, ServiceRequestTypeDef (+ `service_request_counter` plumbing table for per-tenant/year `SR-YYYY-NNNNNN` numbering) |
 | **Accounts Receivable** | LedgerEntry, LedgerApplication, LedgerReasonDef |
+| **Read Routes** | ReadRoute, ReadRouteStop, ReadSkip (spec 30; added 2026-11-17). A route is an ordered list of **premises** a reader visits, tied to a billing cycle, with `origin` saying whether we or a vendor owns the itinerary. `ReadSkip` is the absence of a read — a locked gate or a dog — which `meter_read` cannot represent, since `consumption` is NOT NULL and a zero bills zero and then double. `ServiceAgreement.read_sequence` was removed in the same work: it was write-only and pointed at a contract rather than a place |
 | **Rates** | SeasonSet, Season (every tenant is provisioned with a published `Default` set since 2026-11-06 — the 2026-11-02 migration reached only the tenants alive then, and without a set nothing seasonal rates), TouPeriod (tenant-level since 2026-11-04, and keyed from `meter_register.peak_code` since 2026-11-06), TouCalendar, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidaySet, TouHoliday (spec 26; added 2026-11-02, holidays and peak codes revised 2026-11-04), MeterReadInterval, MeterDataException (the coverage sweep's queue, added 2026-11-06: one open row per meter-day-kind, opened and resolved by the sweep, never accepted or estimated by it) |
 
 **Service Request enums (Phase 4 slice B):**
@@ -545,7 +546,6 @@ The core billing unit. Links account + premise + commodity + rate schedule + bil
 | start_date | DATE | |
 | end_date | DATE | Null = active |
 | status | ENUM | PENDING, ACTIVE, FINAL, CLOSED |
-| read_sequence | INTEGER | Order in reading route |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -629,9 +629,63 @@ Every reading from a meter. TimescaleDB hypertable for interval data at scale.
 | read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM |
 | exception_code | VARCHAR(50) | HIGH_USAGE, ZERO_USAGE, METER_DEFECT |
 | reader_id | UUID | |
+| route_id | UUID | Nullable FK → ReadRoute (spec 30, added 2026-11-17): the read route this reading came off. NULL means "we do not know" — every row written before it existed, and every read from a vendor who sends no route code. No backfill. Written only by the import handler, which both a file and route entry go through |
 | created_at | TIMESTAMPTZ | |
 
 **Multi-register reads (Phase 2.5).** Meters with multiple registers (e.g., a demand+usage commercial meter) produce **one `MeterRead` row per active register per read event**, all sharing one `read_event_id`, one `read_datetime`, and one reader, but distinct `register_id`, `uom_id`, and consumption values. Single-register meters keep writing a single row with `read_event_id = NULL` — no backfill. See `docs/specs/08-meter-reading.md` for the full data-model, API, UI, import, and billing rules.
+
+**One original read per instant** (`meter_read_one_original_per_instant`, migration `20261127100000`): a partial unique index on `(utility_id, service_agreement_id, meter_id, register_id, peak_code, read_datetime) NULLS NOT DISTINCT WHERE corrects_read_id IS NULL`. It is the database's refusal of the same read posted twice, behind the read-route entry service's own guards (spec 30). Each column is there for a reason the migration spells out: `read_datetime` because TimescaleDB requires the partition column in any unique index — so this says "this exact read, once", **not** "one read per day"; `service_agreement_id` because a transfer writes a FINAL and an opening read for one meter at one instant; `register_id` for multi-register events; `peak_code` for the interval rollup's buckets. `NULLS NOT DISTINCT` because register and peak code are NULL on most reads and would otherwise constrain nothing; corrections are excluded because they carry the original's instant by design. SQL-only — Prisma cannot express it. A refusal surfaces as a 409 `UNIQUE_CONSTRAINT` over HTTP and as a `READ_ALREADY_POSTED` row error in an import.
+
+### 4.16a ReadRoute
+
+An ordered walk of **premises** a reader visits, tied to one billing cycle (spec 30, added 2026-11-17). Itinerary only: the reads that come back are `MeterRead` rows carrying `route_id`, and a sheet is never stored — it is rebuilt from the stops on demand.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope |
+| code | VARCHAR(50) | Unique per utility (`read_route_utility_id_code_key`) |
+| name | VARCHAR(255) | |
+| billing_cycle_id | UUID | FK → BillingCycle, composite `(utility_id, billing_cycle_id)`, `ON DELETE RESTRICT`. The cycle decides the reading window a sheet and its progress are judged against |
+| origin | VARCHAR(20) | `LOCAL \| EXTERNAL`, by CHECK. LOCAL: the itinerary is maintained here — stops, the printed sheet, keyed entry. EXTERNAL: a vendor owns it; its reads arrive by import naming the route code, and stops, sheet and entry are refused (`ROUTE_IS_EXTERNAL`). Not editable by PATCH — reassigning who owns the walk is its own operation |
+| active | BOOLEAN | No DELETE for a route, because its reads point at it; retiring is `active = false` |
+| created_at / updated_at | TIMESTAMPTZ | |
+
+**Entry batches are `ImportBatch` rows**, not a table of their own: one file-less batch per (route, read date) with `mapping.kind = 'read-route-entry'`, one `ImportRow` per readable register in walking order, posted through the same `processBatch` path a file takes. The row statuses carry the entry lifecycle: `PENDING` (staged), `IMPORTED`, `SKIPPED` (with `errorCode NOT_ENTERED` for an untouched row), `ERROR` (refused; reopen returns these to `PENDING`). Two per-row codes are entry-only: `AWAITING_OTHER_REGISTER` (transient, a coded register parked while its meter's reading posts) and `OTHER_REGISTER_REFUSED` (that reading was refused, so the coded row is correctable rather than skipped). The zombie sweep reclaims a stuck entry batch to `PENDING` but never re-enqueues it.
+
+### 4.16b ReadRouteStop
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope |
+| read_route_id | UUID | FK → ReadRoute, composite, `ON DELETE CASCADE` |
+| premise_id | UUID | FK → Premise, composite, `ON DELETE RESTRICT`. **Unique per tenant** (`read_route_stop_one_route_per_premise_key`): a premise is a stop on at most one route, because a reader visits an address once |
+| sequence | INTEGER | Walking order; unique per route, assigned in steps of 100 so a stop can be inserted between two others. The unique is **`DEFERRABLE INITIALLY IMMEDIATE`** so a resequence can shift a block in one statement — Prisma cannot express that, another reason never to run `migrate dev` |
+| created_at | TIMESTAMPTZ | |
+
+A sheet prints **one line per active register** of each readable meter at each stop (an AMI meter prints none; a stop with nothing to read is listed separately rather than silently dropped). A stop whose account bills on a different cycle still prints — the route page lists it as a data-quality case.
+
+### 4.16c ReadSkip
+
+The absence of a read — a locked gate, a dog — which `MeterRead` cannot represent, since `consumption` is NOT NULL and a zero bills zero now and double next month.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope |
+| meter_id | UUID | FK → Meter, composite, `ON DELETE CASCADE` |
+| read_route_id | UUID | Nullable FK → ReadRoute, composite, `ON DELETE SET NULL (read_route_id)` — the column-list form, so the delete nulls the route and not the tenant |
+| read_date | DATE | |
+| skip_reason | VARCHAR(50) | CHECK: `LOCKED_GATE`, `DOG`, `BURIED`, `UNREADABLE`, `OBSTRUCTED`, `APPEARS_VACANT`, `NO_METER_FOUND` |
+| notes | TEXT | |
+| reader_id | UUID | |
+| resolved_at | TIMESTAMPTZ | Set when a read later arrives for the window; a resolved skip stays as history |
+| created_at | TIMESTAMPTZ | |
+
+**One open skip per meter per day**, by partial unique index `read_skip_one_open_per_meter_day` on `(utility_id, meter_id, read_date) WHERE resolved_at IS NULL` — SQL-only. `recordSkips` refuses a meter that already has a read in the window (`METER_ALREADY_READ`). A meter is skipped only if **no** register of it posted a reading; a coded register beside a posted one keeps its reason on the import row and writes no skip. `notes`, `reader_id` and `read_route_id` are written but not yet read by anything (only the progress view reads skips, for `meter_id` and `skip_reason`).
+
+All three tables are FORCEd under the standard `tenant_isolation` policy, and every key between them and other tenant tables is composite `(utility_id, …)`, like the other 64.
 
 ### 4.17 AuditLog
 
@@ -715,6 +769,7 @@ Per-tenant configuration flags. One row per utility, created lazily the first ti
 | id | UUID | PK |
 | utility_id | UUID | Unique — one config per tenant |
 | require_hold_approval | BOOLEAN | Default false. Gates ServiceSuspension activation on the APPROVE permission. See spec 12. |
+| transfer_carries_rate_schedule | BOOLEAN | **Default true.** Whether a transfer of service copies the source agreement's in-force `SAScheduleAssignment` rows onto the new agreement (§5.5). A column, not a `settings` key, because every utility has an answer. Added 2026-11-18. |
 | settings | JSONB | Extensible bucket for tenant flags. Currently carries `numberFormats.{agreement,account}` — see §5.3 "Identifier generation." |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
@@ -836,7 +891,7 @@ Reference table for service-hold type codes. Replaces the former `SuspensionType
 
 ### 4.23 Utility
 
-The tenant itself, as a row (2026-10-18). `utility_id` on all 61 tables that carry one is a foreign key to this, `ON DELETE RESTRICT` — so a write naming a tenant that does not exist is refused by the database rather than silently opening an empty partition. Seven tables' `utility_id` is nullable, for the global reference rows that belong to no tenant (§1.3 of the tenancy note), plus `cis_user`, where a null means the platform actor.
+The tenant itself, as a row (2026-10-18). `utility_id` on all 82 tables that carry one (counted 2026-11-27; it said 61 until then, which had gone stale long before) is a foreign key to this, `ON DELETE RESTRICT` — so a write naming a tenant that does not exist is refused by the database rather than silently opening an empty partition. Seven tables' `utility_id` is nullable, for the global reference rows that belong to no tenant (§1.3 of the tenancy note), plus `cis_user`, where a null means the platform actor.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -857,12 +912,39 @@ Zod validators guard the API boundary, but any backstop invariants that absolute
 | Constraint category | Examples |
 |---|---|
 | Non-negative / positive numerics | `account.deposit_amount >= 0`, `uom.conversion_factor > 0`, `meter.multiplier > 0`, `meter.dial_count > 0`, `commodity.display_order >= 0`, `rate_schedule.version >= 1` |
-| Date ordering | `rate_schedule.expiration_date > effective_date`, `service_agreement.end_date >= start_date`, `meter.removal_date >= install_date`, `service_agreement_meter.removed_date >= added_date` |
+| Date ordering | `rate_schedule.expiration_date > effective_date`, `service_agreement.end_date >= start_date`, `meter.removal_date >= install_date`, `service_point_meter.removed_date >= added_date` (`chk_spm_removed_ge_added`), `service_point.end_date >= start_date` (`chk_sp_end_ge_start`) |
 | Day-of-month bounds | `billing_cycle.read_day_of_month BETWEEN 1 AND 31`, same for `bill_day_of_month` (Zod tightens further to 1–28 at the API boundary; CHECK is the calendar floor) |
 | Format checks | `customer.email` / `contact.email` / `cis_user.email` match a basic email regex; `account.language_pref` matches `^[a-z]{2}-[A-Z]{2}$` |
 | Non-empty identifiers | `account.account_number`, `meter.meter_number`, `service_agreement.agreement_number`, `commodity.code`, `uom.code`, `billing_cycle.cycle_code`, `rate_schedule.code` |
 
 The design principle is **defense in depth**: Zod returns nice errors at the API boundary, Prisma constrains the schema at application build time, and CHECK constraints are the storage-layer backstop. A bug in any single layer cannot produce data that violates the other layers' assumptions.
+
+**Two invariants span two tables each, so they are triggers rather than constraints** — a CHECK sees one row and an exclusion constraint sees one table:
+
+| Trigger | Rule |
+|---|---|
+| `before_sa_lifecycle_invariants` on `service_agreement` | a terminal status must carry an `end_date`, and an `end_date` may not be set on a still-live agreement without moving the status with it |
+| `before_one_live_service_per_premise` on `service_point` (2026-11-18) | two `PENDING`/`ACTIVE` agreements may not both serve one premise for one commodity over overlapping days. The key spans both tables — `premise_id` is on the point, `commodity_id` on the agreement — which is why no exclusion constraint can express it. It replaces `no_overlapping_active_sa`, which spec 05 and `schema.prisma` both described and the database did not contain; see spec 05. **Takes `pg_advisory_xact_lock` on (tenant, premise, commodity) before its check** (`20261127090000`): without it two concurrent openings at one address each missed the other's uncommitted point under READ COMMITTED and both committed. **Lets through an UPDATE that keeps or narrows the row's own dates** at the same premise and agreement (`20261127110000`), so overlaps that predate the trigger can still be edited and ended |
+
+**Date-order CHECKs** (`chk_sa_end_ge_start`, `chk_sp_end_ge_start`, `chk_spm_removed_ge_added`) write no sentence of their own, so `middleware/error-handler.ts` maps each by name to a **400 `DATE_ORDER_VIOLATION`** with one (`DATE_ORDER_CHECKS`). A new CHECK a form can trip belongs in that map.
+
+**Both raise `check_violation` with a marker, and that choice is load-bearing.** Prisma recognises `unique_violation` (23505) and replaces the message with its own "Unique constraint failed", so the sentence naming the conflict never reaches the caller; 23514 passes through. `middleware/error-handler.ts` matches the marker and answers **409** with the trigger's own words — without that branch these fall to the generic arms and arrive as a 400 "Database error" or a 500, which is a refusal with a reason reported as a fault with none. A trigger added by a later migration must be added to `DATABASE_INVARIANTS` there, or its reason goes nowhere.
+
+**A trigger also applies over data that already violates it**, which a constraint cannot: it judges writes, not rows. That is what let the premise rule ship while three pre-existing live electric agreements sat at one address in the dev database (since fixed in `seed/tou-service.js`, which was creating them).
+
+**A migration file records intent; `pg_constraint` records state — and the 2026-10-18 squash dropped the difference.** Collapsing 54 migrations into three lost `no_overlapping_active_sa` entirely and `chk_sam_removed_ge_added` along with it, while keeping the generated column the first was built on. Nothing noticed for seven months, because this section and spec 05 both kept asserting the guarantee and the only test of it had been parked pending a rewrite. The audit is one command and should be re-run after any future squash:
+
+```bash
+# declared by the migrations
+grep -rhoE 'CONSTRAINT "?[a-z_]+"? CHECK' packages/shared/prisma/migrations/*/migration.sql \
+  | sed 's/CONSTRAINT "\?//; s/"\? CHECK//' | sort -u > /tmp/declared.txt
+# actually in the database
+psql -t -A -c "SELECT conname FROM pg_constraint WHERE contype='c' AND connamespace='public'::regnamespace ORDER BY conname" \
+  | sort -u > /tmp/live.txt
+comm -23 /tmp/declared.txt /tmp/live.txt   # declared but absent — should be empty
+```
+
+It came back empty on 2026-11-18 for all 52 declared CHECKs, which is what established that the loss was in the source rather than in the database — so no reseed would have restored them. Run the same comparison for `contype='x'` (exclusion constraints) and `pg_trigger`. Write each `ADD CONSTRAINT … CHECK` on **one line**, as `database_features` and `20261118120000` do, or the grep above cannot see it.
 
 ---
 
@@ -971,7 +1053,21 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | PATCH | `/api/v1/meter-reads/:id` | Meter Reads (creates CORRECTED row, preserves original) |
 | DELETE | `/api/v1/meter-reads/:id` | Meter Reads (guarded against frozen + corrected-by state) |
 | POST | `/api/v1/meter-reads/:id/resolve-exception` | Meter Reads |
-| GET | `/api/v1/meter-reads/progress` | Meter Reads (how much of a cycle is still unread, over the window a run would bill; spec 08) |
+| GET | `/api/v1/meter-reads/progress` | Meter Reads (how much of a cycle is still unread; spec 08). `window=billing` (default) is the window a run would bill, `window=reading` the one containing `asOf`; `readRouteId` narrows it to one route's stops, which must be on that cycle. Rows carry `routeCode` and `skipReason` |
+| GET | `/api/v1/read-routes` | Read Routes (list, with cycle code and stop count; VIEW) |
+| POST | `/api/v1/read-routes` | Read Routes (create; EDIT — route maintenance is EDIT, entry is CREATE) |
+| GET | `/api/v1/read-routes/:id` | Read Routes |
+| PATCH | `/api/v1/read-routes/:id` | Read Routes (rename, retire via `active`; `origin` not accepted). Called by the route page's rename and retire controls |
+| GET | `/api/v1/read-routes/:id/stops` | Read Routes (stops in walking order, with address and the cycles billed there) |
+| POST | `/api/v1/read-routes/:id/stops` | Read Routes (add a stop; refuses a premise already on any route) |
+| DELETE | `/api/v1/read-routes/:id/stops/:stopId` | Read Routes |
+| GET | `/api/v1/read-routes/:id/unsequenced` | Read Routes (the tray: premises on no route at all) |
+| GET | `/api/v1/read-routes/:id/sheet` | Read Routes (`onDate`; PDF, or `format=json` for the data including stops with nothing to read). Not persisted |
+| POST | `/api/v1/read-routes/:id/entry` | Read Routes (open keyed entry for `readDate`; idempotent per route and day, 201 either way; CREATE. 400 `READ_DATE_IN_FUTURE` past today, with a day's slack for tenants east of UTC) |
+| PATCH | `/api/v1/read-routes/:id/entry/:batchId/rows` | Read Routes (stage a row: a reading, a skip code, or neither to clear it. Locks the batch row, so it cannot race Post. 404 if the batch is not `:id`'s) |
+| POST | `/api/v1/read-routes/:id/entry/:batchId/submit` | Read Routes (post the sheet: skips first, then readings through `processBatch`; a second call reports the stored result. 404 if the batch is not `:id`'s) |
+| POST | `/api/v1/read-routes/:id/entry/reopen` | Read Routes (`readDate`; returns refused rows and rows left with nothing entered to PENDING. 409 `ENTRY_NOTHING_TO_CORRECT` when there are neither, `ENTRY_NOT_FINISHED` while a submit is running) |
+| GET | `/api/v1/read-routes/:id/progress` | Read Routes (the route's own cycle; `window=reading` by default here) |
 | GET | `/api/v1/meter-data-exceptions` | Meter Reads (interval-coverage queue — days an interval meter's data does not cover; spec 26) |
 | POST | `/api/v1/meter-data-exceptions/:id/accept` | Meter Reads (bill the month as it stands; audited, and the pre-run check stops blocking those minutes) |
 | POST | `/api/v1/meter-data-exceptions/:id/reopen` | Meter Reads (withdraw an acceptance) |
@@ -992,7 +1088,7 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | GET | `/api/v1/service-agreements/:agreementId/suspensions` | Service Suspensions |
 | GET | `/api/v1/suspension-types` | Suspension type reference table (global + per-tenant codes) |
 | POST/PATCH | `/api/v1/suspension-types[/:id]` | Suspension type admin (settings:EDIT) |
-| GET/PATCH | `/api/v1/tenant-config` | Tenant-level config (`requireHoldApproval`, `numberFormats.{agreement,account}`, etc.; settings:EDIT for PATCH) |
+| GET/PATCH | `/api/v1/tenant-config` | Tenant-level config (`requireHoldApproval`, `transferCarriesRateSchedule`, `numberFormats.{agreement,account}`, etc.; settings:EDIT for PATCH) |
 | GET | `/api/v1/service-events` | RAMS Events |
 | GET/POST | `/api/v1/service-events[/:id]` | RAMS Events |
 | POST | `/api/v1/service-events/:id/resolve` | RAMS Events |
@@ -1100,7 +1196,13 @@ Two of those queues carry a **progress row**, not just a job: `import_batch` / `
 
 Phase 2 adds three multi-entity operations that don't fit any single CRUD shape and therefore have their own endpoints. Each wraps its work in a single PostgreSQL transaction so partial state is impossible — every row lands or none do — and each emits a dedicated audit event (`workflow.transfer_service`, `workflow.move_in`, `workflow.move_out`) so the audit log shows the logical operation rather than a fan-out of per-entity updates.
 
-**Transfer of service** (`POST /api/v1/service-agreements/:id/transfer`): reassigns an active service agreement from the source account to a target account as of the transfer date. Flow inside the transaction: optionally record a FINAL meter read on the source's primary meter → mark the source agreement `status=FINAL` with `end_date=transferDate` → create a new agreement on the target account cloning `premise/commodity/rateSchedule/billingCycle/readSequence` with `start_date=transferDate` → copy over the active meter assignments → optionally record an ACTUAL read on the new side. The source account must be different from the target and the source agreement must not already be closed.
+**Transfer of service** (`POST /api/v1/service-agreements/:id/transfer`): reassigns a live service agreement to a target account as of the transfer date. Flow inside the transaction: optionally record a FINAL meter read on the source's most recently added open meter → close the source through `closeServiceAgreement`, which sets `status=FINAL`, `end_date=transferDate` and `removed_date` on every still-open meter assignment → create a new agreement on the target account carrying the source's `commodity_id`, with `start_date=transferDate` and `status=ACTIVE` → **mirror every open service point onto it**, each at its own premise with its own open meters → **carry the rate-schedule assignments in force on the transfer date**, if the tenant's `UtilityConfig.transfer_carries_rate_schedule` says to (default true) → optionally record an ACTUAL read on the new side. Refused when the source is already FINAL or CLOSED (`AGREEMENT_NOT_TRANSFERABLE`), when the target account already holds the agreement (`TRANSFER_TO_SAME_ACCOUNT`), when a single reading was supplied for an agreement with more than one open meter (`TRANSFER_READING_AMBIGUOUS` — the number names no meter), when the target account is not ACTIVE (`TARGET_ACCOUNT_INACTIVE`), or when the source has no open service point (`SOURCE_AGREEMENT_NO_PREMISE`).
+
+**What is not carried**, and why each is absent rather than forgotten: the premise was never an agreement field — it arrives on the mirrored service points; `billing_cycle_id` left the SA in Slice 5b.1, so the target account's cycle applies by inheritance; and `read_sequence` went with spec 30. The operator's `reason` *is* now carried, into both the closure reason and the audit row — the wizard had offered the field since it shipped and the workflow read it nowhere.
+
+Three things about this workflow changed on 2026-11-18 and are worth knowing together. The **mirror replaced a flatten** that created one point at the first premise and hung every point's meters on it, which was unreachable (nothing creates a second point) but wrong rather than unsupported. The **same-account guard** was added because the wizard had refused it client-side since it shipped, making the rule real for anyone using the screen and no one using the API. And the **tariff now follows the service** by default, which it never did before: previously only the service-agreement import (from a `rate_schedule_code` column) and the dedicated assignment endpoint ever wrote `sa_rate_schedule_assignment`, so every transferred service was unrated until somebody noticed. `POST /api/v1/service-agreements` and move-in still write none — spec 05's open items carry that decision. A billing run names such agreements in a `NO_ACTIVE_ASSIGNMENTS` run blocker before it starts, with an account count and sample accounts.
+
+None of this makes **multi-premise agreements supported**: the rate engine still rates a whole agreement at `servicePoints[0]`'s premise, `bill-segment.service.ts` pools every point's meters into one segment, and two screens show the first point's premise. Transfer has stopped corrupting such an agreement; nothing else has learned about it. The blocker for a *split* — moving one premise out and leaving the agreement open for the rest — is that `SAScheduleAssignment` is keyed on the agreement, so there is no per-premise tariff to divide.
 
 **Move-in** (`POST /api/v1/workflows/move-in`): coordinated setup of a new customer (or reference to existing) + account + one-or-more service agreements + optional initial meter reads at a premise. The request body's `existingCustomerId` and `newCustomer` are mutually exclusive — exactly one must be present, enforced by the Zod schema's refine rule. All rows land in a single transaction keyed on `move_in_date`.
 

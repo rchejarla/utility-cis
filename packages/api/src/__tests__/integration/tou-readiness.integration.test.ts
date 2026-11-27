@@ -199,11 +199,33 @@ async function makeScene(opts: {
       },
     });
 
+    /*
+     * A scene built on a shared fixture gets its own premise: the first
+     * scene's agreement already serves `fix.premiseId` for this commodity,
+     * and a second live one there is what `one_live_service_per_premise`
+     * refuses.
+     */
+    const premiseId = opts.fix
+      ? (
+          await prisma.premise.create({
+            data: {
+              utilityId: TENANT_A,
+              addressLine1: `${Math.random().toString(36).slice(2, 6)} Scene Street`,
+              city: "Testville",
+              state: "TS",
+              zip: "00000",
+              premiseType: "RESIDENTIAL",
+              commodityIds: [fix.commodityId],
+              status: "ACTIVE",
+            },
+          })
+        ).id
+      : fix.premiseId;
     const sp = await prisma.servicePoint.create({
       data: {
         utilityId: TENANT_A,
         serviceAgreementId: sa.id,
-        premiseId: fix.premiseId,
+        premiseId,
         type: "METERED",
         startDate: new Date("2026-01-01"),
       },

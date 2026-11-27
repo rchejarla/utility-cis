@@ -37,6 +37,8 @@ function progress(over: Record<string, unknown> = {}) {
         accountNumber: "0001009-00",
         premise: "9 Evergreen Terrace, Springfield",
         lastReadDate: "2025-11-08T00:00:00.000Z",
+        routeCode: "W-04",
+        skipReason: "LOCKED_GATE",
       },
     ],
     meta: { total: 1, page: 1, limit: 50, pages: 1 },
@@ -51,9 +53,12 @@ const CYCLES = {
   ],
 };
 
+const ROUTES = { data: [{ id: "rt-4", code: "W-04", name: "North Willson" }] };
+
 function answers(body: Record<string, unknown>) {
   get.mockImplementation(async (url: string) => {
     if (url.startsWith("/api/v1/billing-cycles")) return CYCLES;
+    if (url.startsWith("/api/v1/read-routes")) return ROUTES;
     return body;
   });
 }
@@ -144,6 +149,40 @@ describe("reading progress", () => {
 
     await waitFor(() =>
       expect(get).toHaveBeenCalledWith(expect.stringContaining("billingCycleId=c-2")),
+    );
+  });
+
+  /*
+   * Spec 30 §5.9: the API has carried the route and the open skip on each
+   * row, and taken `readRouteId`, since the route work — and this screen
+   * used none of it, so "which of these is behind a locked gate" and
+   * "what is left on W-04" were not answerable here.
+   */
+  it("shows each outstanding row's route and why it was not read", async () => {
+    answers(progress());
+    renderPage();
+
+    await screen.findByText("WM-009");
+    // The route code appears in the filter's option too, so it is asked
+    // of the table alone.
+    expect(screen.getByRole("cell", { name: "W-04" })).toBeInTheDocument();
+    expect(screen.getByTestId("skip-reason")).toHaveTextContent("locked gate");
+  });
+
+  it("offers the cycle's routes and narrows the answer to one", async () => {
+    answers(progress());
+    renderPage();
+    await screen.findByText("WM-009");
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith("/api/v1/read-routes", { billingCycleId: "c-1", limit: "100" }),
+    );
+    await userEvent.selectOptions(await screen.findByLabelText(/^route$/i), "rt-4");
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith(
+        expect.stringContaining("billingCycleId=c-1&limit=100&readRouteId=rt-4"),
+      ),
     );
   });
 });

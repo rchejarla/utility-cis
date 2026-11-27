@@ -7,6 +7,8 @@ import {
 } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
+import { upsertExternalRoute } from "../../services/read-route.service.js";
+import { resolveSkipsForRead } from "../../services/read-skip.service.js";
 import {
   computeConsumption,
   resolveServiceAgreementId,
@@ -45,6 +47,16 @@ interface MeterReadRow {
   reading: number;
   readType?: ReadType;
   readSource?: ReadSource;
+  /** The reading system's route or book code. Absent when the file has none. */
+  routeCode?: string;
+  /**
+   * **Not a canonical field, on purpose** (so a file's column mapping can
+   * never produce it): only route entry's staging writes these two keys.
+   * `routeId` names a LOCAL route the read came off, which `routeCode`
+   * refuses by design; `registerId` names the register the number is of.
+   */
+  routeId?: string;
+  registerId?: string;
 }
 
 interface BatchData {
@@ -52,6 +64,15 @@ interface BatchData {
     string,
     { id: string; meterNumber: string; status: string; uomId: string }
   >;
+  /**
+   * Routes the file names, by code. Loaded once per batch for the codes
+   * that already exist, and never written to afterwards: a route created
+   * inside a row's transaction vanishes if that row rolls back, so caching
+   * it here would hand a later row a dead id. Repeat rows of a new code
+   * rely on `upsertExternalRoute` being idempotent instead.
+   * `origin` is what lets a vendor file be refused a route we maintain.
+   */
+  routeByCode: Map<string, { id: string; origin: string }>;
   /** Default readSource derived from the batch's source enum. */
   defaultReadSource: "MANUAL" | "AMR" | "AMI" | "SYSTEM";
 }
@@ -112,6 +133,15 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       example: "MANUAL",
       aliases: ["^readsource$", "^source$", "^channel$"],
     },
+    {
+      name: "routeCode",
+      label: "Route code",
+      required: false,
+      description:
+        "The reading system's route or book code the read was collected on. A code not yet known is added as an external route.",
+      example: "W-04",
+      aliases: ["^route$", "^routecode$", "^book$", "^routeid$"],
+    },
   ],
 
   templateRows: [
@@ -128,6 +158,7 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       reading: "8901.23",
       readType: "ACTUAL",
       readSource: "AMR",
+      routeCode: "W-04",
     },
   ],
 
@@ -196,6 +227,10 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       };
     }
 
+    const routeCode = (raw.routeCode ?? "").trim() || undefined;
+    const routeId = (raw.routeId ?? "").trim() || undefined;
+    const registerId = (raw.registerId ?? "").trim() || undefined;
+
     return {
       ok: true,
       row: {
@@ -204,6 +239,9 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
         reading,
         readType,
         readSource,
+        routeCode,
+        routeId,
+        registerId,
       },
     };
   },
@@ -217,8 +255,21 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
     const meterByNumber = new Map(
       meters.map((m) => [m.meterNumber, m] as const),
     );
+    const routeCodes = [
+      ...new Set(rows.map((r) => r.routeCode).filter((c): c is string => !!c)),
+    ];
+    const routes = routeCodes.length
+      ? await prisma.readRoute.findMany({
+          where: { utilityId: ctx.utilityId, code: { in: routeCodes } },
+          select: { id: true, code: true, origin: true },
+        })
+      : [];
+    const routeByCode = new Map(
+      routes.map((r) => [r.code, { id: r.id, origin: r.origin }] as const),
+    );
     return {
       meterByNumber,
+      routeByCode,
       defaultReadSource: meterReadDefaultSource(ctx.source),
     };
   },
@@ -240,6 +291,33 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       };
     }
 
+    // An id, unlike a code, is only ever written by route entry's staging —
+    // `validateMapping` rejects a mapping value that is not a canonical
+    // field, so no file can name it. The lookup below checks that the route
+    // exists on this tenant and nothing else: an id is trusted to name any
+    // route, LOCAL included, which is the one door a read gets onto one.
+    let entryRouteId: string | null = null;
+    if (row.routeId) {
+      const route = await ctx.tx.readRoute.findFirst({
+        where: { id: row.routeId, utilityId: ctx.utilityId },
+        select: { id: true },
+      });
+      if (!route) {
+        return { ok: false, code: "ROUTE_NOT_FOUND", message: `Read route ${row.routeId} not found` };
+      }
+      entryRouteId = route.id;
+    }
+
+    // A code we maintain ourselves is refused before any other work.
+    const knownRoute = !entryRouteId && row.routeCode ? batchData.routeByCode.get(row.routeCode) : undefined;
+    if (knownRoute?.origin === "LOCAL") {
+      return {
+        ok: false,
+        code: "ROUTE_IS_LOCAL",
+        message: `Route "${row.routeCode}" is maintained locally — an import cannot write reads onto it`,
+      };
+    }
+
     const readDatetime = new Date(row.readDatetime);
     const readDate = new Date(readDatetime.toISOString().slice(0, 10));
 
@@ -256,31 +334,105 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       return { ok: false, code: "METER_NOT_ASSIGNED", message };
     }
 
+    let routeId: string | null = entryRouteId ?? knownRoute?.id ?? null;
+    if (!entryRouteId && row.routeCode && !knownRoute) {
+      // A code nobody has seen: it becomes an EXTERNAL route on the cycle
+      // of this row's own account.
+      // Cannot miss: `serviceAgreementId` was resolved for this same tenant
+      // moments ago, so no typed error is needed for this lookup.
+      const agreement = await ctx.tx.serviceAgreement.findFirstOrThrow({
+        where: { id: serviceAgreementId, utilityId: ctx.utilityId },
+        select: { account: { select: { billingCycleId: true } } },
+      });
+      try {
+        routeId = await upsertExternalRoute(
+          ctx.tx,
+          ctx.utilityId,
+          row.routeCode,
+          agreement.account.billingCycleId,
+        );
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code === "ROUTE_IS_LOCAL" || code === "CYCLE_NOT_FOUND") {
+          return {
+            ok: false,
+            code,
+            message: err instanceof Error ? err.message : `Route "${row.routeCode}" refused`,
+          };
+        }
+        throw err;
+      }
+    }
+
+    let uomId = meter.uomId;
+    let peakCode: string | null = null;
+    if (row.registerId) {
+      const register = await ctx.tx.meterRegister.findFirst({
+        where: { id: row.registerId, utilityId: ctx.utilityId, meterId: meter.id, isActive: true },
+        select: { uomId: true, peakCode: true },
+      });
+      if (!register) {
+        return {
+          ok: false,
+          code: "REGISTER_NOT_FOUND",
+          message: `Register ${row.registerId} is not an active register of meter "${row.meterNumber}"`,
+        };
+      }
+      uomId = register.uomId;
+      peakCode = register.peakCode;
+    }
+
     const { priorReading, consumption, exceptionCode } = await computeConsumption(
       ctx.utilityId,
       meter.id,
-      null,
+      row.registerId ?? null,
       row.reading,
       readDatetime,
     );
 
-    const created = await ctx.tx.meterRead.create({
-      data: {
-        utilityId: ctx.utilityId,
-        meterId: meter.id,
-        serviceAgreementId,
-        uomId: meter.uomId,
-        readDate,
-        readDatetime,
-        reading: row.reading,
-        priorReading,
-        consumption,
-        readType: row.readType ?? "ACTUAL",
-        readSource: row.readSource ?? batchData.defaultReadSource,
-        exceptionCode: exceptionCode ?? null,
-        readerId: ctx.actorId,
-      },
-    });
+    let created;
+    try {
+      created = await ctx.tx.meterRead.create({
+        data: {
+          utilityId: ctx.utilityId,
+          meterId: meter.id,
+          serviceAgreementId,
+          routeId,
+          registerId: row.registerId ?? null,
+          uomId,
+          peakCode,
+          readDate,
+          readDatetime,
+          reading: row.reading,
+          priorReading,
+          consumption,
+          readType: row.readType ?? "ACTUAL",
+          readSource: row.readSource ?? batchData.defaultReadSource,
+          exceptionCode: exceptionCode ?? null,
+          readerId: ctx.actorId,
+        },
+      });
+    } catch (err: unknown) {
+      /*
+       * `meter_read_one_original_per_instant`: this exact read — same
+       * agreement, meter, register, peak code and instant — is already
+       * posted. Named here rather than left to the batch's catch-all,
+       * which would file it as UNHANDLED with Prisma's own sentence: a
+       * re-posted file is an operator's question, not a fault. The only
+       * unique on `meter_read` besides the primary key, so a P2002 here
+       * is this one. Returned at once — the transaction is aborted.
+       */
+      if (err && typeof err === "object" && (err as { code?: string }).code === "P2002") {
+        return {
+          ok: false,
+          code: "READ_ALREADY_POSTED",
+          message: `Meter "${row.meterNumber}" already has this read posted at ${readDatetime.toISOString()}`,
+        };
+      }
+      throw err;
+    }
+
+    await resolveSkipsForRead(ctx.tx, ctx.utilityId, meter.id, readDate);
 
     await writeAuditRow(
       ctx.tx,
