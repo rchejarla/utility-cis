@@ -1,8 +1,32 @@
 # 26 — Time-of-Use Rates
 
-**Status:** proposed, 2026-10-29 (revised the same day: time zone and
+**Status (corrected 2026-11-27):** **slices 1 and 2 built**
+(2026-11-02 → 11-07), slice 3 partly, slice 4 not. This line said
+"proposed … nothing in this spec is built" until 2026-11-27, long after
+the sections below had been marked built one by one — and CLAUDE.md's
+spec index copied it, which is how the work came to be described as
+unstarted.
+
+- **Built:** configurable seasons; TOU calendars, holiday sets and tenant
+  peak codes, with their editors (§§1–2, §5); TOU registers and the
+  engine's per-period pricing, with golden tests against published
+  tariffs (§3a, §4); the interval store, import, roll-up into buckets,
+  tiling and coverage, the coverage sweep and the missing-data queue
+  (§§3b–3c); the TOU pre-run check in the billing run's preview
+  (TOU-BIL-1).
+- **Not built:** bill and portal presentation and the shadow bill
+  (TOU-BIL-2 – 4, slice 3); modeling (TOU-MOD-*, slice 4, overlapping
+  spec 29); the TOU-INT-8 volume measurement; and the follow-ups marked
+  in place — the register-mapping importer (§3a), the zoneless-file
+  warning (§3b), predicting interval gaps at preview (TOU-INT-4a),
+  estimation (TOU-GAP-2, half-built), and the rebill path frozen
+  intervals need (TOU-INT-7).
+- **Outside this spec:** demand charges, which commercial electric needs
+  and which have no spec yet (see *What electric still needs*).
+
+*Originally proposed 2026-10-29 (revised the same day: time zone and
 clock basis per calendar, interval timestamp basis, where the calendar
-attaches). Nothing in this spec is built.
+attaches).*
 
 **Audience:** whoever builds TOU into the rate engine, meter reading and
 billing. Read [07b — Rate Model v2](07b-rate-model-v2-design.md) first;
