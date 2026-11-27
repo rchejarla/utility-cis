@@ -121,6 +121,17 @@ async function main() {
   if (p.serviceRequestCounter) await p.serviceRequestCounter.deleteMany({});
   if (p.sla) await p.sla.deleteMany({});
   await p.meterRead.deleteMany({});
+  // Read routes (spec 30). The seed creates none, but
+  // `packages/api/scripts/seed-read-route-scenarios.ts` does, and a stop
+  // holds its premise and a route its billing cycle under RESTRICT — so
+  // once that script had run, this file could not delete a premise and no
+  // reseed got past the cleanup. Same family as bill_document and
+  // billing_run above: rows the seed never writes and so never cleared.
+  // After the reads, which point at the route; skips before routes, which
+  // they point at.
+  if (p.readSkip) await p.readSkip.deleteMany({});
+  if (p.readRouteStop) await p.readRouteStop.deleteMany({});
+  if (p.readRoute) await p.readRoute.deleteMany({});
   if (p.attachment) await p.attachment.deleteMany({});
 
   // AR ledger + bills. Four RESTRICT parents, so this block has to precede
