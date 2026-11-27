@@ -17,8 +17,9 @@ import { computeBillPeriod } from "../bill.service.js";
  * at the window's *end*. So a service that stopped on the 20th of a
  * window ending on the 30th was put in the run by one and found not to
  * exist by the other: the account came back `SKIPPED` with
- * `NO_ACTIVE_ASSIGNMENTS`, a code `classify` files as noise an operator
- * scrolls past, and the days between the last bill and the final read
+ * `NO_ACTIVE_ASSIGNMENTS` (now `NO_AGREEMENT_IN_WINDOW`), a code
+ * `classify` files as noise an operator scrolls past, and the days
+ * between the last bill and the final read
  * were billed by nothing — not by that run, not by the next one, which
  * excludes the agreement under either filter.
  *

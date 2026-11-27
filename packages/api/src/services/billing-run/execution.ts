@@ -28,12 +28,24 @@ function classify(err: unknown): { status: "SKIPPED" | "FAILED"; code: string; m
    * queue. Getting it wrong in either direction makes the list useless —
    * a skipped account in the failures wastes attention, and a failure
    * among the skips is never looked at.
+   *
+   * **`NO_ACTIVE_ASSIGNMENTS` is a failure, and it was a skip until
+   * 2026-11-27.** It is the rating engine saying a live agreement has no
+   * rate schedule over its period — a service taken and not billed, which
+   * is exactly "should have billed and could not". It sat in this set
+   * because the account-level "no agreement in the window" below raised
+   * the same code, and that one *is* nothing to bill. Sharing a code put
+   * the unrated agreement in the noise: the planner names and blocks it,
+   * and one that slipped past planning (an assignment expiring, or a
+   * read-to-read period reaching outside it) was then reported quietly.
+   * The account-level case now has its own code,
+   * `NO_AGREEMENT_IN_WINDOW`, and stays a skip.
    */
   const skip = new Set([
     "NO_READ_IN_WINDOW",
     "NO_SEGMENTS_TO_BILL",
     "BILL_ALREADY_EXISTS_FOR_PERIOD",
-    "NO_ACTIVE_ASSIGNMENTS",
+    "NO_AGREEMENT_IN_WINDOW",
   ]);
   return { status: skip.has(code) ? "SKIPPED" : "FAILED", code, message };
 }
@@ -206,9 +218,11 @@ async function billOneAccount(args: {
     orderBy: { agreementNumber: "asc" },
   });
   if (agreements.length === 0) {
+    // Its own code, not NO_ACTIVE_ASSIGNMENTS: nothing to bill here is a
+    // skip, while an agreement with no rate schedule is a failure (classify).
     throw Object.assign(new Error(`Account ${accountId} has no agreement in the window`), {
       statusCode: 400,
-      code: "NO_ACTIVE_ASSIGNMENTS",
+      code: "NO_AGREEMENT_IN_WINDOW",
     });
   }
 

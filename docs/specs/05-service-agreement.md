@@ -491,19 +491,18 @@ toggle in a real browser). Both were mutation-checked.
 
 ## Open items
 
-1. **When does a new service get its rate-schedule assignment?** Transfer now answers
-   this for itself, but `createServiceAgreement` and move-in still write none — only
-   the service-agreement import does, from its `rate_schedule_code` column. So a
-   service created through those paths is unrated until the assignment endpoint is
-   called for it. That may well be deliberate — an assignment is its own
-   effective-dated artifact, and inventing one on create would be a guess at a tariff —
-   but it should be a stated rule rather than an absence, because of where it surfaces:
-   a billing run's **planner** blocks and names these agreements
-   (`NO_ACTIVE_ASSIGNMENTS`, with an account count and sample accounts), while the
-   **executor** classifies the same code into its skip set, where
-   `billing-run/window.ts` records that filing it as noise had already let days be
-   billed by nothing once. An agreement that gets past planning and meets the condition
-   during execution is therefore reported quietly.
+1. ~~**When does a new service get its rate-schedule assignment?**~~ **Decided
+   2026-11-27.** The rule: `createServiceAgreement` and move-in **do not** assign a
+   rate schedule; the assignment endpoint (or the import's `rate_schedule_code`, or a
+   transfer's carry) does. An assignment is its own effective-dated artifact, and
+   inventing one on create would be a guess at a tariff. What made the absence
+   dangerous was where it surfaced, and that is what changed: a billing run's
+   **planner** already blocked and named unrated agreements (`NO_ACTIVE_ASSIGNMENTS`),
+   but the **executor** filed the same code as a skip — because the account-level "no
+   agreement in the window" shared it — so one that got past planning was reported
+   quietly. That case now raises its own `NO_AGREEMENT_IN_WINDOW` (still a skip), and
+   `NO_ACTIVE_ASSIGNMENTS` is a **failure** in the run's exception list. Spec 09's
+   SKIPPED/FAILED rule says the same.
 *(The two items that were here on 2026-11-18 — three live electric agreements sharing
 one premise, and two missing date-ordering CHECKs — were both fixed the same day. What
 was found is recorded under **Effective-Range Overlap Prevention** above and in the

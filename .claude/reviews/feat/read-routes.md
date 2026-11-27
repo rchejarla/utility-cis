@@ -284,9 +284,11 @@ purpose and documented. Backend e4b47bc, screens 574ed0b; API unit 1264, web
    and the rollback is written but untested, because there is no staging
    environment. That is a fact about the deployment, not something more code
    on this branch can close; it needs a decision on how this product ships.
-2. **One open product question** in `docs/specs/05-service-agreement.md`:
-   `createServiceAgreement` and move-in write no rate-schedule assignment, and
-   the billing executor files that condition quietly.
+2. ~~One open product question in spec 05~~ — **decided 2026-11-27**: not
+   assigning a rate schedule on create is the stated rule, and an unrated
+   agreement that reaches a run's executor is now a FAILED item
+   (`NO_ACTIVE_ASSIGNMENTS`), not a skip; the account-level "no agreement in
+   the window" has its own `NO_AGREEMENT_IN_WINDOW`.
 3. ~~Not run since the last changes: the full integration suite.~~ **Run
    2026-11-27 on 69bd392, one file at a time: 126/126 files, 1612 tests
    passed, 0 failed, 0 skipped** (10:22–11:11).

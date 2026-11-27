@@ -398,7 +398,12 @@ Unique on `(billing_run_id, account_id)`; indexed on
 **SKIPPED and FAILED are separate statuses because only one of them is
 work.** Skipped is "nothing to bill" — `NO_READ_IN_WINDOW`,
 `NO_SEGMENTS_TO_BILL`, `BILL_ALREADY_EXISTS_FOR_PERIOD`,
-`NO_ACTIVE_ASSIGNMENTS`. Failed is "should have billed and could not".
+`NO_AGREEMENT_IN_WINDOW`. Failed is "should have billed and could not" —
+and that includes **`NO_ACTIVE_ASSIGNMENTS`**, a live agreement with no rate
+schedule over its period. It was a skip until 2026-11-27, because the
+account-level "no agreement in the window" raised the same code; that case
+now has its own (`NO_AGREEMENT_IN_WINDOW`), and an unrated agreement lands in
+the failures, where somebody will act on it.
 A single `error_count` would bury the second in the first, and the
 exception list is the entire value of a run.
 
