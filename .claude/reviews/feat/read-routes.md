@@ -62,8 +62,11 @@ only. All four branches are on origin.
   **`prisma generate` is not optional here:** the generated client is gitignored
   and `transferCarriesRateSchedule` is new, so a stale client fails to typecheck
   rather than reporting a missing column.
-- User action performed: **nothing in this session.** The containers were down
-  when this file was written and no part of the stack was booted.
+- User action performed (2026-11-26, new laptop): fresh database via
+  `setup_db.bat` (all 49 migrations) + `node seed.js` +
+  `scripts/seed-read-route-scenarios.ts`; stack booted with `pnpm dev`, API
+  reporting `cis_app` with RLS enforced. The worker was not started; none of
+  the five files below needs one.
 - Expected observable result: a transfer carries the source agreement's
   rate-schedule assignments onto the new agreement when the General settings
   toggle is on and leaves it unrated when off; a second live agreement at the
@@ -71,16 +74,23 @@ only. All four branches are on origin.
   conflicting agreement; the move-out wizard's premise picker is populated and
   Finish is blocked until a reading is entered for every meter at the chosen
   premise.
-- Actual observed result: **none in this session.** Recorded by the 2026-11-18
-  sessions and *not reproduced*:
-  - `e2e/read-route-entry.spec.ts` — 2 passed, 31.4s.
-  - `e2e/transfer-of-service.spec.ts`, `e2e/move-out.spec.ts` — reported as
-    driving both wizards against real rows, mutation-checked both ways.
-  - `transfer-service.integration.test.ts` — 8 tests against a real database.
-  - `read-route-routes.integration.test.ts` — 39 cases.
-  Treat all four as claims with a date on them, not as evidence: no session has
-  re-run them, and the integration suite is not in CI.
-- [ ] Test passed
+- Actual observed result, re-run 2026-11-26 on the merged tree (af3e939):
+  - `transfer-service.integration.test.ts` + `read-route-routes.integration.test.ts`
+    — 2 files, **50 tests passed**, 109s.
+  - `e2e/transfer-of-service.spec.ts` — 2 passed. `e2e/move-out.spec.ts` — 1 passed.
+  - `e2e/read-route-entry.spec.ts` — **3 passed, after one assertion fix.** The
+    held-row test asserted the pre-b0dd318 wording ("in its recent reads");
+    b0dd318 changed the hold to "typically uses about X — its recent reads ran
+    A to B" and the e2e spec, built on another stream, was never updated. The
+    assertion now pins the new wording including the numbers. That is a merge
+    gap, not an app defect — but it is also the first time the e2e spec has
+    run against the median band at all.
+  - Precondition the spec needs and the base seed does not provide:
+    `cd packages/api && npx tsx --env-file=.env scripts/seed-read-route-scenarios.ts`.
+- What this does not cover: the transfer 409 for a second live agreement was
+  exercised only by the integration suite, not through the UI; nothing here
+  re-ran the full unit suites or typecheck.
+- [x] Test passed
 
 ## Cross-layer contract check (Tier 2+)
 - [ ] Dispatched cross-layer-auditor
@@ -156,9 +166,8 @@ only. All four branches are on origin.
 - [x] Checklist committed
 - [ ] Ready to ship
 
-**Not ready to ship.** Required before that, in order: boot the stack and run
-the five test files that have never been re-run, then the three Tier 3 reviewer
-passes. See `docs/specs/05-service-agreement.md` for the one
+**Not ready to ship.** The smoke test passed on 2026-11-26 (above). Still
+required: the three Tier 3 reviewer passes, plus typecheck and the unit suites. See `docs/specs/05-service-agreement.md` for the one
 open product question (`createServiceAgreement` and move-in write no
 rate-schedule assignment, and the billing executor files that condition
 quietly).

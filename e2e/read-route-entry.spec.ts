@@ -819,7 +819,7 @@ test("a wild number is held against the meter's own history, and a changed one i
     heldBar,
     "the hold has to say what this meter usually does — that is the whole reason to hold it " +
       "rather than refuse it",
-  ).toContainText(/in its recent reads/i);
+  ).toContainText(/typically uses about [\d,]+.*recent reads ran [\d,]+ to [\d,]+/i);
   await expect(heldBar, "and how to accept it anyway").toContainText(/press\s+enter\s+again/i);
 
   /*
