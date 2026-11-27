@@ -89,6 +89,16 @@ interface BillPresentationView {
    * labels and signs, is the resolver's business and not this file's.
    */
   totalRows: Array<{ label: string; amount: string; emphasis?: "total" | "note" }>;
+  /**
+   * Usage by time of day, one per TOU segment (spec 26, TOU-BIL-2) — the
+   * same table and hours footnote the PDF prints. Information, not
+   * charges: nothing here is added to the total. Empty without TOU.
+   */
+  touSections?: Array<{
+    heading: string;
+    rows: Array<{ label: string; usage: string; share: string; amount: string }>;
+    footnote: string[];
+  }>;
 }
 
 /** One attempt to deliver this bill. */
@@ -459,6 +469,58 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                 </table>
               </div>
             )}
+
+            {(presentation?.touSections ?? []).map((section) => (
+              <div
+                key={section.heading}
+                data-testid="tou-section"
+                style={{
+                  marginBottom: "16px",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius)",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "10px 14px",
+                    background: "var(--bg-elevated)",
+                    borderBottom: "1px solid var(--border-subtle)",
+                    fontSize: "12px",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  {section.heading}
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...td, textAlign: "left", fontSize: "11px", color: "var(--text-muted)" }}>Period</th>
+                      <th style={{ ...td, textAlign: "right", fontSize: "11px", color: "var(--text-muted)" }}>Usage</th>
+                      <th style={{ ...td, textAlign: "right", fontSize: "11px", color: "var(--text-muted)" }}>Share</th>
+                      <th style={{ ...td, textAlign: "right", fontSize: "11px", color: "var(--text-muted)" }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {section.rows.map((r) => (
+                      <tr key={r.label}>
+                        <td style={td}>{r.label}</td>
+                        <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>{r.usage}</td>
+                        <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>{r.share}</td>
+                        <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>{fmt(r.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {section.footnote.length > 0 && (
+                  <div style={{ padding: "8px 14px", fontSize: "11px", color: "var(--text-muted)", lineHeight: 1.5 }}>
+                    {section.footnote.map((line) => (
+                      <div key={line}>{line}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
 
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", marginTop: "8px" }}>
               {/*

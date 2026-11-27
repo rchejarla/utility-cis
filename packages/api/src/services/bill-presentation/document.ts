@@ -135,6 +135,33 @@ export interface BillPresentationTotals {
   total: string;
 }
 
+/**
+ * A TOU segment's usage by time of day (spec 26, TOU-BIL-2 and TOU-BIL-3).
+ *
+ * **Information, not charges.** The amounts here are the same money as the
+ * TOU lines in the commodity's charge group, regrouped by period; nothing
+ * adds them to a total. What the table adds is what the lines cannot say:
+ * every period the tariff prices — including one the customer did not use
+ * or one priced at zero, whose line the engine suppresses — each period's
+ * share of the usage, and the hours each period covers.
+ */
+export interface BillPresentationTouSection {
+  /** "Electric — usage by time of day". */
+  heading: string;
+  rows: Array<{
+    /** The tenant's label for the period. */
+    label: string;
+    /** Measured usage in the period, formatted with its unit: "132.00 kWh". */
+    usage: string;
+    /** Share of the segment's usage: "18%", "<1%", "0%". */
+    share: string;
+    /** What the period was charged, 2dp; "0.00" for one with no line. */
+    amount: string;
+  }>;
+  /** The hours footnote, one string per line; empty when the calendar could not be read. */
+  footnote: string[];
+}
+
 export interface BillPresentation {
   issuer: BillPresentationIssuer;
   recipient: { name: string; addressLines: string[] };
@@ -147,6 +174,12 @@ export interface BillPresentation {
     periodEnd: Date;
   };
   groups: BillPresentationGroup[];
+  /**
+   * Usage by time of day, one per TOU segment. **Empty for a bill with no
+   * TOU service**, so such a bill renders exactly as it did before this
+   * existed — a reprint stays byte-identical.
+   */
+  touSections: BillPresentationTouSection[];
   /**
    * The fees-and-adjustments group, or null when the bill carries none.
    *

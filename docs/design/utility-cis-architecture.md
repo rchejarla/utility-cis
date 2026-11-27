@@ -1114,6 +1114,7 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | GET/POST/PATCH/DELETE | `/api/v1/bill-messages[/:id]` | Bill Messages CRUD (`settings` module — bill text is tenant configuration) |
 | POST | `/api/v1/bills/:id/document` | Bill Documents (render + store, idempotent; `?force=true` replaces; `accounts:EDIT`) |
 | GET | `/api/v1/bills/:id/document` | Bill Documents (stream the PDF; `accounts:VIEW`) |
+| GET | `/api/v1/bills/:id/presentation` | Bill Documents (the resolved `BillPresentation` the PDF and the staff dialog both render; includes `touSections` — usage by time of day and the hours footnote, empty without TOU — since 2026-11-27, spec 26 TOU-BIL-2) |
 | GET | `/portal/api/bills/:id/document` | Bill Documents (customer's own copy; `portal_billing:VIEW`) |
 | POST | `/api/v1/billing-runs` | Start a billing run (202 + the PENDING run; `accounts:EDIT`) |
 | GET | `/api/v1/billing-runs[/:id]` | Billing run list + detail (`accounts:VIEW`) |

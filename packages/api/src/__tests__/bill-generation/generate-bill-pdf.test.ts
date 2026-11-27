@@ -90,6 +90,8 @@ function presentation(
       },
       ...(fees ? [fees] : []),
     ],
+    // No TOU service: the ordinary bill, which must render as it always did.
+    touSections: [],
     // The same object as the last group above, which is the contract.
     feesGroup: fees ?? null,
     // Null by default: a bill issued before the snapshot existed prints
@@ -392,6 +394,61 @@ describe("generateBillPdf", () => {
     expect(text).toContain("Charge 1");
     expect(text).toContain("Charge 120");
   }, 60_000);
+
+  /*
+   * Usage by time of day (spec 26, TOU-BIL-2). The section is information,
+   * not a charge group: it prints every period the tariff prices, its share
+   * of the usage and the hours footnote, and must not move the total.
+   *
+   * Introducing it was checked to leave a bill without TOU byte-identical:
+   * the sha256 of presentation(3) and presentation(120) were recorded
+   * before the template change and matched after it (2026-11-27).
+   */
+  it("prints the TOU table and its hours footnote without moving the total", async () => {
+    const p = presentation(3);
+    p.touSections = [
+      {
+        heading: "Electric — usage by time of day",
+        rows: [
+          { label: "Peak", usage: "0.00 kWh", share: "0%", amount: "0.00" },
+          { label: "Mid-peak", usage: "89.00 kWh", share: "18%", amount: "12.33" },
+          { label: "Off-peak", usage: "402.00 kWh", share: "82%", amount: "29.79" },
+        ],
+        footnote: [
+          "Time-of-day periods, summer season (1 Jun – 30 Sep):",
+          "Peak: 5–8 pm weekdays, excluding holidays.",
+          "Off-peak: all other hours.",
+        ],
+      },
+    ];
+    /*
+     * Helvetica is a standard PDF font with WinAnsi encoding, so the em and
+     * en dashes are written as the Windows-1252 bytes 0x97 and 0x96, which
+     * `extractText` (latin1) returns as C1 controls. Mapped back here so the
+     * assertions read like the bill.
+     */
+    const text = extractText(await generateBillPdf(p))
+      .replace(/\u0097/g, "—")
+      .replace(/\u0096/g, "–");
+
+    expect(text).toContain("Electric — usage by time of day");
+    // Label style uppercases the column headings. ("PERIOD" alone would
+    // match the header's "SERVICE PERIOD", which every bill prints.)
+    expect(text).toContain("SHARE");
+    // A period with no usage still has its row — the line-only approach drops it.
+    expect(text).toContain("Peak0.00 kWh0%$0.00");
+    expect(text).toContain("Off-peak402.00 kWh82%$29.79");
+    expect(text).toContain("Peak: 5–8 pm weekdays, excluding holidays.");
+    expect(text).toContain("Off-peak: all other hours.");
+    // Information only: the total is still the charge groups' 3.00.
+    expect(text).toContain("Total due$3.00");
+  }, 30_000);
+
+  it("prints no TOU section for a bill without TOU service", async () => {
+    const text = extractText(await generateBillPdf(presentation(3)));
+    expect(text).not.toContain("usage by time of day");
+    expect(text).not.toContain("SHARE");
+  }, 30_000);
 
   // Spec §4.5's idempotent-overwrite reasoning depends on this.
   it("is byte-stable across renders of the same presentation", async () => {

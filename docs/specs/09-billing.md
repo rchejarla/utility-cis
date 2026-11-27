@@ -181,6 +181,8 @@ Configurable text printed on bills, targeted by account type and/or commodity ov
 
 **Selection happens at `bill.bill_date`, never at `now()`**, so reprinting an old bill reproduces the messages it originally carried.
 
+**Usage by time of day (2026-11-27, spec 26 TOU-BIL-2).** A bill with a TOU segment prints, after the charges, a Period / Usage / Share / Amount table per TOU commodity and an hours footnote — `BillPresentation.touSections`, resolved by `services/bill-presentation/tou.ts` and rendered by both the PDF template and the staff bill dialog. It is information, not a charge group: no subtotal, nothing added to the total. It keeps the reprint rule above: periods come from the published (immutable) components, amounts from the stored lines, usage from TOU buckets created no later than the segment, hours from the exact calendar version the schedule names. **One exception, accepted:** the tenant's TOU period *label* is editable and unversioned, so a reprint after renaming a period shows the new name. A bill with no TOU service has `touSections: []` and renders byte-identically to before (PDF hashes checked before and after the template change).
+
 Two departures from the superseded sketch above: account type is an FK to `AccountTypeDef` rather than an enum, because account types are tenant-configurable; and there is no `is_active` flag, because `active_from`/`active_to` already say when a message applies and a second switch would let the two disagree.
 
 ### BillingRun / BillingRunItem (shipped — slice 5c)
@@ -466,7 +468,7 @@ Addressed by `Bill`, not `BillingRecord`. Bytes stream through the API; a minted
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
-| GET | `/api/v1/bills/:id/presentation` | `accounts:VIEW` | The resolved `BillPresentation` — what the bill *says*, as against `GET /bills/:id` which returns the stored bill. A read, so the same gate as the bill. Separate from a wider `GET /bills/:id` because resolving a presentation refuses an incomplete issuer, recipient or charge set with a 422, and a popup that cannot open because the remittance address is unset is a worse screen than one showing rated lines |
+| GET | `/api/v1/bills/:id/presentation` | `accounts:VIEW` | The resolved `BillPresentation` — what the bill *says*, as against `GET /bills/:id` which returns the stored bill. Includes `touSections` (usage by time of day; empty without TOU) since 2026-11-27. A read, so the same gate as the bill. Separate from a wider `GET /bills/:id` because resolving a presentation refuses an incomplete issuer, recipient or charge set with a 422, and a popup that cannot open because the remittance address is unset is a worse screen than one showing rated lines |
 | POST | `/api/v1/bills/:id/document` | `accounts:EDIT` | Generate and store the PDF; idempotent — returns the existing pointer if one is stored. `?force=true` replaces it in place |
 | GET | `/api/v1/bills/:id/document` | `accounts:VIEW` | Stream the stored PDF as `application/pdf` attachment |
 | GET | `/portal/api/bills/:id/document` | `portal_billing:VIEW` | The customer's own copy, scoped through the account's `customer_id` |

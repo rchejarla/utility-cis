@@ -14,8 +14,11 @@ unstarted.
   tiling and coverage, the coverage sweep and the missing-data queue
   (§§3b–3c); the TOU pre-run check in the billing run's preview
   (TOU-BIL-1).
-- **Not built:** bill and portal presentation and the shadow bill
-  (TOU-BIL-2 – 4, slice 3); modeling (TOU-MOD-*, slice 4, overlapping
+- **Built 2026-11-27:** TOU on the bill — the usage-by-period table with
+  shares and the hours footnote (TOU-BIL-2, and the bill half of
+  TOU-BIL-3).
+- **Not built:** portal usage by period and hour, and the shadow bill
+  (rest of TOU-BIL-3, TOU-BIL-4 — plan slices 2–4); modeling (TOU-MOD-*, slice 4, overlapping
   spec 29); the TOU-INT-8 volume measurement; and the follow-ups marked
   in place — the register-mapping importer (§3a), the zoneless-file
   warning (§3b), predicting interval gaps at preview (TOU-INT-4a),
@@ -434,6 +437,13 @@ Three rules it fixes:
   on or before the **period's** start — never today's date. That is what
   makes re-rating an old period reproducible: a calendar published since
   then has a later effective date and is not reached.
+
+  *Corrected 2026-11-27:* that by-name resolution (`loadTouCalendar`) is
+  what this section describes, but **production does not use it** — only
+  tests call it. A rate schedule names one exact calendar version
+  (`rate_schedule.tou_calendar_id`), and the billing run classifies and the
+  bill's hours footnote reads by that id (`loadTouCalendarById`). The
+  reproducibility the paragraph above wants comes from that pin instead.
 - **Which seasons:** the set the calendar *names*, for the reason above.
 - **Which holidays:** the dates in the named set that fall **inside the
   period**, which is one date-range query and so covers a
@@ -1299,6 +1309,12 @@ raw intervals from the same meters. Compression is therefore entirely a
   version and season in effect at its local start time (TOU-SEA-4,
   TOU-CAL-5). A calendar change mid-period applies from its effective
   date, interval by interval.
+
+  *Clarified 2026-11-27:* per-interval seasons decide which **period** an
+  interval falls in. **Pricing** uses one season per bill — the one in
+  force on the period's start date (`evaluators/predicate.ts`,
+  `computeSeason`) — so a bill straddling a season boundary is priced at
+  one season's rates and its hours footnote describes that season.
 - **TOU-ENG-4 (Must).** Conservation: the sum of all TOU period
   quantities for a service equals the total metered quantity for the
   period, to the unit's precision. Rating fails rather than drop or
@@ -1323,6 +1339,14 @@ raw intervals from the same meters. Compression is therefore entirely a
 - **TOU-ENG-8 (Must).** Bill lines: one line per (TOU period, season,
   price) actually used, carrying quantity, unit and price, labelled with
   the period's display label ("On-peak, summer: 312.4 kWh × $0.2410").
+
+  *Corrected 2026-11-27:* a stored `BillSegmentLine` carries the
+  **component's** label, quantity, unit and amount — not the period,
+  season or price, which the save drops. All three are recoverable, and
+  stably: published components refuse edits, so joining a line to its
+  component through `sourceComponentId` gives `quantitySource.peak_code`,
+  `predicate.season` and `pricing.rate`. TOU-BIL-2 reads them that way; no
+  column was added.
 - **TOU-ENG-9 (Must).** Golden tests against at least one real, published
   TOU tariff with extracted prices (the reference utility's, or a public
   municipal electric tariff if NorthWestern's PDFs stay unreadable),
@@ -1766,9 +1790,40 @@ it is wrong.
 - **TOU-BIL-2 (Must).** The bill PDF shows usage and charges by TOU
   period, and names the periods' hours in a footnote ("On-peak: 4–9 pm
   weekdays, Jun–Sep, excluding holidays").
+
+  *Built 2026-11-27* (plan: `docs/superpowers/plans/2026-11-27-tou-slice-3-bill-presentation.md`).
+  After each TOU commodity's charges the bill prints **Usage by time of
+  day** — Period / Usage / Share / Amount — and the hours footnote, on the
+  PDF and in the staff bill dialog, from one `BillPresentation.touSections`
+  (`services/bill-presentation/tou.ts`). Information, not charges: the
+  amounts are the TOU lines regrouped and nothing adds them to a total.
+  - **Every period the tariff prices gets a row**, including one with no
+    charge line (zero usage, or priced at zero — the engine suppresses
+    zero-amount lines). Usage comes from the stored TOU buckets, which
+    exist at zero; amounts from the lines via their components.
+  - **A reprint cannot move:** buckets are read only if created no later
+    than the segment; the components and the calendar version are
+    immutable once published. The tenant's period *label* is the one
+    editable input — a renamed period reprints under its new name.
+  - **The footnote** (`lib/rate-engine/tou-calendar-text.ts`) describes the
+    season the bill was priced in, merges adjacent spans (and spans that
+    meet at midnight), names day types from their weekdays, adds
+    "excluding holidays" where the holiday day type carries none of a
+    period's hours, notes "standard time all year" for a standard-clock
+    calendar, and ends with the largest period as "all other hours".
+  - **A bill with no TOU service is byte-identical** to before: the PDF
+    hashes of an ordinary bill were recorded before the template change
+    and matched after it.
 - **TOU-BIL-3 (Should).** The bill shows the share of usage on-peak, and
   the portal shows usage by hour and by TOU period for any billed
   period.
+
+  *Bill half built 2026-11-27* as the **Share** column — each period's
+  share of the usage, rather than a single "on-peak" figure, because peak
+  codes are the tenant's and nothing marks one as the peak (decided
+  2026-11-27). The portal half is slice 2 of the plan; the portal's
+  monthly totals, which counted a TOU meter's month about twice, were
+  fixed first (spec 15, 2026-11-27).
 - **TOU-BIL-4 (Should).** Shadow bill: for a customer on TOU, or
   considering it, show what the same usage would have cost on the
   standard rate. Shown to staff, and in the portal when the tenant

@@ -41,6 +41,8 @@ function makeStyles(presentation: BillPresentation) {
     cellLabel: { flex: 1 },
     cellQty: { width: 70, textAlign: "right" },
     cellAmount: { width: 80, textAlign: "right" },
+    cellShare: { width: 50, textAlign: "right" },
+    footnote: { fontSize: 7, color: "#6b7280", marginTop: 3 },
     subtotalRow: { flexDirection: "row", paddingTop: 4 },
     totalsBox: { marginTop: 16, alignSelf: "flex-end", width: 240 },
     totalRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 2 },
@@ -73,7 +75,7 @@ function printed(amount: string): string {
 
 export function DefaultBillTemplate({ presentation }: { presentation: BillPresentation }) {
   const s = makeStyles(presentation);
-  const { issuer, recipient, account, bill, groups, totalRows, totals, settlement, messages, remittance } =
+  const { issuer, recipient, account, bill, groups, touSections, totalRows, totals, settlement, messages, remittance } =
     presentation;
 
   return (
@@ -144,6 +146,36 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
               <Text style={s.cellQty}>Subtotal</Text>
               <Text style={s.cellAmount}>{printed(group.subtotal)}</Text>
             </View>
+          </View>
+        ))}
+
+        {/*
+          Usage by time of day (spec 26, TOU-BIL-2). Information, not
+          charges: the amounts are the TOU lines above regrouped by
+          period, so this has no subtotal and adds nothing to the total.
+          Absent from a bill with no TOU service, which then renders
+          byte-for-byte as before.
+        */}
+        {(touSections ?? []).map((section, si) => (
+          <View key={`tou-${si}`} wrap={false}>
+            <Text style={s.groupHeading}>{section.heading}</Text>
+            <View style={s.row}>
+              <Text style={[s.cellLabel, s.label]}>Period</Text>
+              <Text style={[s.cellQty, s.label]}>Usage</Text>
+              <Text style={[s.cellShare, s.label]}>Share</Text>
+              <Text style={[s.cellAmount, s.label]}>Amount</Text>
+            </View>
+            {section.rows.map((row, ri) => (
+              <View key={ri} style={s.row}>
+                <Text style={s.cellLabel}>{row.label}</Text>
+                <Text style={s.cellQty}>{row.usage}</Text>
+                <Text style={s.cellShare}>{row.share}</Text>
+                <Text style={s.cellAmount}>{printed(row.amount)}</Text>
+              </View>
+            ))}
+            {section.footnote.map((line, fi) => (
+              <Text key={fi} style={s.footnote}>{line}</Text>
+            ))}
           </View>
         ))}
 
