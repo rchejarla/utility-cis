@@ -18,8 +18,9 @@ unstarted.
   shares and the hours footnote (TOU-BIL-2) — and the portal's billed
   usage by period and by hour (TOU-BIL-3), and the staff shadow bill in
   both directions — TOU → standard, and standard → TOU from registers or
-  classified intervals (TOU-BIL-4, slices 3a and 3b).
-- **Not built:** the shadow bill in the portal (TOU-BIL-4, slice 4); modeling (TOU-MOD-*, slice 4, overlapping
+  classified intervals, and in the portal behind a tenant switch (TOU-BIL-4,
+  slices 3a, 3b and 4).
+- **Not built:** modeling (TOU-MOD-*, slice 4, overlapping
   spec 29); the TOU-INT-8 volume measurement; and the follow-ups marked
   in place — the register-mapping importer (§3a), the zoneless-file
   warning (§3b), predicting interval gaps at preview (TOU-INT-4a),
@@ -1888,7 +1889,15 @@ it is wrong.
     a boundary; and `SHADOW_NEEDS_INTERVALS` for a meter with neither
     buckets nor intervals, which records how much was used, not when.
 
-  Not built: the portal toggle (slice 4).
+  *Portal, built 2026-11-27* (plan slice 4): `settings.portal.showRateComparison`,
+  **off by default** — whether customers learn a cheaper rate existed is
+  the utility's decision — set on Settings → Bill Production. When on,
+  the portal bills list flags comparable bills and
+  `GET /portal/api/bills/:billId/rate-comparison` runs `shadowBill` per
+  comparable segment of the customer's own posted bill
+  (`services/portal-rate-comparison.ts`). Every "not shown" is a 404; a
+  segment the comparison refuses comes back `unavailable`, worded for a
+  customer, so one meter without the detail does not hide the rest.
 
 ## 7. Modeling (the stand-alone rate engine offer)
 

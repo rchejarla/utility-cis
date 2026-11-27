@@ -8,6 +8,7 @@ import {
   billingIntegrationSettingsSchema,
   issuerSettingsSchema,
   billDocumentSettingsSchema,
+  portalSettingsSchema,
 } from "@utility-cis/shared";
 import { getTenantConfig, updateTenantConfig } from "../services/tenant-config.service.js";
 
@@ -59,6 +60,7 @@ const updateBodySchema = z
     billing: billingIntegrationSettingsSchema.optional(),
     issuer: issuerSettingsSchema.optional(),
     billDocuments: billDocumentSettingsSchema.optional(),
+    portal: portalSettingsSchema.optional(),
   })
   .strict();
 
@@ -93,7 +95,8 @@ export async function tenantConfigRoutes(app: FastifyInstance) {
         patch.retention !== undefined ||
         patch.billing !== undefined ||
         patch.issuer !== undefined ||
-        patch.billDocuments !== undefined;
+        patch.billDocuments !== undefined ||
+        patch.portal !== undefined;
 
       if (touchesSettings) {
         const current = await getTenantConfig(utilityId);
@@ -138,6 +141,12 @@ export async function tenantConfigRoutes(app: FastifyInstance) {
           nextSettings.billDocuments = {
             ...(current.settings.billDocuments as Record<string, unknown> | undefined),
             ...patch.billDocuments,
+          };
+        }
+        if (patch.portal !== undefined) {
+          nextSettings.portal = {
+            ...(current.settings.portal as Record<string, unknown> | undefined),
+            ...patch.portal,
           };
         }
         merged.settings = nextSettings;
