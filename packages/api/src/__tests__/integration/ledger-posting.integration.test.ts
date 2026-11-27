@@ -594,6 +594,48 @@ describe("the statement snapshot", () => {
     });
   });
 
+  /*
+   * The snapshot binds the bill date as a JS Date and casts it `::date`.
+   * A review (2026-11-26) flagged that as session-time-zone-dependent; a
+   * probe on 2026-11-27 showed it is not. The Prisma pg adapter sends a Date
+   * as **untyped text holding its UTC wall time** ("2026-06-30 00:00:00", no
+   * zone), and `::date` reads the day straight off that text — the UTC day,
+   * in any session. This pins that: a payment received on the bill's own
+   * date still counts with the session in America/Denver. If the adapter
+   * ever starts binding a Date as a typed timestamptz, the cast becomes
+   * zone-dependent and this fails — the time to change the binding.
+   */
+  it("judges the bill's own date the same in any session time zone", async () => {
+    const first = await billOn("2026-05-15", "100.00", "2026-06-14");
+    await postBill(utilityId, ACTOR, "T", first);
+    await runAsTenant(utilityId, async () => {
+      const payment = await import("../../services/ar/payment.service.js");
+      await payment.recordPayment(utilityId, ACTOR, "T", acct, {
+        amount: "60.00",
+        tender: "CHECK",
+        receivedAt: "2026-06-30",
+      });
+    });
+    const second = await billOn("2026-06-30", "40.00", "2026-07-29");
+
+    const { billStatementSnapshot } = await import("../../services/ar/statement-snapshot.js");
+    const snap = await runAsTenant(utilityId, async () =>
+      prismaImports.prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe("SET LOCAL TIME ZONE 'America/Denver'");
+        return billStatementSnapshot(
+          tx as unknown as Parameters<typeof billStatementSnapshot>[0],
+          utilityId,
+          acct,
+          second,
+          new Date("2026-06-30"),
+        );
+      }),
+    );
+
+    expect(snap.paymentsSince.toFixed(2)).toBe("60.00");
+    expect(snap.previousBalance.toFixed(2)).toBe("100.00");
+  });
+
   /**
    * Past due is as at the **bill date**, not as at posting.
    *

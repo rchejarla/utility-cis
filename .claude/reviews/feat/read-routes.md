@@ -78,10 +78,14 @@ only. All four branches are on origin.
     - `saveEntryRow` raced submit → batch row locked (f789931).
     - `routeCode` raw in `Content-Disposition` → ASCII fallback plus
       RFC 5987 `filename*`.
-    - `::date` on a bound JS Date → bound as `YYYY-MM-DD` text in both
-      read-route queries. (Same pattern exists in `ar/statement-snapshot.ts`,
-      `payment-plan/lifecycle.ts` and `effective-dating-queries.ts`, which
-      predate this branch — not touched; worth a separate look.)
+    - `::date` on a bound JS Date — **the finding was wrong** (probed
+      2026-11-27). The Prisma pg adapter sends a Date as untyped text of its
+      UTC wall time, so `::date` is the UTC day in any session zone. The two
+      read-route queries' switch to `YYYY-MM-DD` text is harmless and was
+      kept, with its comments corrected; the same pattern in
+      `ar/statement-snapshot.ts` and `payment-plan/lifecycle.ts` was left as
+      it is, and a ledger-posting test now pins the behaviour under a
+      Denver session so an adapter change would surface.
 - Also fixed from the unit run: `|| true` on the entry screen's empty-field
   guard (806085f) — Enter through a coded row erased its skip reason.
 
@@ -280,9 +284,11 @@ purpose and documented. Backend e4b47bc, screens 574ed0b; API unit 1264, web
    and the rollback is written but untested, because there is no staging
    environment. That is a fact about the deployment, not something more code
    on this branch can close; it needs a decision on how this product ships.
-2. **One open product question** in `docs/specs/05-service-agreement.md`:
-   `createServiceAgreement` and move-in write no rate-schedule assignment, and
-   the billing executor files that condition quietly.
+2. ~~One open product question in spec 05~~ — **decided 2026-11-27**: not
+   assigning a rate schedule on create is the stated rule, and an unrated
+   agreement that reaches a run's executor is now a FAILED item
+   (`NO_ACTIVE_ASSIGNMENTS`), not a skip; the account-level "no agreement in
+   the window" has its own `NO_AGREEMENT_IN_WINDOW`.
 3. ~~Not run since the last changes: the full integration suite.~~ **Run
    2026-11-27 on 69bd392, one file at a time: 126/126 files, 1612 tests
    passed, 0 failed, 0 skipped** (10:22–11:11).

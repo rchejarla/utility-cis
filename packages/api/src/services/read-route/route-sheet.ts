@@ -120,8 +120,9 @@ async function lastReadings(
     WHERE utility_id = ${utilityId}::uuid
       AND meter_id = ANY(${meterIds}::uuid[])
       AND reading IS NOT NULL
-      -- As 'YYYY-MM-DD' text, not a JS Date: a Date binds as timestamptz,
-      -- and its ::date depends on the session's time zone.
+      -- As 'YYYY-MM-DD' text. A bound Date gives the same UTC day (the pg
+      -- adapter sends its UTC wall time as untyped text); this just does
+      -- not depend on that serialisation.
       AND read_date < ${isoDay(onDate)}::date
     ORDER BY meter_id, register_id, read_date DESC, read_datetime DESC`;
   for (const r of rows) {

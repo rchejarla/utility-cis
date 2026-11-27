@@ -570,6 +570,51 @@ describe("processing a run", () => {
   
     }), 300_000);
 
+  /*
+   * An agreement with no rate schedule is a service taken and not billed —
+   * "should have billed and could not" — so it is a failure, not a skip.
+   * It was a skip until 2026-11-27, because the account-level "no
+   * agreement in the window" raised the same NO_ACTIVE_ASSIGNMENTS code and
+   * `classify` filed both as noise. The planner names unrated agreements;
+   * this is the one that gets past it — its assignment gone between
+   * planning and the pass.
+   */
+  it("fails, not skips, an account whose agreement lost its rate schedule after planning", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const run = JSON.parse((await startRun()).body);
+      const windowEnd = new Date(`${WINDOW_END}T00:00:00.000Z`);
+      const items = await prisma.billingRunItem.findMany({
+        where: { billingRunId: run.id },
+        select: { accountId: true },
+      });
+      // An account in the run that would otherwise bill: an unbilled read in the window.
+      const subject = await prisma.serviceAgreement.findFirstOrThrow({
+        where: {
+          utilityId,
+          accountId: { in: items.map((i) => i.accountId) },
+          meterReads: { some: { billedAt: null, readDate: { lte: windowEnd } } },
+          rateScheduleAssignments: { some: {} },
+        },
+        select: { id: true, accountId: true },
+      });
+      const saved = await prisma.sAScheduleAssignment.findMany({
+        where: { serviceAgreementId: subject.id },
+      });
+      await prisma.sAScheduleAssignment.deleteMany({ where: { serviceAgreementId: subject.id } });
+
+      try {
+        await processBillingRun({ runId: run.id, utilityId, actorId: ACTOR_ID, actorName: "Tester" });
+
+        const item = await prisma.billingRunItem.findFirstOrThrow({
+          where: { billingRunId: run.id, accountId: subject.accountId },
+        });
+        expect(item).toMatchObject({ status: "FAILED", errorCode: "NO_ACTIVE_ASSIGNMENTS" });
+      } finally {
+        await prisma.sAScheduleAssignment.createMany({ data: saved });
+      }
+    }), 300_000);
+
   it("does not bill an account twice when a run is processed again", () =>
     seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
        * route call below still enters its own tenant scope. */
