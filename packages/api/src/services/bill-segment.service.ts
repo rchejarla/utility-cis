@@ -280,107 +280,10 @@ export async function createBillSegmentForServiceAgreement(
     { utilityId, actorId, actorName, entityType: "BillSegment" },
     EVENT_TYPES.BILL_SEGMENT_CREATED,
     async (tx) => {
-      // 1. loadBase — assignments + components + snapshots
-      const period = { startDate: resolved.periodStart, endDate: resolved.periodEnd };
-      const base = await loadBase(tx as unknown as typeof prisma, saId, period, utilityId);
-
-      if (base.assignments.length === 0) {
-        throw Object.assign(
-          new Error("Service agreement has no rate schedule assignments overlapping this period"),
-          { statusCode: 400, code: "NO_ACTIVE_ASSIGNMENTS" },
-        );
-      }
-
-      // 2. publish gate — every assigned schedule must be Published
-      const unpublished = await tx.rateSchedule.findMany({
-        where: {
-          id: { in: base.assignments.map((a) => a.rateScheduleId) },
-          publishedAt: null,
-        },
-        select: { id: true, code: true, version: true },
+      const { result, meterIds } = await rateAgreementPeriod(tx, utilityId, saId, {
+        startDate: resolved.periodStart,
+        endDate: resolved.periodEnd,
       });
-      if (unpublished.length > 0) {
-        const detail = unpublished.map((s) => `${s.code} v${s.version}`).join(", ");
-        throw Object.assign(
-          new Error(
-            `Cannot bill against unpublished rate schedule(s): ${detail}. Publish them first.`,
-          ),
-          { statusCode: 409, code: "SCHEDULE_NOT_PUBLISHED" },
-        );
-      }
-
-      // 3. manifest — collect schedule-driven keys
-      const manifestKeys = engine.manifest(base);
-
-      // 4. Pre-load meter-keyed vars (engine infers meter ids from
-      //    meter:reads:* keys at rate time; we add them up-front so the
-      //    engine doesn't have to call back into the registry).
-      /*
-       * The meters installed **during this period**, not the ones
-       * installed today — the same point the TOU comment below makes
-       * about register mappings, applied to the installation itself.
-       *
-       * Closing an agreement end-dates its service points and removes
-       * its meter installations, so `endDate: null` / `removedDate:
-       * null` found nothing for a final bill and the engine was handed
-       * no reads for a meter that had reported all month. It is also
-       * what a re-rate of any historical period needs: the meter that
-       * was on the service point then.
-       */
-      const spMeters = await tx.serviceAgreement.findUniqueOrThrow({
-        where: { id: saId, utilityId },
-        select: {
-          servicePoints: {
-            where: {
-              startDate: { lte: period.endDate },
-              OR: [{ endDate: null }, { endDate: { gte: period.startDate } }],
-            },
-            include: {
-              meters: {
-                where: {
-                  addedDate: { lte: period.endDate },
-                  OR: [{ removedDate: null }, { removedDate: { gte: period.startDate } }],
-                },
-                select: { meterId: true },
-              },
-            },
-          },
-        },
-      });
-      const meterIds = spMeters.servicePoints.flatMap((sp) => sp.meters.map((m) => m.meterId));
-      const meterKeys = meterIds.flatMap((id) => [`meter:reads:${id}`, `meter:size:${id}`]);
-
-      /*
-       * 4a. TOU buckets (spec 26, TOU-REG-1).
-       *
-       * Asked for by **what the tariff prices**, crossed with the SA's
-       * meters — not by the meter's current register mapping. A rate
-       * schedule is versioned and effective-dated; a register mapping is
-       * neither, so deriving the keys from it made re-rating a period
-       * from before a remap ask about today's periods and fail rather
-       * than reproduce the original bill.
-       *
-       * Whether a period is *answerable* is then the loader's business,
-       * and it reads that off the reads themselves, which carry the code
-       * they were stamped with at import. A non-TOU schedule prices no
-       * TOU period, so this adds no keys and costs no query.
-       */
-      const touKeys = engine
-        .touPeakCodes(base)
-        .flatMap((peakCode) => meterIds.map((id) => `meter:tou:${id}:${peakCode}`));
-
-      // 5. registry + loadVariables
-      const registry = buildRegistry(tx as unknown as typeof prisma, {
-        utilityId,
-        saId,
-        accountId: base.sa.accountId,
-        premiseId: base.sa.premiseId,
-        period,
-      });
-      const vars = await registry.loadVariables([...manifestKeys, ...meterKeys, ...touKeys]);
-
-      // 6. rate
-      const result = engine.rate({ base, vars });
 
       // 7. allocate segment number + persist BillSegment row
       const now = new Date();
@@ -439,6 +342,128 @@ export async function createBillSegmentForServiceAgreement(
       return assembleSegmentWithLines(tx, utilityId, segment.id);
     },
   );
+}
+
+/**
+ * Rate one agreement over one period, and write nothing: steps 1–6 of
+ * creating a segment, which persists the result as steps 7–9.
+ *
+ * Its own function since 2026-11-27 so the shadow bill (spec 26, TOU-BIL-4)
+ * rates through exactly the code that priced the bill, instead of a copy
+ * that would drift from it. `substitute` is the shadow bill's hook: it
+ * replaces assignments on the loaded context before anything is derived
+ * from it, so the manifest, the TOU keys and the publish gate all see the
+ * tariff actually being rated.
+ */
+export async function rateAgreementPeriod(
+  tx: Prisma.TransactionClient,
+  utilityId: string,
+  saId: string,
+  period: { startDate: Date; endDate: Date },
+  opts: { substitute?: (base: engine.BaseContext) => Promise<engine.BaseContext> } = {},
+): Promise<{ base: engine.BaseContext; result: ReturnType<typeof engine.rate>; meterIds: string[] }> {
+  // 1. loadBase — assignments + components + snapshots
+  let base = await loadBase(tx as unknown as typeof prisma, saId, period, utilityId);
+  if (opts.substitute) base = await opts.substitute(base);
+
+  if (base.assignments.length === 0) {
+    throw Object.assign(
+      new Error("Service agreement has no rate schedule assignments overlapping this period"),
+      { statusCode: 400, code: "NO_ACTIVE_ASSIGNMENTS" },
+    );
+  }
+
+  // 2. publish gate — every assigned schedule must be Published
+  const unpublished = await tx.rateSchedule.findMany({
+    where: {
+      id: { in: base.assignments.map((a) => a.rateScheduleId) },
+      publishedAt: null,
+    },
+    select: { id: true, code: true, version: true },
+  });
+  if (unpublished.length > 0) {
+    const detail = unpublished.map((s) => `${s.code} v${s.version}`).join(", ");
+    throw Object.assign(
+      new Error(
+        `Cannot bill against unpublished rate schedule(s): ${detail}. Publish them first.`,
+      ),
+      { statusCode: 409, code: "SCHEDULE_NOT_PUBLISHED" },
+    );
+  }
+
+  // 3. manifest — collect schedule-driven keys
+  const manifestKeys = engine.manifest(base);
+
+  // 4. Pre-load meter-keyed vars (engine infers meter ids from
+  //    meter:reads:* keys at rate time; we add them up-front so the
+  //    engine doesn't have to call back into the registry).
+  /*
+   * The meters installed **during this period**, not the ones
+   * installed today — the same point the TOU comment below makes
+   * about register mappings, applied to the installation itself.
+   *
+   * Closing an agreement end-dates its service points and removes
+   * its meter installations, so `endDate: null` / `removedDate:
+   * null` found nothing for a final bill and the engine was handed
+   * no reads for a meter that had reported all month. It is also
+   * what a re-rate of any historical period needs: the meter that
+   * was on the service point then.
+   */
+  const spMeters = await tx.serviceAgreement.findUniqueOrThrow({
+    where: { id: saId, utilityId },
+    select: {
+      servicePoints: {
+        where: {
+          startDate: { lte: period.endDate },
+          OR: [{ endDate: null }, { endDate: { gte: period.startDate } }],
+        },
+        include: {
+          meters: {
+            where: {
+              addedDate: { lte: period.endDate },
+              OR: [{ removedDate: null }, { removedDate: { gte: period.startDate } }],
+            },
+            select: { meterId: true },
+          },
+        },
+      },
+    },
+  });
+  const meterIds = spMeters.servicePoints.flatMap((sp) => sp.meters.map((m) => m.meterId));
+  const meterKeys = meterIds.flatMap((id) => [`meter:reads:${id}`, `meter:size:${id}`]);
+
+  /*
+   * 4a. TOU buckets (spec 26, TOU-REG-1).
+   *
+   * Asked for by **what the tariff prices**, crossed with the SA's
+   * meters — not by the meter's current register mapping. A rate
+   * schedule is versioned and effective-dated; a register mapping is
+   * neither, so deriving the keys from it made re-rating a period
+   * from before a remap ask about today's periods and fail rather
+   * than reproduce the original bill.
+   *
+   * Whether a period is *answerable* is then the loader's business,
+   * and it reads that off the reads themselves, which carry the code
+   * they were stamped with at import. A non-TOU schedule prices no
+   * TOU period, so this adds no keys and costs no query.
+   */
+  const touKeys = engine
+    .touPeakCodes(base)
+    .flatMap((peakCode) => meterIds.map((id) => `meter:tou:${id}:${peakCode}`));
+
+  // 5. registry + loadVariables
+  const registry = buildRegistry(tx as unknown as typeof prisma, {
+    utilityId,
+    saId,
+    accountId: base.sa.accountId,
+    premiseId: base.sa.premiseId,
+    period,
+  });
+  const vars = await registry.loadVariables([...manifestKeys, ...meterKeys, ...touKeys]);
+
+  // 6. rate
+  const result = engine.rate({ base, vars });
+  return { base, result, meterIds };
 }
 
 async function assembleSegmentWithLines(

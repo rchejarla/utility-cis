@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
@@ -78,7 +78,7 @@ describe("a draft schedule", () => {
     mockGets(schedule());
     await renderPage();
 
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(screen.getByTestId("tou-calendar-field")).getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("saves the calendar that was picked", async () => {
@@ -87,7 +87,7 @@ describe("a draft schedule", () => {
     await renderPage();
 
     await userEvent.selectOptions(screen.getByLabelText("TOU calendar"), "cal-1");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(within(screen.getByTestId("tou-calendar-field")).getByRole("button", { name: "Save" }));
 
     expect(put).toHaveBeenCalledWith("/api/v1/rate-schedules/rs-1/tou-calendar", {
       touCalendarId: "cal-1",
@@ -115,7 +115,7 @@ describe("a draft schedule", () => {
     await renderPage();
 
     await userEvent.selectOptions(screen.getByLabelText("TOU calendar"), "");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(within(screen.getByTestId("tou-calendar-field")).getByRole("button", { name: "Save" }));
 
     expect(put).toHaveBeenCalledWith("/api/v1/rate-schedules/rs-1/tou-calendar", {
       touCalendarId: null,

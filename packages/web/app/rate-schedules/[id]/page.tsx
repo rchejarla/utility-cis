@@ -43,6 +43,15 @@ interface RateSchedule {
   touCalendarId?: string | null;
   /** Fetched beside the schedule — there is no Prisma relation to include. */
   touCalendar?: TouCalendar | null;
+  /** The schedule a shadow bill compares this one against (spec 26, TOU-BIL-4) — a code. */
+  comparisonScheduleCode?: string | null;
+}
+
+interface ScheduleOption {
+  code: string;
+  name: string;
+  commodityId?: string;
+  touCalendarId?: string | null;
 }
 
 interface TouCalendar {
@@ -102,6 +111,10 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   /** The calendar picked but not yet saved; `null` means "same as stored". */
   const [pickedCalendarId, setPickedCalendarId] = useState<string | null>(null);
   const [savingCalendar, setSavingCalendar] = useState(false);
+  const [schedules, setSchedules] = useState<ScheduleOption[]>([]);
+  /** The comparison picked but not yet saved; `null` means "same as stored". */
+  const [pickedComparison, setPickedComparison] = useState<string | null>(null);
+  const [savingComparison, setSavingComparison] = useState(false);
 
   const isEditable = !!rs && !rs.publishedAt && !rs.supersededById;
   // One derivation, shared with the list — see rate-schedule-lifecycle.
@@ -176,6 +189,49 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
       toast(message, "error");
     } finally {
       setSavingCalendar(false);
+    }
+  };
+
+  /*
+   * The comparison's candidates: the same commodity, the opposite kind — a
+   * TOU tariff compares with a standard one and the reverse, the rule the
+   * server enforces. One entry per code, since the comparison names a
+   * tariff and its version is resolved per billed period.
+   */
+  useEffect(() => {
+    if (!isEditable || !canEdit || !rs?.commodityId || schedules.length > 0) return;
+    apiClient
+      .get<{ data: ScheduleOption[] }>("/api/v1/rate-schedules", { commodityId: rs.commodityId, limit: "500" })
+      .then((res) => setSchedules(res.data ?? []))
+      .catch(console.error);
+  }, [isEditable, canEdit, rs?.commodityId, schedules.length]);
+
+  const comparisonOptions = (() => {
+    if (!rs) return [];
+    const isTou = !!rs.touCalendarId;
+    const seen = new Set<string>();
+    return schedules.filter((s) => {
+      if (s.code === rs.code || !!s.touCalendarId === isTou || seen.has(s.code)) return false;
+      seen.add(s.code);
+      return true;
+    });
+  })();
+
+  const handleSaveComparison = async () => {
+    if (pickedComparison === null) return;
+    setSavingComparison(true);
+    try {
+      const updated = await apiClient.put<RateSchedule>(`/api/v1/rate-schedules/${id}/comparison-schedule`, {
+        comparisonScheduleCode: pickedComparison === "" ? null : pickedComparison,
+      });
+      setRs((prev) => (prev ? { ...prev, comparisonScheduleCode: updated.comparisonScheduleCode ?? null } : prev));
+      setPickedComparison(null);
+      toast("Comparison schedule saved", "success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message.replace(/^API error \d+:\s*/, "") : "Could not save";
+      toast(message, "error");
+    } finally {
+      setSavingComparison(false);
     }
   };
 
@@ -497,6 +553,72 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
                   {isEditable
                     ? "Charges priced by TOU period name the periods; this says which hours each one covers. Publishing is refused until every period this calendar uses has a charge."
                     : "Part of what was approved — revise the schedule to price against different hours."}
+                </div>
+              </div>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Compare against</span>
+              <div data-testid="comparison-field">
+                <span
+                  style={{
+                    ...valueStyle,
+                    color: rs.comparisonScheduleCode ? "var(--text-primary)" : "var(--text-muted)",
+                    fontFamily: rs.comparisonScheduleCode ? "monospace" : "inherit",
+                  }}
+                >
+                  {rs.comparisonScheduleCode ?? "None — no shadow bill"}
+                </span>
+
+                {isEditable && canEdit && (
+                  <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
+                    <select
+                      aria-label="Comparison schedule"
+                      value={pickedComparison ?? rs.comparisonScheduleCode ?? ""}
+                      onChange={(e) => setPickedComparison(e.target.value)}
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: "var(--radius)",
+                        border: "1px solid var(--border)",
+                        background: "var(--bg-elevated)",
+                        color: "var(--text-primary)",
+                        fontSize: "12px",
+                        fontFamily: "inherit",
+                        maxWidth: "340px",
+                      }}
+                    >
+                      <option value="">None — no shadow bill</option>
+                      {comparisonOptions.map((o) => (
+                        <option key={o.code} value={o.code}>
+                          {o.code} — {o.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleSaveComparison}
+                      disabled={savingComparison || pickedComparison === null}
+                      style={{
+                        padding: "6px 14px",
+                        borderRadius: "var(--radius)",
+                        border: "none",
+                        background: "var(--accent-primary)",
+                        color: "#fff",
+                        fontSize: "12px",
+                        fontWeight: 500,
+                        fontFamily: "inherit",
+                        cursor: savingComparison || pickedComparison === null ? "not-allowed" : "pointer",
+                        opacity: savingComparison || pickedComparison === null ? 0.6 : 1,
+                      }}
+                    >
+                      {savingComparison ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                )}
+
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "6px" }}>
+                  {rs.touCalendarId
+                    ? "The standard rate a shadow bill compares this time-of-use tariff with — what the customer would have paid on it."
+                    : "The time-of-use rate a shadow bill compares this standard tariff with."}
+                  {isEditable ? "" : " Set on a draft; revise the schedule to change it."}
                 </div>
               </div>
             </div>

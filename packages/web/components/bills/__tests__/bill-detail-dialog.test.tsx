@@ -468,6 +468,71 @@ describe("Bill detail — fees and adjustments", () => {
   });
 
   /*
+   * The shadow bill (spec 26, TOU-BIL-4): what the period would have cost
+   * on the tariff's comparison schedule, rated on request. Offered on a
+   * bill with TOU usage, since that is the direction built so far.
+   */
+  const TOU = {
+    touSections: [
+      {
+        heading: "Electric — usage by time of day",
+        rows: [{ label: "Peak", usage: "200.00 kWh", share: "20%", amount: "60.00" }],
+        footnote: [],
+      },
+    ],
+  };
+  function routeWithShadow(shadow: unknown) {
+    get.mockImplementation((path: string) => {
+      if (path.includes("/shadow")) {
+        return shadow instanceof Error ? Promise.reject(shadow) : Promise.resolve(shadow);
+      }
+      if (path.includes("/presentation")) return Promise.resolve(presentation(TOU));
+      if (path.includes("/deliveries")) return Promise.resolve([]);
+      return Promise.resolve(bill([line()]));
+    });
+  }
+
+  it("compares a TOU segment with its standard rate, saying which way it went", async () => {
+    routeWithShadow({
+      shadow: {
+        schedules: [{ code: "RES-STD", name: "Residential standard", version: 1 }],
+        total: "130.0000",
+        lines: [{ label: "Energy", kindCode: "consumption", amount: "120.0000", quantity: "1000.0000", unit: "kWh" }],
+      },
+      difference: "-4.0000",
+    });
+    renderDialog();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Compare rates" }));
+
+    const panel = await screen.findByTestId("shadow-bill");
+    expect(get).toHaveBeenCalledWith("/api/v1/bill-segments/s-1/shadow");
+    expect(within(panel).getByText("RES-STD v1")).toBeInTheDocument();
+    expect(within(panel).getByText("$130.00")).toBeInTheDocument();
+    expect(within(panel).getByTestId("shadow-difference").textContent).toMatch(/\$4\.00 less than billed/);
+    expect(within(panel).getByText(/never stored or sent to the customer/)).toBeInTheDocument();
+  });
+
+  it("shows the server's reason when there is nothing to compare with", async () => {
+    routeWithShadow(new Error("API error 409: None of this period's rate schedules names a comparison schedule"));
+    renderDialog();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Compare rates" }));
+
+    expect((await screen.findByTestId("shadow-bill")).textContent).toBe(
+      "None of this period's rate schedules names a comparison schedule",
+    );
+  });
+
+  it("offers no comparison on a bill without TOU usage", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    await screen.findByText("4.71 HCF");
+    expect(screen.queryByRole("button", { name: "Compare rates" })).not.toBeInTheDocument();
+  });
+
+  /*
    * Resolving a presentation refuses an incomplete issuer or recipient
    * with a 422. The dialog still has a bill to show, and rated lines
    * with the stored total beat a popup that will not open.

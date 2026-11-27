@@ -84,6 +84,12 @@ export const EVENT_TYPES = {
    */
   RATE_SCHEDULE_TOU_CALENDAR_SET: "rate_schedule.tou_calendar_set",
   /**
+   * Which schedule a shadow bill compares this one against (spec 26,
+   * TOU-BIL-4). Draft-only like the calendar, and its own event for the
+   * same reason: a field set outside `revise` on an otherwise immutable row.
+   */
+  RATE_SCHEDULE_COMPARISON_SET: "rate_schedule.comparison_set",
+  /**
    * A TOU calendar decides what a bill costs as surely as a price does,
    * so its lifecycle is audited the way a rate schedule's is. The
    * content edits get their own type rather than one `updated`, because

@@ -16,8 +16,10 @@ unstarted.
   (TOU-BIL-1).
 - **Built 2026-11-27:** TOU on the bill — the usage-by-period table with
   shares and the hours footnote (TOU-BIL-2) — and the portal's billed
-  usage by period and by hour (TOU-BIL-3).
-- **Not built:** the shadow bill (TOU-BIL-4 — plan slices 3a, 3b, 4); modeling (TOU-MOD-*, slice 4, overlapping
+  usage by period and by hour (TOU-BIL-3), and the staff shadow bill,
+  TOU → standard (TOU-BIL-4, slice 3a).
+- **Not built:** the rest of the shadow bill — standard → TOU from
+  intervals, and the portal toggle (TOU-BIL-4, slices 3b and 4); modeling (TOU-MOD-*, slice 4, overlapping
   spec 29); the TOU-INT-8 volume measurement; and the follow-ups marked
   in place — the register-mapping importer (§3a), the zoneless-file
   warning (§3b), predicting interval gaps at preview (TOU-INT-4a),
@@ -1835,6 +1837,37 @@ it is wrong.
   considering it, show what the same usage would have cost on the
   standard rate. Shown to staff, and in the portal when the tenant
   enables it.
+
+  *Staff half, TOU → standard, built 2026-11-27* (plan slice 3a):
+
+  - **Which schedule to compare with** is `rate_schedule.comparison_schedule_code`,
+    set by `PUT /api/v1/rate-schedules/:id/comparison-schedule`. It is a
+    **code** because the other tariff versions on its own: the version used
+    is the one published and in effect on the billed period's start,
+    highest version. It must name the opposite kind (a TOU schedule
+    compares with a standard one and the reverse), the same commodity, and
+    not itself. Like the calendar it is **draft-only**, audited as
+    `rate_schedule.comparison_set`, and carried forward by a revise. It is
+    on the schedule rather than a tenant setting because a tenant with a
+    residential and a commercial TOU tariff compares each with a different
+    standard rate.
+  - **`GET /api/v1/bill-segments/:id/shadow`** (`agreements:VIEW`) rates the
+    segment's period through `rateAgreementPeriod` — the steps segment
+    creation uses, extracted so the two cannot drift — with each comparing
+    assignment swapped for its comparison schedule. Riders and other
+    assignments carry over unchanged. **Nothing is written**: no segment,
+    no lines, no `billedAt`, no audit row. The actual side is the stored
+    segment, the charge itself; if reads were corrected since, the shadow
+    rates the corrected ones, and settling that is a rebill's job.
+  - Refusals, all 409: `NO_COMPARISON_SCHEDULE`;
+    `COMPARISON_SCHEDULE_NOT_IN_FORCE`; and `SHADOW_TOU_NOT_AVAILABLE` for
+    the standard → TOU direction, which needs usage split by period that
+    a standard customer's meter has only as intervals (slice 3b).
+  - **UI:** the rate schedule page's "Compare against" field, and "Compare
+    rates" on each segment of the staff bill dialog for a bill with TOU
+    usage, captioned as a comparison never stored or sent.
+
+  Not built: the standard → TOU direction (3b) and the portal toggle (4).
 
 ## 7. Modeling (the stand-alone rate engine offer)
 

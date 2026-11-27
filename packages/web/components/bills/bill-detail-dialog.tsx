@@ -101,6 +101,22 @@ interface BillPresentationView {
   }>;
 }
 
+/**
+ * What a billed period would have cost on its tariff's comparison schedule
+ * (spec 26, TOU-BIL-4). Rated on request and never stored.
+ */
+interface ShadowBillView {
+  shadow: {
+    schedules: Array<{ code: string; name: string; version: number }>;
+    total: string;
+    lines: Array<{ label: string; kindCode: string; amount: string; quantity: string | null; unit: string | null }>;
+  };
+  /** Comparison minus actual: positive means the comparison would have cost more. */
+  difference: string;
+}
+
+type ShadowState = { loading: true } | { data: ShadowBillView } | { error: string };
+
 /** One attempt to deliver this bill. */
 interface Delivery {
   id: string;
@@ -124,6 +140,29 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
   const [presentation, setPresentation] = useState<BillPresentationView | null>(null);
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
+  const [shadows, setShadows] = useState<Record<string, ShadowState>>({});
+
+  /*
+   * Offered on a bill with time-of-use usage: in this slice the comparison
+   * runs TOU → standard, so a bill without TOU sections has nothing that
+   * could answer. The server is still the judge, and its refusal is shown.
+   */
+  const canCompare = (presentation?.touSections?.length ?? 0) > 0;
+
+  const compare = (segmentId: string) => {
+    setShadows((s) => ({ ...s, [segmentId]: { loading: true } }));
+    apiClient
+      .get<ShadowBillView>(`/api/v1/bill-segments/${segmentId}/shadow`)
+      .then((data) => setShadows((s) => ({ ...s, [segmentId]: { data } })))
+      .catch((err) =>
+        setShadows((s) => ({
+          ...s,
+          [segmentId]: {
+            error: err instanceof Error ? err.message.replace(/^API error \d+:\s*/, "") : "Could not compare",
+          },
+        })),
+      );
+  };
 
   const load = useCallback(() => {
     return apiClient
@@ -392,8 +431,13 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                   <span style={{ fontFamily: "monospace", fontSize: "12px", color: "var(--text-muted)" }}>
                     {seg.segmentNumber}
                   </span>
-                  <span style={{ fontFamily: "monospace", fontSize: "13px", fontWeight: 600 }}>
-                    {fmt(seg.total)}
+                  <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {canCompare && !shadows[seg.id] && (
+                      <SmallButton onClick={() => compare(seg.id)} label="Compare rates" />
+                    )}
+                    <span style={{ fontFamily: "monospace", fontSize: "13px", fontWeight: 600 }}>
+                      {fmt(seg.total)}
+                    </span>
                   </span>
                 </div>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -418,6 +462,7 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                     ))}
                   </tbody>
                 </table>
+                {shadows[seg.id] && <ShadowPanel state={shadows[seg.id]!} />}
               </div>
             ))}
 
@@ -547,6 +592,72 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The shadow bill under its segment: the comparison schedule's total, how
+ * it differs from what was billed, and its lines. Said to be a comparison
+ * in so many words — it is never on the customer's bill.
+ */
+function ShadowPanel({ state }: { state: ShadowState }) {
+  const box: React.CSSProperties = {
+    padding: "10px 14px",
+    background: "var(--bg-elevated)",
+    borderTop: "1px solid var(--border-subtle)",
+    fontSize: 12.5,
+  };
+  if ("loading" in state) {
+    return <div style={{ ...box, color: "var(--text-muted)" }}>Rating the comparison…</div>;
+  }
+  if ("error" in state) {
+    return (
+      <div data-testid="shadow-bill" style={{ ...box, color: "var(--text-secondary)" }}>
+        {state.error}
+      </div>
+    );
+  }
+  const { shadow, difference } = state.data;
+  const diff = parseFloat(difference);
+  const names = shadow.schedules.map((s) => `${s.code} v${s.version}`).join(", ");
+  return (
+    <div data-testid="shadow-bill" style={box}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ color: "var(--text-secondary)" }}>
+          On <strong style={{ fontFamily: "monospace" }}>{names}</strong> this period would have cost
+        </span>
+        <span style={{ fontFamily: "monospace", fontWeight: 600 }}>{fmt(shadow.total)}</span>
+      </div>
+      <div
+        data-testid="shadow-difference"
+        style={{
+          marginBottom: 8,
+          color: diff > 0 ? "var(--success)" : diff < 0 ? "var(--warning)" : "var(--text-muted)",
+        }}
+      >
+        {diff === 0
+          ? "The same as billed."
+          : diff > 0
+            ? `${fmt(String(diff))} more than billed — the customer saved by being on this tariff.`
+            : `${fmt(String(-diff))} less than billed — the comparison would have been cheaper.`}
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <tbody>
+          {shadow.lines.map((l, i) => (
+            <tr key={`${l.label}-${i}`}>
+              <td style={{ ...td, fontSize: 12, color: "var(--text-secondary)" }}>{l.label}</td>
+              <td style={{ ...td, fontSize: 12, textAlign: "right", fontFamily: "monospace" }}>
+                {l.quantity ? `${parseFloat(l.quantity).toFixed(2)}${l.unit ? ` ${l.unit}` : ""}` : "—"}
+              </td>
+              <td style={{ ...td, fontSize: 12, textAlign: "right", fontFamily: "monospace" }}>{fmt(l.amount)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+        A comparison only — rated on request from this period&apos;s reads, never stored or sent to the customer.
       </div>
     </div>
   );
