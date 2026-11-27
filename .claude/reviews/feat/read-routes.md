@@ -78,10 +78,14 @@ only. All four branches are on origin.
     - `saveEntryRow` raced submit → batch row locked (f789931).
     - `routeCode` raw in `Content-Disposition` → ASCII fallback plus
       RFC 5987 `filename*`.
-    - `::date` on a bound JS Date → bound as `YYYY-MM-DD` text in both
-      read-route queries. (Same pattern exists in `ar/statement-snapshot.ts`,
-      `payment-plan/lifecycle.ts` and `effective-dating-queries.ts`, which
-      predate this branch — not touched; worth a separate look.)
+    - `::date` on a bound JS Date — **the finding was wrong** (probed
+      2026-11-27). The Prisma pg adapter sends a Date as untyped text of its
+      UTC wall time, so `::date` is the UTC day in any session zone. The two
+      read-route queries' switch to `YYYY-MM-DD` text is harmless and was
+      kept, with its comments corrected; the same pattern in
+      `ar/statement-snapshot.ts` and `payment-plan/lifecycle.ts` was left as
+      it is, and a ledger-posting test now pins the behaviour under a
+      Denver session so an adapter change would surface.
 - Also fixed from the unit run: `|| true` on the entry screen's empty-field
   guard (806085f) — Enter through a coded row erased its skip reason.
 

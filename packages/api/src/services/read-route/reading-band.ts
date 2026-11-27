@@ -147,9 +147,10 @@ export async function historyForRows(
       WHERE mr.utility_id = ${utilityId}::uuid
         AND mr.meter_id = ANY(${meterIds}::uuid[])
         AND mr.reading IS NOT NULL
-        -- As 'YYYY-MM-DD' text: a JS Date binds as a timestamptz, whose
-        -- ::date is taken in the session's time zone, so the day judged
-        -- depended on the connection rather than on the sheet.
+        -- As 'YYYY-MM-DD' text. A bound JS Date would give the same day —
+        -- the pg adapter sends its UTC wall time as untyped text, which
+        -- ::date reads in any session zone (ledger-posting test) — but the
+        -- explicit day does not lean on how the adapter serialises.
         AND mr.read_date < ${isoDay(onDate)}::date
     ) ranked
     WHERE rn <= ${TRAILING_READS}
