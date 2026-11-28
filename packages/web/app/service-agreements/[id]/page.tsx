@@ -41,6 +41,14 @@ interface ServiceAgreement {
       city: string;
       state: string;
     };
+    /** The meters installed on this point — where meters live since service points replaced agreement meters. */
+    meters?: Array<{
+      id: string;
+      meterId: string;
+      addedDate: string;
+      removedDate?: string | null;
+      meter: { id: string; meterNumber: string; [k: string]: unknown };
+    }>;
   }>;
   commodity?: { name: string };
   commodityId?: string;
@@ -352,6 +360,18 @@ export default function ServiceAgreementDetailPage({
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Agreement not found.</div>;
   }
 
+  /*
+   * The agreement's meters, read off its service points — where they have
+   * lived since service points replaced agreement-meter rows. This page
+   * read `sa.meters`, a field the API stopped returning, so every agreement
+   * showed "Meters (0)", an empty tab, and a Stop Service count of zero
+   * (found 2026-11-28). A service point holds one meter at a time, so the
+   * first is the primary.
+   */
+  const meters = (sa.servicePoints ?? []).flatMap((sp) =>
+    (sp.meters ?? []).map((m, i) => ({ ...m, isPrimary: i === 0 })),
+  );
+
   const availableTransitions = STATUS_TRANSITIONS[sa.status] ?? [];
 
   return (
@@ -431,7 +451,7 @@ export default function ServiceAgreementDetailPage({
       <Tabs
         tabs={[
           { key: "overview", label: "Overview" },
-          { key: "meters", label: `Meters (${sa.meters?.length ?? 0})` },
+          { key: "meters", label: `Meters (${meters.length})` },
           { key: "bills", label: "Bills" },
           { key: "notes", label: "Notes" },
           { key: "attachments", label: "Attachments" },
@@ -964,7 +984,7 @@ export default function ServiceAgreementDetailPage({
             agreementId={sa.id}
             premiseId={sa.servicePoints?.[0]?.premise?.id ?? ""}
             commodityId={sa.commodityId ?? ""}
-            meters={(sa.meters ?? []) as any}
+            meters={meters as any}
             onMetersChanged={loadSA}
             showForm={showAddMeter}
             onShowFormChange={setShowAddMeter}
@@ -1000,7 +1020,7 @@ export default function ServiceAgreementDetailPage({
         <ConfirmDialog
           title="Stop service"
           message={`This will close service agreement ${sa.agreementNumber} and remove all ${
-            sa.meters?.filter((m: any) => !m.removedDate).length ?? 0
+            meters.filter((m) => !m.removedDate).length
           } currently-assigned meters as of the end date below. The action emits an audit row for each row affected and cannot be undone via Edit. Issuing the final bill is a separate step.`}
           confirmLabel={transitioning ? "Stopping…" : "Stop Service"}
           cancelLabel="Cancel"
