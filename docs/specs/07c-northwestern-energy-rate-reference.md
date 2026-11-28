@@ -118,6 +118,7 @@ Reference data points:
 - Energy charge $/kWh, often flat
 - **Demand ratchet** — typically 75-80% of prior 12-month peak (PSC standard)
 - Eligibility — typically up to ~1,000 kW peak demand
+- **In the dev seed** (`NWE-GSEDS-1`, 2026-11-28): customer charge (small $26.50, large $85.00 a month), delivery energy and tax per kWh, for the `small_commercial` and `large_commercial` classes, with default supply on a `supply_commercial` index. **No demand charge** — the engine cannot price demand yet — and the dollar figures are placeholders, not NWE's, so a seeded commercial bill understates a real one by its demand component.
 
 ### GSEDS-2 (Large Commercial / Industrial)
 - Customer charge
