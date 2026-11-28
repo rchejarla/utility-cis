@@ -11,6 +11,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -116,6 +117,7 @@ async function makeStop(
         agreementNumber: `SA-EN-${n}`,
         accountId: opts.accountId ?? fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, TENANT_A, fixA.commodityId),
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
       },

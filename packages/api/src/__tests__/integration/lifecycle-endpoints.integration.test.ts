@@ -10,6 +10,7 @@ import {
   ensurePrincipal,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -114,6 +115,7 @@ async function makeActiveSaWithTwoMeters() {
         agreementNumber: "SA-HTTP",
         accountId: fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
       },
@@ -335,6 +337,7 @@ describe("GET /api/v1/premises/:id/responsible-account", () => {
           agreementNumber: "SA-PIT",
           accountId: fixA.accountId,
           commodityId: fixA.commodityId,
+          rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
           startDate: new Date("2024-01-01"),
           status: "ACTIVE",
         },
@@ -373,6 +376,7 @@ describe("GET /api/v1/premises/:id/responsible-account", () => {
           agreementNumber: "SA-PIT-2",
           accountId: fixA.accountId,
           commodityId: fixA.commodityId,
+          rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
           startDate: new Date("2024-01-01"),
           status: "ACTIVE",
         },
@@ -411,6 +415,7 @@ describe("GET /api/v1/premises/:id/agreement-history", () => {
           agreementNumber: "SA-OLD",
           accountId: fixA.accountId,
           commodityId: fixA.commodityId,
+          rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
           startDate: new Date("2023-01-01"),
           endDate: new Date("2023-12-31"),
           status: "FINAL",
@@ -433,6 +438,7 @@ describe("GET /api/v1/premises/:id/agreement-history", () => {
           agreementNumber: "SA-NEW",
           accountId: fixA.accountId,
           commodityId: fixA.commodityId,
+          rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
           startDate: new Date("2024-01-01"),
           status: "ACTIVE",
         },

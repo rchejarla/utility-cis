@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { ServiceClassSelect } from "@/components/service-agreements/service-class-select";
 import { useRouter } from "next/navigation";
 import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
@@ -15,6 +16,7 @@ import { AccessDenied } from "@/components/ui/access-denied";
 interface Account {
   id: string;
   accountNumber: string;
+  accountType?: string;
 }
 
 interface Premise {
@@ -86,9 +88,14 @@ export default function NewServiceAgreementPage() {
     accountId: "",
     premiseId: "",
     commodityId: "",
+    rateServiceClassId: "",
     startDate: "",
     endDate: "",
   });
+  const setServiceClass = useCallback(
+    (id: string) => setForm((prev) => ({ ...prev, rateServiceClassId: id })),
+    [],
+  );
 
   const [meterEntries, setMeterEntries] = useState<MeterEntry[]>([{ meterId: "", isPrimary: true }]);
 
@@ -147,6 +154,7 @@ export default function NewServiceAgreementPage() {
         accountId: form.accountId,
         premiseId: form.premiseId,
         commodityId: form.commodityId,
+        rateServiceClassId: form.rateServiceClassId,
         startDate: form.startDate,
         meters: validMeters,
       };
@@ -238,6 +246,20 @@ export default function NewServiceAgreementPage() {
                 </option>
               ))}
             </select>
+          </FormField>
+
+          <FormField
+            label="Service class"
+            required
+            hint="The customer category this service is priced as. A rate's charges for a class apply only to agreements in it."
+          >
+            <ServiceClassSelect
+              style={inputStyle}
+              commodityId={form.commodityId}
+              value={form.rateServiceClassId}
+              onChange={setServiceClass}
+              accountType={accounts.find((a) => a.id === form.accountId)?.accountType}
+            />
           </FormField>
 
           <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "-12px" }}>

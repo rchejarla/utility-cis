@@ -8,6 +8,7 @@ import { AccessDenied } from "@/components/ui/access-denied";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
+import { ServiceClassSelect } from "@/components/service-agreements/service-class-select";
 
 /**
  * Move-in wizard — a three-step guided flow for onboarding a customer
@@ -87,10 +88,12 @@ export default function MoveInWizardPage() {
   interface AgreementDraft {
     key: string;
     commodityId: string;
+    /** Required: the customer category this service is priced as. */
+    rateServiceClassId: string;
     agreementNumber: string;
   }
   const [agreements, setAgreements] = useState<AgreementDraft[]>([
-    { key: "a1", commodityId: "", agreementNumber: "" },
+    { key: "a1", commodityId: "", rateServiceClassId: "", agreementNumber: "" },
   ]);
 
   // Data lookups
@@ -131,6 +134,7 @@ export default function MoveInWizardPage() {
       {
         key: `a${prev.length + 1}`,
         commodityId: "",
+        rateServiceClassId: "",
         agreementNumber: "",
       },
     ]);
@@ -151,7 +155,7 @@ export default function MoveInWizardPage() {
       (customerMode === "NEW" &&
         ((customerType === "INDIVIDUAL" && firstName && lastName) ||
           (customerType === "ORGANIZATION" && organizationName))));
-  const step3Valid = agreements.every((a) => a.commodityId);
+  const step3Valid = agreements.every((a) => a.commodityId && a.rateServiceClassId);
 
   const submit = async () => {
     if (!canCreate) {
@@ -169,6 +173,7 @@ export default function MoveInWizardPage() {
         ...(accountNumber ? { accountNumber } : {}),
         agreements: agreements.map((a) => ({
           commodityId: a.commodityId,
+          rateServiceClassId: a.rateServiceClassId,
           // Same for each agreement — omit when blank.
           ...(a.agreementNumber ? { agreementNumber: a.agreementNumber } : {}),
         })),
@@ -576,12 +581,14 @@ export default function MoveInWizardPage() {
                     </button>
                   )}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "10px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px" }}>
                   <div>
                     <label style={labelStyle}>COMMODITY</label>
                     <select
                       value={a.commodityId}
-                      onChange={(e) => updateAgreement(a.key, { commodityId: e.target.value })}
+                      onChange={(e) =>
+                        updateAgreement(a.key, { commodityId: e.target.value, rateServiceClassId: "" })
+                      }
                       style={fieldStyle}
                     >
                       <option value="">Select...</option>
@@ -591,6 +598,16 @@ export default function MoveInWizardPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>SERVICE CLASS</label>
+                    <ServiceClassSelect
+                      style={fieldStyle}
+                      commodityId={a.commodityId}
+                      value={a.rateServiceClassId}
+                      onChange={(id) => updateAgreement(a.key, { rateServiceClassId: id })}
+                      accountType={accountType}
+                    />
                   </div>
                   <div>
                     <label style={labelStyle}>NUMBER (OPTIONAL)</label>

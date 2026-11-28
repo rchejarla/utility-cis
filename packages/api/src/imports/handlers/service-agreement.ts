@@ -83,6 +83,8 @@ interface ServiceAgreementRow {
   agreementNumber?: string;
   accountNumber: string;
   commodityCode: string;
+  /** The customer category, by code, among the commodity's classes. */
+  serviceClassCode: string;
   premiseAddress: string;
   premiseZip: string;
   startDate: Date;
@@ -101,6 +103,14 @@ interface BatchData {
   accountByNumber: Map<string, string>;
   /** Upper-cased commodity code → commodity id. */
   commodityByCode: Map<string, string>;
+  /**
+   * "commodityId|CLASS_CODE" → the active class's id. Classes are defined
+   * per commodity, so the same code ("residential") is a different row for
+   * electric and for sewer.
+   */
+  classByCommodityCode: Map<string, string>;
+  /** The same keys for retired classes, so a retired one is named as such. */
+  retiredClassKeys: Set<string>;
   /** "addr1|zip" (lower-cased addr) → premise id, or the AMBIGUOUS
    *  sentinel when that address and zip matched more than one premise. */
   premiseByAddressZip: Map<string, string>;
@@ -174,6 +184,15 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       description: "Commodity the agreement is for, by code.",
       example: "WATER",
       aliases: ["^commoditycode$", "^commodity$", "^service(type)?$", "^utilitytype$"],
+    },
+    {
+      name: "serviceClassCode",
+      label: "Service class",
+      required: true,
+      description:
+        "The customer category this service is priced as, by code — one of the commodity's classes (e.g. single_family for water, residential for electric). Rate charges restricted to a class apply only to agreements in it.",
+      example: "single_family",
+      aliases: ["^serviceclass(code)?$", "^rateclass(code)?$", "^customerclass$", "^class(code)?$"],
     },
     {
       name: "premiseAddress",
@@ -258,6 +277,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       agreementNumber: "SA-1001",
       accountNumber: "ACC-1001",
       commodityCode: "WATER",
+      serviceClassCode: "single_family",
       premiseAddress: "742 Evergreen Terrace",
       premiseZip: "62704",
       startDate: "2026-01-01",
@@ -286,6 +306,15 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
         ok: false,
         code: "MISSING_COMMODITY_CODE",
         message: "commodity_code is required",
+      };
+    }
+
+    const serviceClassCode = (raw.serviceClassCode ?? "").trim();
+    if (!serviceClassCode) {
+      return {
+        ok: false,
+        code: "MISSING_SERVICE_CLASS",
+        message: "service_class is required — it decides which of the tariff's charges apply",
       };
     }
 
@@ -375,6 +404,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
         agreementNumber: ((raw.agreementNumber ?? "").trim()) || undefined,
         accountNumber,
         commodityCode,
+        serviceClassCode,
         premiseAddress,
         premiseZip,
         startDate,
@@ -408,6 +438,19 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       select: { id: true, code: true },
     });
     for (const c of commodities) commodityByCode.set(c.code.toUpperCase(), c.id);
+
+    // Every class, a few dozen per tenant at most; keyed by commodity.
+    const classByCommodityCode = new Map<string, string>();
+    const retiredClassKeys = new Set<string>();
+    const classes = await prisma.rateServiceClass.findMany({
+      where: { utilityId: ctx.utilityId },
+      select: { id: true, code: true, commodityId: true, isActive: true },
+    });
+    for (const c of classes) {
+      const key = `${c.commodityId}|${c.code.toUpperCase()}`;
+      if (c.isActive) classByCommodityCode.set(key, c.id);
+      else retiredClassKeys.add(key);
+    }
 
     // Premise by composite key. Postgres has no composite IN through
     // Prisma, so fetch by the zips the batch names and bucket here.
@@ -527,6 +570,8 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
     return {
       accountByNumber,
       commodityByCode,
+      classByCommodityCode,
+      retiredClassKeys,
       premiseByAddressZip,
       meterByNumber,
       scheduleByCode,
@@ -553,6 +598,22 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
         code: "COMMODITY_NOT_FOUND",
         message: `No commodity with code "${row.commodityCode}"`,
       };
+    }
+
+    const classKey = `${commodityId}|${row.serviceClassCode.toUpperCase()}`;
+    const rateServiceClassId = batch.classByCommodityCode.get(classKey);
+    if (!rateServiceClassId) {
+      return batch.retiredClassKeys.has(classKey)
+        ? {
+            ok: false,
+            code: "SERVICE_CLASS_RETIRED",
+            message: `Service class "${row.serviceClassCode}" is retired for ${row.commodityCode}`,
+          }
+        : {
+            ok: false,
+            code: "SERVICE_CLASS_NOT_FOUND",
+            message: `No service class "${row.serviceClassCode}" for ${row.commodityCode}`,
+          };
     }
 
     const premiseId = batch.premiseByAddressZip.get(
@@ -657,6 +718,8 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
         where: { id: existing.id },
         data: {
           customFields: custom.values as object,
+          // Mirrored like the rest: the legacy system's class is the truth.
+          rateServiceClassId,
           startDate: row.startDate,
           endDate: row.endDate ?? null,
           status: row.status,
@@ -757,6 +820,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
           agreementNumber,
           accountId,
           commodityId,
+          rateServiceClassId,
           startDate: row.startDate,
           endDate: row.endDate ?? null,
           status: row.status,

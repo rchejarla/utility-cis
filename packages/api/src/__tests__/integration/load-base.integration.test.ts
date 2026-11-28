@@ -8,6 +8,7 @@ import {
   TENANT_A,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { loadBase as loadBaseUnscoped } from "../../lib/rate-engine-loaders/load-base.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
@@ -108,6 +109,7 @@ async function makeSaWithSchedule(opts: {
         agreementNumber: opts.agreementNumber ?? "SA-LB-1",
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },

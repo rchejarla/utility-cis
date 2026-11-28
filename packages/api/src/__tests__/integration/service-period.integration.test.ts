@@ -9,6 +9,7 @@ import {
   type TenantFixture,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -79,6 +80,7 @@ beforeEach(() =>
       agreementNumber: "SA-PERIOD",
       accountId: fix.accountId,
       commodityId: fix.commodityId,
+      rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
       startDate: new Date("2025-11-01T00:00:00.000Z"),
       status: "ACTIVE",
     },

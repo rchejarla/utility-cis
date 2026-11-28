@@ -8,6 +8,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
 import { MeterLoader } from "../../lib/rate-engine-loaders/loaders/meter-loader.js";
@@ -103,6 +104,7 @@ async function makeFixture(peakStart = 17 * 60): Promise<Fixture> {
         agreementNumber: "SA-TOU-1",
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },

@@ -11,6 +11,7 @@ import {
   ensurePrincipal,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -298,6 +299,7 @@ beforeEach(() =>
         agreementNumber: "SA-SHADOW",
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },
@@ -355,6 +357,7 @@ describe("a TOU customer, compared with the standard rate", () => {
           agreementNumber: "SA-OTHER",
           accountId: fix.accountId,
           commodityId: fix.commodityId,
+          rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
           startDate: new Date("2026-01-01"),
           status: "ACTIVE",
         },

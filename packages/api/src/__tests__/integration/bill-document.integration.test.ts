@@ -9,6 +9,7 @@ import {
   truncateTables,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -295,6 +296,7 @@ async function postedBill(
         agreementNumber: `SA-${suffix}`,
         accountId: account.id,
         commodityId: commodity.id,
+        rateServiceClassId: await serviceClassFor(prisma, utilityId, commodity.id),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },

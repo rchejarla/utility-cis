@@ -11,6 +11,7 @@ import {
   TENANT_A,
   TENANT_B,
   type TenantFixture,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
 
@@ -108,6 +109,7 @@ beforeEach(async () => {
         agreementNumber: "SA-MRD-1",
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prismaImports.prisma, fix.utilityId, fix.commodityId),
         startDate: new Date("2026-01-01"),
       },
     });

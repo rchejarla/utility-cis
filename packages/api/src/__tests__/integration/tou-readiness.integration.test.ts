@@ -8,6 +8,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
 
@@ -185,6 +186,7 @@ async function makeScene(opts: {
         agreementNumber: `SA-TOU-${Math.random().toString(36).slice(2, 8)}`,
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, TENANT_A, fix.commodityId),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },

@@ -49,6 +49,9 @@ export const moveInSchema = z.object({
   newCustomer: newCustomerPayload.optional(),
   agreements: z.array(z.object({
     commodityId: z.string().uuid(),
+    // Required: the customer category this service is priced as, one of
+    // this commodity's active classes (see createServiceAgreementSchema).
+    rateServiceClassId: z.string().uuid(),
     // Optional: auto-generated per agreement from the tenant template.
     agreementNumber: z.string().min(1).max(50).optional(),
     initialMeterReadings: z.array(z.object({

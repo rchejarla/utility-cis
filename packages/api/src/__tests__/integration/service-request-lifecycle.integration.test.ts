@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform, serviceClassFor } from "./_effective-dating-fixtures.js";
 
 /**
  * The service-request lifecycle over HTTP: create, list, assign,
@@ -331,6 +331,7 @@ describe("service request lifecycle over HTTP", () => {
           utilityId,
           accountId: account.id,
           commodityId: commodity.id,
+          rateServiceClassId: await serviceClassFor(prisma, utilityId, commodity.id),
           agreementNumber: "SA-L-0421",
           status: "ACTIVE",
           startDate: new Date("2026-01-01"),

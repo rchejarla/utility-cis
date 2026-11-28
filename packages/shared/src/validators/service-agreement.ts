@@ -37,6 +37,15 @@ export const createServiceAgreementSchema = z.object({
   accountId: z.string().uuid(),
   premiseId: z.string().uuid(),
   commodityId: z.string().uuid(),
+  /**
+   * The customer category this service is priced as — residential, single
+   * family, commercial… — defined per commodity, the way each service's
+   * tariff defines its own. **Required** (2026-11-28): a rate charge
+   * restricted to a class silently fails to apply to an agreement with
+   * none, which billed water and sewer customers short with nothing raised.
+   * Must be one of this commodity's active classes; the service checks.
+   */
+  rateServiceClassId: z.string().uuid(),
   startDate: z.string().date(),
   endDate: z.string().date().optional(),
   status: agreementStatusEnum.default("PENDING"),
@@ -61,6 +70,13 @@ export const createServiceAgreementSchema = z.object({
 // `read_route_stop.sequence`.
 export const updateServiceAgreementSchema = z.object({
   customFields: z.record(z.unknown()).optional(),
+  /**
+   * Correcting the class. Not dated: rating reads the current class, so a
+   * change applies to every period rated from now on, a re-rate of an
+   * earlier period included. Right for fixing a wrong class; a customer who
+   * genuinely changes category mid-term would need it dated (spec 05).
+   */
+  rateServiceClassId: z.string().uuid().optional(),
 }).strict();
 
 export const closeServiceAgreementSchema = z.object({

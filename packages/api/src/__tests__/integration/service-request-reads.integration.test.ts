@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform, serviceClassFor } from "./_effective-dating-fixtures.js";
 
 import { runAsTenant } from "../../lib/tenant-context.js";
 /**
@@ -138,6 +138,7 @@ beforeAll(() =>
       utilityId,
       accountId,
       commodityId: commodity.id,
+      rateServiceClassId: await serviceClassFor(prisma, utilityId, commodity.id),
       agreementNumber: "SA-0421",
       status: "ACTIVE",
       startDate: new Date("2026-01-01"),

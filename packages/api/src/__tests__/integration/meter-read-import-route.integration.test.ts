@@ -11,6 +11,7 @@ import {
   truncateTables,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -156,6 +157,7 @@ beforeEach(() =>
         agreementNumber: "SA-ROUTE",
         accountId: fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
       },

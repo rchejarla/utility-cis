@@ -124,6 +124,12 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
   if (!electric || !kwh || !measureUsage) {
     return { skipped: "no ELECTRIC commodity, KWH unit or USAGE measure type" };
   }
+  const residentialElectricClass = await p.rateServiceClass.findFirst({
+    where: { utilityId, commodityId: electric.id, code: "residential" },
+  });
+  if (!residentialElectricClass) {
+    return { skipped: "no residential service class for ELECTRIC" };
+  }
 
   const account = await p.account.findFirst({
     where: { utilityId },
@@ -253,6 +259,10 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
         agreementNumber,
         accountId: account.id,
         commodityId: electric.id,
+        // Required since 2026-11-28. Residential premises, so electric
+        // "residential" — without it the standard rate's residential-only
+        // charges would not apply when these customers are compared with it.
+        rateServiceClassId: residentialElectricClass.id,
         startDate: billWindow.startDate,
         status: "ACTIVE",
       },

@@ -11,6 +11,7 @@ import {
   type TenantFixture,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -90,6 +91,8 @@ beforeEach(() =>
   fixA = await makeTenantFixture(prisma, TENANT_A);
   fixB = await makeTenantFixture(prisma, TENANT_B, { suffix: "0bbb" });
 
+  const classA = await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId);
+
   // Build the timeline for tenant A.
   const sa1 = await prisma.serviceAgreement.create({
     data: {
@@ -97,6 +100,7 @@ beforeEach(() =>
       agreementNumber: "SA-A1",
       accountId: fixA.accountId,
       commodityId: fixA.commodityId,
+      rateServiceClassId: classA,
       startDate: new Date("2024-01-01"),
       endDate: new Date("2024-06-30"),
       status: "FINAL",
@@ -155,6 +159,7 @@ beforeEach(() =>
       agreementNumber: "SA-A2",
       accountId: acct2.id,
       commodityId: fixA.commodityId,
+      rateServiceClassId: classA,
       startDate: new Date("2024-07-01"),
       status: "ACTIVE",
     },
