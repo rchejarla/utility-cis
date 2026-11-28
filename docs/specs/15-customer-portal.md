@@ -116,7 +116,6 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 | GET | `/portal/api/agreements/:id/billed-periods/:segmentId/usage` | portal_usage | One billed period's usage: `byPeriod` — the bill's own usage-by-TOU-period table and hours footnote — and `hourly`, a 24-hour profile stacked by TOU period, `null` for a meter with no interval data (2026-11-27) |
 | GET | `/portal/api/agreements/:id/usage` | portal_usage | Meter reads for an agreement (accepts `from`, `to` YYYY-MM params), each with its `peakCode` (null for a total read), plus `monthly` — the month totals, computed server-side by the rating engine's rule |
 | GET | `/portal/api/bills/:id/document` | accounts | The customer's own bill PDF, streamed through the API |
-| GET | `/portal/api/bills/:billId/rate-comparison` | portal_billing | What a posted bill would have cost on its tariff's comparison rate, per segment (spec 26, TOU-BIL-4). 404 for a stranger's bill, an unposted one, a tenant that has not turned `settings.portal.showRateComparison` on, or a bill with nothing to compare. A segment the comparison cannot answer carries `unavailable` instead of figures (2026-11-27) |
 | GET | `/portal/api/profile` | portal_profile | Customer contact info |
 | PATCH | `/portal/api/profile` | portal_profile | Update email, phone, altPhone |
 
@@ -158,8 +157,7 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 
    This replaced `packages/web/lib/mock-billing.ts`, now deleted. The note that used to sit here — that bills would switch to real data "when the SaaSLogic invoice mirror ships (Phase 3)" and that the mock shapes made it "a one-line change" — was wrong on both counts and is worth recording as a lesson: the invoice mirror was **cancelled** on 2026-10-09 when CIS took over rating, so the screens were waiting on something nobody was going to build, while the real source had been there all along. And the shapes did not port: the mock invented a premise, a commodity list, a lifetime-paid figure and an on-time rate, three of which have no source in this data model at all.
 
-7. **Rate comparison on the bills list** (2026-11-27, spec 26 TOU-BIL-4). When the utility turns on "Show rate comparisons in the customer portal" (Settings → Bill Production; off by default), each bill row the API flags `rateComparison: true` offers "Compare rates", which says in plain terms what the other rate would have cost and which way it went — "your rate saved you $7.25", or that the other rate would have been less. It states the figures and makes no recommendation; what to say about switching is the utility's. Nothing about comparisons reaches the browser while the setting is off.
-8. **Bill PDFs are fetch-only in the portal.** `BillPdfButton` takes `surface="portal"`, which routes to `/portal/api/bills/:id/document` and, on a 404, says the bill is not available yet instead of generating one. Generating is `accounts:EDIT`, which no portal token holds, so the staff fetch-then-generate fallback would have shown a customer an authorization error for a bill that is legitimately theirs.
+7. **Bill PDFs are fetch-only in the portal.** `BillPdfButton` takes `surface="portal"`, which routes to `/portal/api/bills/:id/document` and, on a 404, says the bill is not available yet instead of generating one. Generating is `accounts:EDIT`, which no portal token holds, so the staff fetch-then-generate fallback would have shown a customer an authorization error for a bill that is legitimately theirs.
 
 ## Phase Roadmap
 

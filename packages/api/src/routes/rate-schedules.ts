@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
   assignTouCalendarSchema,
-  assignComparisonScheduleSchema,
   createRateScheduleSchema,
   rateScheduleQuerySchema,
   reviseRateScheduleSchema,
@@ -13,7 +12,6 @@ import {
   reviseRateSchedule,
   publishRateSchedule,
   assignTouCalendar,
-  assignComparisonSchedule,
 } from "../services/rate-schedule.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { registerCrudRoutes } from "../lib/crud-routes.js";
@@ -61,18 +59,6 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       const { touCalendarId } = assignTouCalendarSchema.parse(request.body);
       return assignTouCalendar(utilityId, actorId, actorName, id, touCalendarId);
-    },
-  );
-
-  /** The schedule a shadow bill compares this one against (spec 26, TOU-BIL-4). Draft-only. */
-  app.put(
-    "/api/v1/rate-schedules/:id/comparison-schedule",
-    { config: { module: "rate_schedules", permission: "EDIT" } },
-    async (request) => {
-      const { utilityId, id: actorId, name: actorName } = request.user;
-      const { id } = idParamSchema.parse(request.params);
-      const { comparisonScheduleCode } = assignComparisonScheduleSchema.parse(request.body);
-      return assignComparisonSchedule(utilityId, actorId, actorName, id, comparisonScheduleCode);
     },
   );
 

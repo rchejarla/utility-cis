@@ -74,15 +74,10 @@ export default function BillProductionSettingsPage() {
     "billDocuments",
     storageDefaults,
   );
-  const portalDefaults = useMemo(() => ({ showRateComparison: false }), []);
-  const portal = useTenantSettingsNamespace<"portal", { showRateComparison: boolean }>(
-    "portal",
-    portalDefaults,
-  );
 
   if (!canView) return <AccessDenied />;
 
-  const loading = issuer.loading || storage.loading || portal.loading;
+  const loading = issuer.loading || storage.loading;
   const missing = REQUIRED_ISSUER_FIELDS.filter(
     (f) => (issuer.draft[f] ?? "").trim() === "",
   );
@@ -92,13 +87,11 @@ export default function BillProductionSettingsPage() {
   async function saveBoth() {
     if (issuer.isDirty) await issuer.save();
     if (storage.isDirty) await storage.save();
-    if (portal.isDirty) await portal.save();
   }
 
   function resetBoth() {
     issuer.reset();
     storage.reset();
-    portal.reset();
   }
 
   if (loading) {
@@ -192,33 +185,9 @@ export default function BillProductionSettingsPage() {
         </SettingsCard>
       </div>
 
-      <div style={{ marginTop: 24 }}>
-        <SettingsCard>
-          <SettingRow
-            label="Show rate comparisons in the customer portal"
-            description="Lets customers see what a posted bill would have cost on the rate its tariff is compared with — time-of-use against standard, or the reverse. Off until you decide customers should see it; staff always can."
-            control={
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: canEdit ? "pointer" : "not-allowed" }}>
-                <input
-                  type="checkbox"
-                  aria-label="Show rate comparisons in the customer portal"
-                  checked={portal.draft.showRateComparison}
-                  disabled={!canEdit}
-                  onChange={(e) => portal.setDraft({ showRateComparison: e.target.checked })}
-                  style={{ width: 18, height: 18, accentColor: "var(--accent-primary)" }}
-                />
-                <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-                  {portal.draft.showRateComparison ? "Shown" : "Hidden"}
-                </span>
-              </label>
-            }
-          />
-        </SettingsCard>
-      </div>
-
       <SettingsSaveBar
-        saving={issuer.saving || storage.saving || portal.saving}
-        isDirty={issuer.isDirty || storage.isDirty || portal.isDirty}
+        saving={issuer.saving || storage.saving}
+        isDirty={issuer.isDirty || storage.isDirty}
         canEdit={canEdit}
         onSave={saveBoth}
         onReset={resetBoth}

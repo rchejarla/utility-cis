@@ -469,94 +469,107 @@ describe("Bill detail — fees and adjustments", () => {
 
   /*
    * The shadow bill (spec 26, TOU-BIL-4): what the period would have cost
-   * on the tariff's comparison schedule, rated on request. Offered on a
-   * bill with TOU usage, since that is the direction built so far.
+   * on rates staff pick, rated on request. Offered on every segment; the
+   * picker lists the rates the server says can be picked.
    */
-  const TOU = {
-    touSections: [
-      {
-        heading: "Electric — usage by time of day",
-        rows: [{ label: "Peak", usage: "200.00 kWh", share: "20%", amount: "60.00" }],
-        footnote: [],
-      },
-    ],
-  };
-  /** A bill whose one segment's tariff names `comparesWith` as its comparison. */
-  function comparableBill(comparesWith: string | null) {
-    const b = bill([line()]);
-    return { ...b, segments: [{ ...b.segments[0], comparesWith }] };
-  }
-  function routeWithShadow(shadow: unknown, comparesWith: string | null = "RES-STD") {
+  const OPTIONS = [
+    { code: "NWE-REDS-1", name: "NWE Residential Delivery", version: 1, tou: false, role: "delivery" },
+    { code: "NWE-ESS-1", name: "NWE Default Supply", version: 1, tou: false, role: "supply" },
+  ];
+  function routeWithShadow(shadow: unknown, options: unknown[] = OPTIONS) {
     get.mockImplementation((path: string) => {
-      if (path.includes("/shadow")) {
+      if (path.endsWith("/shadow/options")) return Promise.resolve({ data: options });
+      if (path.endsWith("/shadow")) {
         return shadow instanceof Error ? Promise.reject(shadow) : Promise.resolve(shadow);
       }
-      if (path.includes("/presentation")) return Promise.resolve(presentation(TOU));
+      if (path.includes("/presentation")) return Promise.resolve(presentation());
       if (path.includes("/deliveries")) return Promise.resolve([]);
-      return Promise.resolve(comparableBill(comparesWith));
+      return Promise.resolve(bill([line()]));
     });
   }
 
-  it("compares a TOU segment with its standard rate, saying which way it went", async () => {
+  it("compares with the rates picked, saying what they replaced and which way it went", async () => {
     routeWithShadow({
       shadow: {
-        schedules: [{ code: "RES-STD", name: "Residential standard", version: 1 }],
+        schedules: [
+          { code: "NWE-REDS-1", name: "NWE Residential Delivery", version: 1 },
+          { code: "NWE-ESS-1", name: "NWE Default Supply", version: 1 },
+          { code: "NWE-USBC-1", name: "NWE USBC", version: 1 },
+        ],
         total: "130.0000",
         lines: [{ label: "Energy", kindCode: "consumption", amount: "120.0000", quantity: "1000.0000", unit: "kWh" }],
       },
       difference: "-4.0000",
+      replaced: ["RES-TOU-E"],
+      kept: ["NWE-USBC-1"],
     });
     renderDialog();
 
     await userEvent.click(await screen.findByRole("button", { name: "Compare rates" }));
+    const picker = await screen.findByTestId("shadow-picker");
+    const compareButton = within(picker).getByRole("button", { name: "Compare" });
+    expect(compareButton).toBeDisabled();
+    await userEvent.click(within(picker).getByRole("checkbox", { name: /NWE Residential Delivery/ }));
+    await userEvent.click(within(picker).getByRole("checkbox", { name: /NWE Default Supply/ }));
+    await userEvent.click(compareButton);
 
     const panel = await screen.findByTestId("shadow-bill");
-    expect(get).toHaveBeenCalledWith("/api/v1/bill-segments/s-1/shadow");
-    expect(within(panel).getByText("RES-STD v1")).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith("/api/v1/bill-segments/s-1/shadow", { with: "NWE-REDS-1,NWE-ESS-1" });
+    expect(within(panel).getByText("NWE-REDS-1 v1 + NWE-ESS-1 v1")).toBeInTheDocument();
+    expect(within(panel).getByTestId("shadow-scope").textContent).toBe(
+      "In place of RES-TOU-E; NWE-USBC-1 kept as billed.",
+    );
     expect(within(panel).getByText("$130.00")).toBeInTheDocument();
     expect(within(panel).getByTestId("shadow-difference").textContent).toMatch(/\$4\.00 less than billed/);
     expect(within(panel).getByText(/never stored or sent to the customer/)).toBeInTheDocument();
   });
 
-  it("shows the server's reason when there is nothing to compare with", async () => {
-    routeWithShadow(new Error("API error 409: None of this period's rate schedules names a comparison schedule"));
+  it("says so when there is no other rate to compare with", async () => {
+    routeWithShadow({}, []);
     renderDialog();
 
     await userEvent.click(await screen.findByRole("button", { name: "Compare rates" }));
 
-    expect((await screen.findByTestId("shadow-bill")).textContent).toBe(
-      "None of this period's rate schedules names a comparison schedule",
-    );
+    expect((await screen.findByTestId("shadow-picker")).textContent).toMatch(/No other published rate/);
   });
 
-  it("offers no comparison where the tariff names none", async () => {
-    routeWithShadow({}, null);
+  it("shows the server's reason when the comparison cannot be worked out", async () => {
+    routeWithShadow(new Error("API error 409: Meter EM-001 records how much was used, not when"));
     renderDialog();
 
-    await screen.findByText("4.71 HCF");
-    expect(screen.queryByRole("button", { name: "Compare rates" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Compare rates" }));
+    const picker = await screen.findByTestId("shadow-picker");
+    await userEvent.click(within(picker).getByRole("checkbox", { name: /NWE Residential Delivery/ }));
+    await userEvent.click(within(picker).getByRole("button", { name: "Compare" }));
+
+    const panel = await screen.findByTestId("shadow-bill");
+    expect(panel.textContent).toMatch(/^Meter EM-001 records how much was used, not when/);
+    expect(within(panel).getByRole("button", { name: "Pick other rates" })).toBeInTheDocument();
   });
 
   it("says when a TOU comparison's usage was worked out from interval data", async () => {
-    // Standard → TOU (slice 3b): a standard customer, asked what TOU would have cost.
     routeWithShadow(
       {
         shadow: {
-          schedules: [{ code: "RES-TOU", name: "Residential TOU", version: 1 }],
+          schedules: [{ code: "RES-TOU-E", name: "Residential TOU", version: 1 }],
           total: "12.5800",
           lines: [{ label: "peak energy", kindCode: "consumption", amount: "0.9000", quantity: "3.0000", unit: "kWh" }],
         },
         difference: "-0.3000",
+        replaced: ["NWE-REDS-1", "NWE-ESS-1"],
+        kept: [],
         touUsageFrom: "intervals",
       },
-      "RES-TOU",
+      [{ code: "RES-TOU-E", name: "Residential TOU", version: 1, tou: true, role: "primary" }],
     );
     renderDialog();
 
     await userEvent.click(await screen.findByRole("button", { name: "Compare rates" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: /Residential TOU/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
 
     const panel = await screen.findByTestId("shadow-bill");
-    expect(within(panel).getByText("RES-TOU v1")).toBeInTheDocument();
+    expect(within(panel).getByText("RES-TOU-E v1")).toBeInTheDocument();
     expect(within(panel).getByText(/worked out from this meter's interval data/)).toBeInTheDocument();
     expect(within(panel).getByTestId("shadow-difference").textContent).toMatch(/\$0\.30 less than billed/);
   });

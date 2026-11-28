@@ -146,7 +146,7 @@ remembering (settled 2026-10-31):
 |---|---|---|
 | A column on `UtilityConfig` | tenant-wide, universal, sometimes filtered — `timezone`, `auto_post_bills` | a migration |
 | A column on `SchedulerConfig` | something **every** configurable background job has — `enabled`, `run_hour_local` | a migration, and rare: those columns are what defines the set |
-| `settings` jsonb (on either row) | anything only some utilities or some jobs need — `numberFormats`, `issuer`, `portal.showRateComparison` (2026-11-27: read off the config row when a portal customer asks, never filtered on, and only utilities offering TOU comparisons set it) | nothing |
+| `settings` jsonb (on either row) | anything only some utilities or some jobs need — `numberFormats`, `issuer` | nothing |
 
 jsonb's real costs are *filtering* and *types*, never reading: pulling a
 key off a row already in hand is free. So anything never used in a `WHERE`

@@ -46,16 +46,11 @@ function bill(over: Record<string, unknown> = {}) {
   };
 }
 
-function route(
-  accounts: unknown[],
-  billsByAccount: Record<string, unknown[]>,
-  comparison?: unknown,
-) {
+function route(accounts: unknown[], billsByAccount: Record<string, unknown[]>) {
   get.mockImplementation((url: string) => {
     if (url === "/portal/api/accounts") return Promise.resolve({ data: accounts });
     const m = url.match(/^\/portal\/api\/accounts\/([^/]+)\/bills$/);
     if (m) return Promise.resolve({ data: billsByAccount[m[1]] ?? [] });
-    if (url.endsWith("/rate-comparison") && comparison) return Promise.resolve(comparison);
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -146,77 +141,6 @@ describe("Portal bills list", () => {
     await waitFor(() => {
       expect(screen.getByText(/no bills yet/i)).toBeInTheDocument();
     });
-  });
-
-  /*
-   * Rate comparison (spec 26, TOU-BIL-4, slice 4): offered only on a bill
-   * the API flags, which it does only when the utility has turned it on.
-   */
-  it("offers no comparison on a bill the API does not flag", async () => {
-    route([account()], { "acc-1": [bill()] });
-
-    renderList();
-
-    await screen.findByText("B-1001");
-    expect(screen.queryByRole("button", { name: "Compare rates" })).toBeNull();
-  });
-
-  it("says what the other rate would have cost, and which way it went", async () => {
-    route([account()], { "acc-1": [bill({ rateComparison: true })] }, {
-      billId: "bill-1",
-      billNumber: "B-1001",
-      comparisons: [
-        {
-          segmentId: "seg-1",
-          periodStart: "2026-02-01",
-          periodEnd: "2026-02-28",
-          actualTotal: "84.1000",
-          actualRate: "Residential TOU",
-          comparisonRate: "Residential standard",
-          comparisonTotal: "91.3500",
-          difference: "7.2500",
-          touUsageFrom: null,
-          unavailable: null,
-        },
-      ],
-    });
-
-    renderList();
-
-    (await screen.findByRole("button", { name: "Compare rates" })).click();
-
-    const panel = await screen.findByTestId("rate-comparison");
-    expect(get).toHaveBeenCalledWith("/portal/api/bills/bill-1/rate-comparison");
-    expect(panel).toHaveTextContent("Residential standard");
-    expect(panel).toHaveTextContent("$91.35");
-    expect(within(panel).getByTestId("rate-comparison-verdict")).toHaveTextContent("Your rate saved you $7.25.");
-  });
-
-  it("says when the comparison cannot be worked out, rather than showing a figure", async () => {
-    route([account()], { "acc-1": [bill({ rateComparison: true })] }, {
-      billId: "bill-1",
-      billNumber: "B-1001",
-      comparisons: [
-        {
-          segmentId: "seg-1",
-          periodStart: "2026-02-01",
-          periodEnd: "2026-02-28",
-          actualTotal: "84.1000",
-          actualRate: "",
-          comparisonRate: null,
-          comparisonTotal: null,
-          difference: null,
-          touUsageFrom: null,
-          unavailable: "A comparison isn't available for this bill.",
-        },
-      ],
-    });
-
-    renderList();
-
-    (await screen.findByRole("button", { name: "Compare rates" })).click();
-
-    expect(await screen.findByTestId("rate-comparison")).toHaveTextContent("A comparison isn't available for this bill.");
   });
 
   it("shows settlement state from the API's own fields", async () => {
