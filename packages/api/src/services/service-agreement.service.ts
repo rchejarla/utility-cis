@@ -40,8 +40,9 @@ const fullInclude = {
         where: { removedDate: null as null },
         orderBy: { addedDate: "asc" as const },
         include: {
+          // Commodity too: the Meters tab shows it, and showed "–" without.
           meter: {
-            include: { uom: true },
+            include: { uom: true, commodity: true },
           },
         },
       },
