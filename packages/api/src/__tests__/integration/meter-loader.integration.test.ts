@@ -281,7 +281,13 @@ describe("MeterLoader", () => {
     expect(summary.quantity.toString()).toBe(new Decimal("12.0000").toString());
   });
 
-  it("meter:reads:<id> returns 0 quantity when no reads exist (default unit HCF)", async () => {
+  /*
+   * Zero **in the meter's own unit**. It was zero "HCF" for every meter,
+   * so an electric meter with no reads failed with "Cannot convert a
+   * quantity from HCF to kWh" instead of rating zero usage (2026-11-28).
+   * The fixture meter counts gallons.
+   */
+  it("meter:reads:<id> returns 0 in the meter's own unit when no reads exist", async () => {
     const { fix } = await makeMeterFixture({});
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
@@ -291,7 +297,7 @@ describe("MeterLoader", () => {
       unit: string;
     };
     expect(summary.quantity.toString()).toBe("0");
-    expect(summary.unit).toBe("HCF");
+    expect(summary.unit).toBe("GAL");
   });
 
   it("batches multiple meters into one Meter query for size+role", async () => {

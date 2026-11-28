@@ -981,6 +981,7 @@ async function main() {
     where: { utilityId: UID },
     include: {
       servicePoints: { include: { meters: { include: { meter: { select: { uomId: true } } } } } },
+      rateServiceClass: { select: { code: true } },
       // The cycle decides when a read is taken — see `readDayFor`.
       account: { select: { billingCycle: { select: { billDayOfMonth: true, readDayOfMonth: true } } } },
     },
@@ -1010,6 +1011,9 @@ async function main() {
    * construction on every day of every month.
    */
   const readDayFor = (sa) => sa?.account?.billingCycle?.readDayOfMonth ?? 8;
+  const uomCodeById = Object.fromEntries(
+    (await p.unitOfMeasure.findMany({ where: { utilityId: UID }, select: { id: true, code: true } })).map((u) => [u.id, u.code]),
+  );
   const sa0001 = saList.find(s => s.agreementNumber === "SA-0001");
   const sa0006 = saList.find(s => s.agreementNumber === "SA-0006");
   /*
@@ -1052,10 +1056,38 @@ async function main() {
     },
   };
 
+  /*
+   * A year of reads for **every** metered agreement, not two.
+   *
+   * Only SA-0001 and SA-0006 had reads until 2026-11-28; nobody noticed
+   * because the demo bills were written to the tables rather than rated.
+   * Rated for real (`seed-rated-bills.ts`), the other agreements billed
+   * zero usage — and an electric meter with no reads failed outright.
+   * Usage is sized by what the meter counts and who the customer is.
+   * SA-0001 and SA-0006 keep their own series: their newest reads carry
+   * the exception flags above.
+   */
+  const usageFor = (sa) => {
+    const uom = uomCodeById[sa.servicePoints[0].meters[0].meter.uomId];
+    const commercial = /commercial|industrial|government|msu/.test(sa.rateServiceClass?.code ?? "");
+    if (uom === "KWH") {
+      return commercial
+        ? () => 2500 + Math.floor(Math.random() * 2000)
+        : () => 650 + Math.floor(Math.random() * 300);
+    }
+    // Gallons: a house uses roughly 3,000–5,500 a month, a business several times that.
+    return commercial
+      ? () => 9000 + Math.floor(Math.random() * 6000)
+      : () => 3000 + Math.floor(Math.random() * 2500);
+  };
+  const metered = saList.filter(
+    (s) => s.servicePoints[0]?.meters[0] && s !== sa0001 && s !== sa0006,
+  );
   let readCount = 0;
   for (const { sa, baseReading, monthlyUsage } of [
     { sa: sa0001, baseReading: 1200, monthlyUsage: () => 3500 + Math.floor(Math.random() * 2000) },
     { sa: sa0006, baseReading: 45000, monthlyUsage: () => 650 + Math.floor(Math.random() * 300) },
+    ...metered.map((sa, i) => ({ sa, baseReading: 10000 + i * 7000, monthlyUsage: usageFor(sa) })),
   ]) {
     const firstSpm = sa && sa.servicePoints[0] && sa.servicePoints[0].meters[0];
     if (!firstSpm) continue;
@@ -1101,6 +1133,31 @@ async function main() {
     }
   }
   console.log("  " + readCount + " meter reads");
+
+  /*
+   * A winter quarter average for each sewer agreement. Residential sewer is
+   * priced on it (`wqa:current`), and nothing computes it yet, so without a
+   * stored value a sewer agreement cannot be rated at all — which the
+   * fabricated demo bills hid until 2026-11-28. 5.2 HCF is a house's
+   * winter month: about 3,900 gallons, in line with the water reads above.
+   */
+  let wqaCount = 0;
+  for (const sa of saList.filter((s) => sewer && s.commodityId === sewer.id)) {
+    const waterYear = READ_DAY_UTC.getUTCFullYear();
+    await p.wqaValue.create({
+      data: {
+        utilityId: UID,
+        serviceAgreementId: sa.id,
+        waterYear,
+        computedAt: new Date(),
+        sourceWindowStart: new Date(Date.UTC(waterYear - 1, 11, 1)),
+        sourceWindowEnd: new Date(Date.UTC(waterYear, 1, 28)),
+        computedAvg: "5.2000",
+      },
+    });
+    wqaCount++;
+  }
+  if (wqaCount) console.log("  " + wqaCount + " winter quarter averages (sewer)");
   /*
    * Said out loud, like the register reconciliation: a seeded fault
    * nobody announced reads as a bug in the product the first time
@@ -1742,16 +1799,10 @@ async function main() {
   console.log("  1 late fee, partially waived");
 
 
-  // Two bills, so both the Bills tab and the AR tab have something real
-  // to show and the Post action has something to act on. Written directly
-  // rather than generated: going through the rate engine would need
-  // meter reads and published schedules lined up for a specific period,
-  // which is the bill-creation integration test's job, not the seeder's.
-  //
-  //   - a POSTED bill on 0001001-00, with its BILL_CHARGE, so the AR tab
-  //     shows a charge that names its bill;
-  //   - an UNPOSTED bill on 0001002-00, so GET unposted-bills is not
-  //     always empty and the operator has something to post.
+  // A bill for every account with service, rated through the real billing
+  // code below, so the Bills tab, the AR tab and the rate comparison all
+  // have genuine charges to show and the Post action has something to act
+  // on (the last account's bill is left unposted).
   const billSaFor = (accountId) => saCreated.find((sa) => sa.accountId === accountId);
   /*
    * The demo bill covers a period that has already been billed and
@@ -1783,231 +1834,45 @@ async function main() {
   const BILL_DAY = 10; // R01's billDayOfMonth, which these accounts are on.
   const billPeriodEnd = new Date(Date.UTC(READ_DAY_UTC.getUTCFullYear(), READ_DAY_UTC.getUTCMonth() - 2, BILL_DAY));
   const billPeriodStart = new Date(Date.UTC(billPeriodEnd.getUTCFullYear(), billPeriodEnd.getUTCMonth() - 1, BILL_DAY + 1));
-  const billDue = new Date(billPeriodEnd);
-  billDue.setUTCDate(billDue.getUTCDate() + 30);
-
-  // One segment per service agreement, each with real line items, because
-  // that is what a bill actually is: generateBillForAccount aggregates the
-  // account's unbilled BillSegments, and the rate engine puts a line on
-  // each one per rate component it applied. A bill with one empty segment
-  // renders as a total with nothing behind it, which is exactly what the
-  // statement view (§7.1) exists to avoid.
-  //
-  // The amounts are plausible rather than computed: deriving them would
-  // mean running the rate engine, which needs meter reads aligned to the
-  // period and is the bill-creation integration test's job.
-  const componentsBySchedule = {};
-  for (const rc of await p.rateComponent.findMany({
-    where: { utilityId: UID },
-    select: { id: true, rateScheduleId: true, kindCode: true, label: true },
-  })) {
-    (componentsBySchedule[rc.rateScheduleId] ||= []).push(rc);
-  }
-
-  /** The lines one segment gets, keyed off what the schedule actually has. */
-  function linesFor(scheduleId, base) {
-    const available = componentsBySchedule[scheduleId] ?? [];
-    if (available.length === 0) return [];
-    // Prefer a fixed charge plus a usage charge, which is the shape of
-    // almost every utility bill line set.
-    const fixed = available.find((c) => c.kindCode === "service_charge");
-    const usage = available.find((c) =>
-      ["consumption", "derived_consumption", "item_price", "non_meter"].includes(c.kindCode),
-    );
-    const picked = [fixed, usage].filter(Boolean);
-    if (picked.length === 0) picked.push(available[0]);
-
-    // Split the segment total across the picked components: the fixed part
-    // first, the remainder on usage, so the lines sum to the segment.
-    const cents = Math.round(base * 100);
-    const out = [];
-    if (picked.length === 1) {
-      out.push({ c: picked[0], cents });
-    } else {
-      const fixedCents = Math.round(cents * 0.35);
-      out.push({ c: picked[0], cents: fixedCents });
-      out.push({ c: picked[1], cents: cents - fixedCents });
-    }
-    return out.map((x, i) => ({
-      component: x.c,
-      amount: (x.cents / 100).toFixed(4),
-      sortOrder: (i + 1) * 100,
-    }));
-  }
-
-  /** Shared across the seeded bills, since they share a bill date. */
-  let seededBillCounter = 0;
-
-  async function seedBill(account, { posted }) {
-    const agreements = saCreated.filter((sa) => sa.accountId === account.id);
-    if (agreements.length === 0) return null;
-
-    // Build the segments first so the bill's total is the sum of them,
-    // rather than a figure the segments are then forced to match.
-    const segments = [];
-    for (let i = 0; i < agreements.length; i++) {
-      const sa = agreements[i];
-      /*
-       * Ordered, because three of the nine agreements carry three
-       * assignments at once: an unbundled electric agreement has
-       * `delivery`, `supply` and `rider` in force together, and an
-       * unordered `findFirst` returned whichever row the heap offered
-       * first. Two reseeds of identical data therefore produced
-       * different bills — $523.55 and $468.17 on the same account —
-       * which makes a dev database a poor thing to compare anything
-       * against.
-       *
-       * `roleCode` ascending lands on the right one both times without a
-       * special case: `primary` where that is all there is, and
-       * `delivery` for electric, which is the utility's own charge
-       * rather than a supplier's or a rider.
-       */
-      const assignment = await p.sAScheduleAssignment.findFirst({
-        where: { utilityId: UID, serviceAgreementId: sa.id },
-        orderBy: { roleCode: "asc" },
-        select: { rateScheduleId: true },
-      });
-      if (!assignment) continue;
-      const base = 32.5 + i * 18.75 + (account.accountNumber.charCodeAt(6) % 7) * 2.25;
-      const lines = linesFor(assignment.rateScheduleId, base);
-      if (lines.length === 0) continue;
-      const total = lines.reduce((t, l) => t + Math.round(parseFloat(l.amount) * 100), 0);
-      segments.push({ sa, assignment, lines, cents: total });
-    }
-    if (segments.length === 0) return null;
-
-    const billCents = segments.reduce((t, sg) => t + sg.cents, 0);
-    const billTotal = (billCents / 100).toFixed(4);
-
-    const bill = await p.bill.create({
-      data: {
-        utilityId: UID,
-        accountId: account.id,
-        billingCycleId: account.billingCycleId,
-        periodStart: billPeriodStart,
-        periodEnd: billPeriodEnd,
-        billDate: billPeriodEnd,
-        dueDate: billDue,
-        subtotal: billTotal,
-        taxes: "0.0000",
-        credits: "0.0000",
-        total: billTotal,
-        /*
-         * The format `nextBillNumber` produces: `BILL-YYYYMM-<counter>`
-         * from the bill date, UTC.
-         *
-         * It used to append the account number, which the application
-         * never does — so a fresh database showed two shapes of bill
-         * number and nothing said which was real. Spec 23 records that a
-         * real number carries neither the account nor the customer, and
-         * that bill search was widened past the number because of it;
-         * seeding a richer format papered over the very limitation the
-         * spec documents.
-         *
-         * Counted rather than derived, like the real one, so the
-         * sequence a reader sees in a seeded database behaves the way a
-         * run's would.
-         */
-        billNumber: `BILL-${billPeriodEnd.getUTCFullYear()}${String(billPeriodEnd.getUTCMonth() + 1).padStart(2, "0")}-${++seededBillCounter}`,
-        postedAt: posted ? new Date() : null,
-      },
-    });
-
-    for (let i = 0; i < segments.length; i++) {
-      const sg = segments[i];
-      await p.billSegment.create({
-        data: {
-          utilityId: UID,
-          serviceAgreementId: sg.sa.id,
-          billId: bill.id,
-          periodStart: billPeriodStart,
-          periodEnd: billPeriodEnd,
-          subtotal: (sg.cents / 100).toFixed(4),
-          taxes: "0.0000",
-          credits: "0.0000",
-          total: (sg.cents / 100).toFixed(4),
-          minimumFloorApplied: false,
-          segmentNumber: `SEG-${account.accountNumber}-${i + 1}-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}`,
-          lines: {
-            create: sg.lines.map((l) => ({
-              utilityId: UID,
-              label: l.component.label ?? l.component.kindCode,
-              kindCode: l.component.kindCode,
-              amount: l.amount,
-              sourceScheduleId: sg.assignment.rateScheduleId,
-              sourceComponentId: l.component.id,
-              sortOrder: l.sortOrder,
-            })),
-          },
-        },
-      });
-    }
-
-    if (posted) {
-      // The ledger is Decimal(14,2) and bill.total is Decimal(14,4), so the
-      // charge is the total rounded to cents. It MUST be derived from the
-      // bill: an amount that disagrees with the bill it names still
-      // reconciles, because the balance is the sum of open amounts either
-      // way, and nothing would catch it.
-      const charge = (billCents / 100).toFixed(2);
-      await p.ledgerEntry.create({
-        data: {
-          utilityId: UID,
-          accountId: account.id,
-          type: "BILL_CHARGE",
-          amount: charge,
-          openAmount: charge,
-          dueDate: billDue,
-          effectiveDate: billPeriodEnd,
-          billId: bill.id,
-        },
-      });
-    }
-    return bill;
-  }
-
-  // Every account that has service gets a bill, so whichever account is
-  // opened first has something to show. The last one is left UNPOSTED on
-  // purpose: GET unposted-bills must not always be empty, or the Post
-  // action has nothing to act on.
+  /*
+   * Rated by the real billing code (2026-11-28), not written to the
+   * tables. Until then these bills carried amounts "plausible rather than
+   * computed", from only the first of an agreement's schedules and two of
+   * its charges: a residential electric bill with no supply, tax or rider
+   * lines and a service charge its tariff does not have. Comparing such a
+   * bill with another rate — the shadow bill — compared real rating with
+   * fiction.
+   *
+   * `scripts/seed-rated-bills.ts` rates every agreement of each account
+   * over the period, assembles the bill, and posts it (receivable and
+   * balance included) through the same services a user's click does. The
+   * last account is left unposted, so the Post action has something to act
+   * on. An agreement that cannot be rated is reported, not invented.
+   */
   const billableAccounts = aArr.filter((a) => billSaFor(a.id));
+  const lastBillable = billableAccounts[billableAccounts.length - 1];
+  const isoDay = (d) => d.toISOString().slice(0, 10);
+  const billOut = execSync(
+    `"${TSX_BIN}" scripts/seed-rated-bills.ts --utility-id ${UID} ` +
+      `--period-start ${isoDay(billPeriodStart)} --period-end ${isoDay(billPeriodEnd)} ` +
+      `--accounts ${billableAccounts.map((a) => a.id).join(",")}` +
+      (lastBillable ? ` --unposted ${lastBillable.id}` : ""),
+    { cwd: path.join(__dirname, "packages", "api"), stdio: "pipe" },
+  ).toString();
   let postedBills = 0;
   let unpostedBills = 0;
-  for (let i = 0; i < billableAccounts.length; i++) {
-    const account = billableAccounts[i];
-    const posted = i < billableAccounts.length - 1;
-    const bill = await seedBill(account, { posted });
-    if (!bill) continue;
-    if (posted) {
-      postedBills++;
-      // Fold the new receivable into the cached balance. Anything already
-      // open on the account stays open, so read it back rather than
-      // assuming — two of these accounts carry seeded opening balances.
-      const open = await p.ledgerEntry.aggregate({
-        // NOT NOT a deposit: `balance` is the receivable. A deposit is
-        // money held, and netting it in would hide arrears from the
-        // delinquency sweep, which looks for balance > 0.
-        where: { utilityId: UID, accountId: account.id, type: { not: "DEPOSIT" } },
-        _sum: { openAmount: true },
-      });
-      const oldest = await p.ledgerEntry.findFirst({
-        where: { utilityId: UID, accountId: account.id, openAmount: { gt: 0 }, dueDate: { not: null } },
-        orderBy: { dueDate: "asc" },
-        select: { dueDate: true },
-      });
-      await p.account.update({
-        where: { id: account.id },
-        data: {
-          balance: (open._sum.openAmount ?? 0).toString(),
-          lastDueDate: oldest?.dueDate ?? null,
-        },
-      });
-    } else {
-      unpostedBills++;
+  for (const line of billOut.split("\n").filter((l) => l.trim().startsWith("{"))) {
+    const r = JSON.parse(line);
+    if (!r.bill) {
+      console.log("  [skip] no bill for an account: " + r.skipped.join("; "));
+      continue;
     }
+    if (r.posted) postedBills++;
+    else unpostedBills++;
+    for (const s of r.skipped) console.log("  [skip] " + r.bill + " " + s);
   }
   console.log(
-    "  " + postedBills + " posted bills with receivables, " + unpostedBills + " unposted"
+    "  " + postedBills + " rated and posted bills with receivables, " + unpostedBills + " unposted"
   );
 
   /*
@@ -2015,13 +1880,11 @@ async function main() {
    *
    * Billing is one-way: a segment stamps `billed_at` on the reads in its
    * period, and `resolveServicePeriod` starts the next period the day
-   * after the last read already billed. The bills above are written
-   * straight to the tables rather than rated, so they stamped nothing —
-   * and the first genuine run then found twelve months of unbilled reads
-   * behind bills that claimed to have covered them. It opened at the
-   * agreement's start date and swept the lot into one 21-month segment:
-   * on a fresh seed, a $530,257.75 water bill for a single house, over a
-   * period two of the demo bills already said was billed.
+   * after the last read already billed. The rated bills above stamp the
+   * reads inside their own period; the months before it have no bill at
+   * all, and left unstamped, the first genuine run found a year of
+   * unbilled reads and swept them into one segment — once, on a fresh
+   * seed, a $530,257.75 water bill for a single house.
    *
    * Stamping them here is what makes the seeded history true. The reads
    * after this date are left alone deliberately — they are the work a
