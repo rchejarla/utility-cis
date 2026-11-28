@@ -175,9 +175,25 @@ export class MeterLoader implements Loader {
         });
       }
 
+      /*
+       * No reads in the period: zero, **in the meter's own unit**. It was
+       * zero "HCF" for every meter, so an electric meter with no reads did
+       * not rate zero usage — it failed with "Cannot convert a quantity
+       * from HCF to kWh", naming a unit the meter has never measured in
+       * (found seeding real bills, 2026-11-28).
+       */
+      const missing = [...meterIdsForReads].filter((id) => !totals.has(id) && !buckets.has(id));
+      const unitByMeter = new Map<string, string>();
+      if (missing.length > 0) {
+        const meters = await this.prisma.meter.findMany({
+          where: { id: { in: missing }, utilityId: this.utilityId },
+          select: { id: true, uom: { select: { code: true } } },
+        });
+        for (const m of meters) if (m.uom?.code) unitByMeter.set(m.id, m.uom.code);
+      }
       for (const meterId of meterIdsForReads) {
-        const summary =
-          totals.get(meterId) ?? buckets.get(meterId) ?? { quantity: ZERO, unit: "HCF" };
+        const summary = totals.get(meterId) ??
+          buckets.get(meterId) ?? { quantity: ZERO, unit: unitByMeter.get(meterId) ?? "HCF" };
         out.set(`meter:reads:${meterId}`, summary);
       }
     }
