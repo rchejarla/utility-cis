@@ -9,6 +9,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { LinkedCommodityLoader } from "../../lib/rate-engine-loaders/loaders/linked-commodity-loader.js";
 
@@ -120,6 +121,7 @@ async function makeLinkedFixture(opts: {
         agreementNumber: "SA-CURRENT-1",
         accountId: fix.accountId,
         commodityId: sewer.id, // current is sewer; sibling will be water
+        rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, sewer.id),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },
@@ -142,6 +144,7 @@ async function makeLinkedFixture(opts: {
         agreementNumber: "SA-SIBLING-1",
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
         startDate: new Date("2026-01-01"),
         status: opts.siblingStatus ?? "ACTIVE",
       },
@@ -167,6 +170,7 @@ async function makeLinkedFixture(opts: {
           agreementNumber: "SA-SIBLING-EXTRA",
           accountId: fix.accountId,
           commodityId: extraComm.id,
+          rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, extraComm.id),
           startDate: new Date("2026-01-01"),
           status: "ACTIVE",
         },
@@ -385,6 +389,7 @@ describe("LinkedCommodityLoader", () => {
           agreementNumber: "SA-SIBLING-DUP",
           accountId: fix.accountId,
           commodityId: fix.commodityId, // same water commodity
+          rateServiceClassId: await serviceClassFor(prismaImports.prisma, fix.utilityId, fix.commodityId),
           startDate: new Date("2025-01-01"),
           status: "ACTIVE",
         },

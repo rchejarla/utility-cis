@@ -9,6 +9,7 @@ import {
   endAdminPool,
   seedAsPlatform,
   adminQuery,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -113,6 +114,11 @@ async function agreement(opts: {
         agreementNumber: opts.number,
         accountId: fixA.accountId,
         commodityId: opts.commodityId ?? fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(
+          prisma,
+          fixA.utilityId,
+          opts.commodityId ?? fixA.commodityId,
+        ),
         startDate: new Date(opts.startDate ?? "2024-01-01"),
         endDate: opts.endDate ? new Date(opts.endDate) : null,
         status: opts.status ?? "ACTIVE",

@@ -8,6 +8,7 @@ import type {
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { generateNumber } from "../lib/number-generator.js";
 import { closeServiceAgreement } from "./effective-dating.service.js";
+import { assertServiceClass } from "./service-agreement.service.js";
 import type { FinalBillResult } from "./final-bill.service.js";
 
 /**
@@ -273,6 +274,10 @@ export async function transferService(
         agreementNumber: newAgreementNumber,
         accountId: data.targetAccountId,
         commodityId: source.commodityId,
+        // Same service at the same premise, so the same customer
+        // category; staff correct it on the agreement if the new holder
+        // is a different kind of customer.
+        rateServiceClassId: source.rateServiceClassId,
         startDate: transferDate,
         status: "ACTIVE",
       },
@@ -550,12 +555,14 @@ export async function moveIn(
           columnName: "agreement_number",
           db: tx,
         }));
+      await assertServiceClass(tx, utilityId, agreement.commodityId, agreement.rateServiceClassId);
       const sa = await tx.serviceAgreement.create({
         data: {
           utilityId,
           agreementNumber,
           accountId: account.id,
           commodityId: agreement.commodityId,
+          rateServiceClassId: agreement.rateServiceClassId,
           startDate: moveInDate,
           status: "ACTIVE",
         },

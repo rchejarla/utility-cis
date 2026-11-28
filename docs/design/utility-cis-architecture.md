@@ -995,8 +995,9 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | PATCH | `/api/v1/accounts/:id` | Account |
 | GET | `/api/v1/service-agreements` | Agreement |
 | POST | `/api/v1/service-agreements` | Agreement |
+| GET | `/api/v1/service-agreements/service-classes?commodityId=` | Agreement (the commodity's active service classes, for the required class picker) |
 | GET | `/api/v1/service-agreements/:id` | Agreement |
-| PATCH | `/api/v1/service-agreements/:id` | Agreement |
+| PATCH | `/api/v1/service-agreements/:id` | Agreement (custom fields; `rateServiceClassId`, required on create since 2026-11-28 and correctable here) |
 | POST | `/api/v1/service-agreements/:id/meters` | Agreement (add meter) |
 | PATCH | `/api/v1/service-agreements/:id/meters/:samId` | Agreement (remove meter) |
 | GET | `/api/v1/rate-schedules` | Rate |

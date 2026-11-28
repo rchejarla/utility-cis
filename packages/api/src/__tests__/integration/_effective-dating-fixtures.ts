@@ -79,6 +79,34 @@ const asPlatform = seedAsPlatform;
  * Idempotent, so a `beforeEach` may call it. `resetDb` does not truncate
  * `cis_user`, `role` or `user_role`, so a `beforeAll` is usually enough.
  */
+/**
+ * A service class for this commodity — "residential" unless another code
+ * is asked for — created if missing, its id returned.
+ *
+ * An agreement's class is required since 2026-11-28 (the column is NOT
+ * NULL), so every fixture that creates an agreement needs one. Most tests
+ * do not care which: a class-restricted rate charge is the only thing that
+ * reads it, and the suites that exercise that name their own code.
+ * Idempotent, keyed on (utility, commodity, code) — the table's own unique.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function serviceClassFor(
+  prisma: any,
+  utilityId: string,
+  commodityId: string,
+  code = "residential",
+): Promise<string> {
+  return asPlatform(async () => {
+    const row = await prisma.rateServiceClass.upsert({
+      where: { utilityId_commodityId_code: { utilityId, commodityId, code } },
+      update: {},
+      create: { utilityId, commodityId, code, label: code.replace(/_/g, " ") },
+      select: { id: true },
+    });
+    return row.id as string;
+  });
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function ensurePrincipal(
   prisma: any,

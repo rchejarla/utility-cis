@@ -9,6 +9,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { MeterLoader } from "../../lib/rate-engine-loaders/loaders/meter-loader.js";
 import { UnsupportedInSlice4Error } from "../../lib/rate-engine-loaders/types.js";
@@ -120,6 +121,7 @@ async function makeMeterFixture(opts: {
         agreementNumber: "SA-METER-LOADER-1",
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },

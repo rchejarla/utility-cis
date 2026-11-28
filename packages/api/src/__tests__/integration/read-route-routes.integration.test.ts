@@ -23,6 +23,7 @@ import {
   endAdminPool,
   ensurePrincipal,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -198,6 +199,7 @@ async function makePremise(
         agreementNumber: `SA-HT-${n}`,
         accountId: opts.accountId ?? fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, TENANT_A, fixA.commodityId),
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
       },

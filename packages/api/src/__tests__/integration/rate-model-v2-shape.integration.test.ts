@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform, serviceClassFor } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 task 11 — end-to-end shape tests.
@@ -212,6 +212,7 @@ describe("rate-model v2 end-to-end shape", () => {
           agreementNumber: `SA-SHAPE-1-${Date.now()}`,
           accountId: account.id,
           commodityId: waterCommodityId,
+          rateServiceClassId: await serviceClassFor(prisma, TENANT_A, waterCommodityId),
           startDate: new Date("2026-01-01"),
           status: "ACTIVE",
         },
@@ -290,6 +291,7 @@ describe("rate-model v2 end-to-end shape", () => {
           agreementNumber: `SA-SHAPE-ELEC-${Date.now()}`,
           accountId: account.id,
           commodityId: electricCommodityId,
+          rateServiceClassId: await serviceClassFor(prisma, TENANT_A, electricCommodityId),
           startDate: new Date("2026-01-01"),
           status: "ACTIVE",
         },

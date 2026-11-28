@@ -11,6 +11,7 @@ import {
   truncateTables,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -67,6 +68,13 @@ let rateScheduleCode: string;
 
 const ENABLED_MODULES = ["imports", "agreements"];
 
+/**
+ * The service class every CSV row names. Required since 2026-11-28; the
+ * fixture commodity gets this class in `beforeEach`.
+ */
+const SERVICE_CLASS = "residential";
+let serviceClassId: string;
+
 function makeToken(utilityId: string, actorId = "00000000-0000-4000-8000-aaaa00000001") {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const payload = Buffer.from(
@@ -119,13 +127,14 @@ function buildMultipart(
 
 /** The canonical header line every test in this file posts. */
 const HEADER =
-  "agreement_number,account_number,commodity_code,premise_address,premise_zip," +
+  "agreement_number,account_number,commodity_code,service_class,premise_address,premise_zip," +
   "start_date,status,meter_number,rate_schedule_code\n";
 
 const MAPPING = {
   agreement_number: "agreementNumber",
   account_number: "accountNumber",
   commodity_code: "commodityCode",
+  service_class: "serviceClassCode",
   premise_address: "premiseAddress",
   premise_zip: "premiseZip",
   start_date: "startDate",
@@ -202,6 +211,7 @@ beforeEach(() =>
       select: { code: true },
     });
     commodityCode = commodity.code;
+    serviceClassId = await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId, SERVICE_CLASS);
     const account = await prisma.account.findUniqueOrThrow({
       where: { id: fixA.accountId },
       select: { accountNumber: true },
@@ -315,13 +325,13 @@ describe("POST /api/v1/imports — service_agreement happy path", () => {
 
       const csv =
         HEADER +
-        `SA-IMP-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},` +
+        `SA-IMP-1,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},` +
         `2026-01-01,ACTIVE,${meterNumber},${rateScheduleCode}\n` +
         // Second row: no meter, no rate code — both optional, and an
         // agreement that has neither is still a valid agreement. At the
         // second premise, so it is not a second live service at the
         // first one.
-        `SA-IMP-2,${accountNumber},${commodityCode},${premiseAddress2},${premiseZip2},` +
+        `SA-IMP-2,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress2},${premiseZip2},` +
         `2026-02-01,PENDING,,\n`;
 
       const res = await postCsv(csv);
@@ -386,7 +396,7 @@ describe("POST /api/v1/imports — service_agreement happy path", () => {
 
       const csv =
         HEADER +
-        `,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-03-01,PENDING,,\n`;
+        `,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-03-01,PENDING,,\n`;
 
       const res = await postCsv(csv);
       expect(res.statusCode).toBe(200);
@@ -412,12 +422,13 @@ describe("POST /api/v1/imports — an unmetered service", () => {
        */
       const { prisma } = prismaImports;
       const header =
-        "agreement_number,account_number,commodity_code,premise_address,premise_zip," +
+        "agreement_number,account_number,commodity_code,service_class,premise_address,premise_zip," +
         "start_date,status,service_point_type\n";
       const mapping = {
         agreement_number: "agreementNumber",
         account_number: "accountNumber",
         commodity_code: "commodityCode",
+        service_class: "serviceClassCode",
         premise_address: "premiseAddress",
         premise_zip: "premiseZip",
         start_date: "startDate",
@@ -426,11 +437,11 @@ describe("POST /api/v1/imports — an unmetered service", () => {
       };
       const csv =
         header +
-        `SA-SW-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,NON_BADGED\n` +
+        `SA-SW-1,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,NON_BADGED\n` +
         // Blank still means METERED, so nothing already loading water
         // agreements changes behaviour. Second premise, so the two rows
         // are not two live services at one address.
-        `SA-SW-2,${accountNumber},${commodityCode},${premiseAddress2},${premiseZip2},2026-02-01,ACTIVE,\n`;
+        `SA-SW-2,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress2},${premiseZip2},2026-02-01,ACTIVE,\n`;
 
       const { body, contentType } = buildMultipart([
         { name: "kind", value: "service_agreement" },
@@ -465,12 +476,13 @@ describe("POST /api/v1/imports — an unmetered service", () => {
 describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => {
   /** Header and mapping carrying the legacy id. */
   const LK_HEADER =
-    "legacy_id,account_number,commodity_code,premise_address,premise_zip," +
+    "legacy_id,account_number,commodity_code,service_class,premise_address,premise_zip," +
     "start_date,status\n";
   const LK_MAPPING = {
     legacy_id: "legacyKey",
     account_number: "accountNumber",
     commodity_code: "commodityCode",
+    service_class: "serviceClassCode",
     premise_address: "premiseAddress",
     premise_zip: "premiseZip",
     start_date: "startDate",
@@ -501,7 +513,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
   const row = (
     over: { key?: string; start?: string; status?: string; second?: boolean } = {},
   ) =>
-    `${over.key ?? "LEG-1"},${accountNumber},${commodityCode},` +
+    `${over.key ?? "LEG-1"},${accountNumber},${commodityCode},${SERVICE_CLASS},` +
     `${over.second ? premiseAddress2 : premiseAddress},${over.second ? premiseZip2 : premiseZip},` +
     `${over.start ?? "2026-01-01"},${over.status ?? "PENDING"}\n`;
 
@@ -606,7 +618,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
 
       const csv =
         LK_HEADER +
-        `LEG-1,OTHER-ACCT,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE\n`;
+        `LEG-1,OTHER-ACCT,${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE\n`;
       const result = JSON.parse((await post(csv)).body);
       expect(codesOf(result)).toEqual([{ rowIndex: 1, code: "LEGACY_KEY_CONFLICT" }]);
 
@@ -626,11 +638,12 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
       });
 
       const withRate =
-        "legacy_id,account_number,commodity_code,premise_address,premise_zip,start_date,rate_schedule_code\n";
+        "legacy_id,account_number,commodity_code,service_class,premise_address,premise_zip,start_date,rate_schedule_code\n";
       const rateMapping = {
         legacy_id: "legacyKey",
         account_number: "accountNumber",
         commodity_code: "commodityCode",
+        service_class: "serviceClassCode",
         premise_address: "premiseAddress",
         premise_zip: "premiseZip",
         start_date: "startDate",
@@ -647,7 +660,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
       const filled = JSON.parse(
         (await post(
           withRate +
-            `LEG-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,${schedule.code}\n`,
+            `LEG-1,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,${schedule.code}\n`,
           rateMapping,
         )).body,
       );
@@ -675,7 +688,7 @@ describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => 
       const changed = JSON.parse(
         (await post(
           withRate +
-            `LEG-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,SECOND\n`,
+            `LEG-1,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,SECOND\n`,
           rateMapping,
         )).body,
       );
@@ -711,11 +724,11 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
 
       const csv =
         HEADER +
-        `SA-E-1,NO-SUCH-ACCOUNT,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n` +
-        `SA-E-2,${accountNumber},NO-SUCH-COMMODITY,${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n` +
-        `SA-E-3,${accountNumber},${commodityCode},9 Nowhere St,99999,2026-01-01,ACTIVE,,\n` +
-        `SA-E-4,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,NO-SUCH-METER,\n` +
-        `SA-E-5,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,NO-SUCH-RATE\n`;
+        `SA-E-1,NO-SUCH-ACCOUNT,${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n` +
+        `SA-E-2,${accountNumber},NO-SUCH-COMMODITY,${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n` +
+        `SA-E-3,${accountNumber},${commodityCode},${SERVICE_CLASS},9 Nowhere St,99999,2026-01-01,ACTIVE,,\n` +
+        `SA-E-4,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,NO-SUCH-METER,\n` +
+        `SA-E-5,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,NO-SUCH-RATE\n`;
 
       const res = await postCsv(csv);
       expect(res.statusCode).toBe(200);
@@ -741,6 +754,30 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
       expect(await prisma.servicePoint.count({ where: { utilityId: fixA.utilityId } })).toBe(0);
     }), 120_000);
 
+  it("refuses a missing, unknown or retired service class, each by name", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      // A retired class for this commodity, and one that exists only for another.
+      await prisma.rateServiceClass.create({
+        data: { utilityId: fixA.utilityId, commodityId: fixA.commodityId, code: "old_class", label: "Old", isActive: false },
+      });
+
+      const csv =
+        HEADER +
+        `SA-C-1,${accountNumber},${commodityCode},,${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n` +
+        `SA-C-2,${accountNumber},${commodityCode},no_such_class,${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n` +
+        `SA-C-3,${accountNumber},${commodityCode},old_class,${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n`;
+
+      const result = JSON.parse((await postCsv(csv)).body);
+
+      expect(codesOf(result)).toEqual([
+        { rowIndex: 1, code: "MISSING_SERVICE_CLASS" },
+        { rowIndex: 2, code: "SERVICE_CLASS_NOT_FOUND" },
+        { rowIndex: 3, code: "SERVICE_CLASS_RETIRED" },
+      ]);
+      expect(await prisma.serviceAgreement.count({ where: { utilityId: fixA.utilityId } })).toBe(0);
+    }), 120_000);
+
   it("refuses a second agreement for a meter already installed on an active one", () =>
     seedAsPlatform(async () => {
       const { prisma } = prismaImports;
@@ -753,6 +790,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
           agreementNumber: "SA-EXISTING",
           accountId: fixA.accountId,
           commodityId: fixA.commodityId,
+          rateServiceClassId: serviceClassId,
           startDate: new Date("2025-01-01"),
           status: "ACTIVE",
         },
@@ -778,7 +816,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
 
       const csv =
         HEADER +
-        `SA-DUP-METER,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},` +
+        `SA-DUP-METER,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},` +
         `2026-01-01,ACTIVE,${meterNumber},\n`;
 
       const res = await postCsv(csv);
@@ -802,7 +840,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
     seedAsPlatform(async () => {
       const csv =
         HEADER +
-        `SA-TWICE,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,PENDING,,\n`;
+        `SA-TWICE,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,PENDING,,\n`;
 
       expect(JSON.parse((await postCsv(csv)).body).importedCount).toBe(1);
 
@@ -835,7 +873,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
 
       const csv =
         HEADER +
-        `SA-AMB,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,PENDING,,\n`;
+        `SA-AMB,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,PENDING,,\n`;
 
       const res = await postCsv(csv);
       const result = JSON.parse(res.body);
@@ -873,7 +911,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
 
       const csv =
         HEADER +
-        `SA-DRAFT,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,DRAFT-ONLY\n`;
+        `SA-DRAFT,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,DRAFT-ONLY\n`;
 
       const result = JSON.parse((await postCsv(csv)).body);
       expect(result.errorCount).toBe(1);
@@ -922,7 +960,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
 
       const csv =
         HEADER +
-        `SA-MID,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,MID-REV\n`;
+        `SA-MID,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,MID-REV\n`;
 
       const result = JSON.parse((await postCsv(csv)).body);
       expect(result.errorCount).toBe(1);
@@ -965,7 +1003,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
 
       const csv =
         HEADER +
-        `SA-REV,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,REVISED\n`;
+        `SA-REV,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,REVISED\n`;
 
       const result = JSON.parse((await postCsv(csv)).body);
       expect(result.errorCount).toBe(0);
@@ -980,12 +1018,13 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
   it("rejects a service point type the enum does not have", () =>
     seedAsPlatform(async () => {
       const header =
-        "agreement_number,account_number,commodity_code,premise_address,premise_zip," +
+        "agreement_number,account_number,commodity_code,service_class,premise_address,premise_zip," +
         "start_date,service_point_type\n";
       const mapping = {
         agreement_number: "agreementNumber",
         account_number: "accountNumber",
         commodity_code: "commodityCode",
+        service_class: "serviceClassCode",
         premise_address: "premiseAddress",
         premise_zip: "premiseZip",
         start_date: "startDate",
@@ -993,7 +1032,7 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
       };
       const csv =
         header +
-        `SA-BADTYPE,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,UNMETERED\n`;
+        `SA-BADTYPE,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,UNMETERED\n`;
 
       const { body, contentType } = buildMultipart([
         { name: "kind", value: "service_agreement" },
@@ -1019,9 +1058,9 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
     seedAsPlatform(async () => {
       const csv =
         HEADER +
-        `SA-P-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},not-a-date,ACTIVE,,\n` +
-        `SA-P-2,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,SORT-OF,,\n` +
-        `SA-P-3,,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n`;
+        `SA-P-1,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},not-a-date,ACTIVE,,\n` +
+        `SA-P-2,${accountNumber},${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,SORT-OF,,\n` +
+        `SA-P-3,,${commodityCode},${SERVICE_CLASS},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,\n`;
 
       const res = await postCsv(csv);
       const result = JSON.parse(res.body);

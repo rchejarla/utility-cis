@@ -4,7 +4,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureUtilities } from "./_effective-dating-fixtures.js";
+import { ensureUtilities, serviceClassFor } from "./_effective-dating-fixtures.js";
 
 /**
  * Production-grade integration test for the suspension migration.
@@ -224,6 +224,7 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
       agreementNumber: `SA-${agreementId.slice(-8)}`,
       accountId: account.id,
       commodityId: commodity.id,
+      rateServiceClassId: await serviceClassFor(prisma, utilityId, commodity.id),
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },

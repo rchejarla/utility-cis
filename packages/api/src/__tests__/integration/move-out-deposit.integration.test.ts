@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, makeTenantFixture, type TenantFixture, seedAsPlatform, endAdminPool } from "./_effective-dating-fixtures.js";
+import { bootPostgres, makeTenantFixture, type TenantFixture, seedAsPlatform, endAdminPool, serviceClassFor } from "./_effective-dating-fixtures.js";
 
 import { runAsTenant } from "../../lib/tenant-context.js";
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
@@ -109,6 +109,7 @@ beforeEach(() =>
       agreementNumber: "SA-MO-1",
       accountId: fx.accountId,
       commodityId: fx.commodityId,
+      rateServiceClassId: await serviceClassFor(prisma, utilityId, fx.commodityId),
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },
@@ -291,6 +292,7 @@ describe("moveOut — returning the deposit", () => {
           agreementNumber: "SA-MO-2",
           accountId: fx.accountId,
           commodityId: fx.commodityId,
+          rateServiceClassId: await serviceClassFor(prisma, utilityId, fx.commodityId),
           startDate: new Date("2026-02-01"),
           status: "ACTIVE",
         },

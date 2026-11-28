@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform, serviceClassFor } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 task 6 — SAScheduleAssignment CRUD endpoints.
@@ -150,6 +150,7 @@ beforeEach(() =>
       agreementNumber: "SA-001",
       accountId,
       commodityId: waterCommodityId,
+      rateServiceClassId: await serviceClassFor(prisma, TENANT_A, waterCommodityId),
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },
@@ -162,6 +163,7 @@ beforeEach(() =>
       agreementNumber: "SA-002",
       accountId,
       commodityId: waterCommodityId,
+      rateServiceClassId: await serviceClassFor(prisma, TENANT_A, waterCommodityId),
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },

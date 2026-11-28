@@ -5,6 +5,7 @@ import {
   seedAsPlatform,
   TENANT_A,
   TENANT_B,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
 
@@ -45,6 +46,7 @@ const ids = {
   accountB: "",
   commodityA: "",
   commodityB: "",
+  classA: "",
 };
 
 beforeAll(async () => {
@@ -81,6 +83,7 @@ beforeAll(async () => {
         ids.cycleA = cycle.id;
         ids.accountA = account.id;
         ids.commodityA = commodity.id;
+        ids.classA = await serviceClassFor(prisma, tenant, commodity.id);
       } else {
         ids.accountB = account.id;
         ids.commodityB = commodity.id;
@@ -110,6 +113,7 @@ describe("a foreign key between two tenant-scoped tables", () => {
           agreementNumber: "XT-SAME-TENANT",
           accountId: ids.accountA,
           commodityId: ids.commodityA,
+          rateServiceClassId: ids.classA,
           startDate: new Date("2026-01-01"),
         },
       }),
@@ -134,6 +138,7 @@ describe("a foreign key between two tenant-scoped tables", () => {
             agreementNumber: "XT-OTHER-TENANT",
             accountId: ids.accountB,
             commodityId: ids.commodityA,
+            rateServiceClassId: ids.classA,
             startDate: new Date("2026-01-01"),
           },
         }),
@@ -158,6 +163,7 @@ describe("a foreign key between two tenant-scoped tables", () => {
             agreementNumber: "XT-PLATFORM",
             accountId: ids.accountB,
             commodityId: ids.commodityA,
+            rateServiceClassId: ids.classA,
             startDate: new Date("2026-01-01"),
           },
         }),

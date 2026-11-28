@@ -198,6 +198,7 @@ describe("Request validation", () => {
           accountId: "550e8400-e29b-41d4-a716-446655440000",
           premiseId: "550e8400-e29b-41d4-a716-446655440001",
           commodityId: "550e8400-e29b-41d4-a716-446655440002",
+          rateServiceClassId: "550e8400-e29b-41d4-a716-446655440003",
           startDate: "2026-04-01",
           meters: [], // should fail - min 1
         },
@@ -231,6 +232,7 @@ describe("Request validation", () => {
           accountId: "550e8400-e29b-41d4-a716-446655440000",
           premiseId: "550e8400-e29b-41d4-a716-446655440001",
           commodityId: "550e8400-e29b-41d4-a716-446655440002",
+          rateServiceClassId: "550e8400-e29b-41d4-a716-446655440003",
           startDate: "2026-04-01",
           status: "INVALID_STATUS",
           meters: [{ meterId: "550e8400-e29b-41d4-a716-446655440005", isPrimary: true }],
@@ -291,6 +293,7 @@ describe("Request validation", () => {
           accountId: "550e8400-e29b-41d4-a716-446655440000",
           premiseId: "550e8400-e29b-41d4-a716-446655440001",
           commodityId: "550e8400-e29b-41d4-a716-446655440002",
+          rateServiceClassId: "550e8400-e29b-41d4-a716-446655440003",
           startDate: "2026-04-01",
           readSequence: 140,
           meters: [{ meterId: "550e8400-e29b-41d4-a716-446655440005", isPrimary: true }],

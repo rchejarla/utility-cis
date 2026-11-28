@@ -74,6 +74,53 @@ export async function getServiceAgreement(id: string, utilityId: string) {
   });
 }
 
+/**
+ * The agreement's service class must be one of **its commodity's** active
+ * classes. Classes are defined per commodity because each service's tariff
+ * defines its own (water says "single family" where electric says
+ * "residential"); rating compares only the code, so a class from another
+ * commodity would match by accident or not at all. Exported for the other
+ * paths that create agreements — move-in, transfer, import.
+ */
+export async function assertServiceClass(
+  db: Pick<typeof prisma, "rateServiceClass">,
+  utilityId: string,
+  commodityId: string,
+  rateServiceClassId: string,
+): Promise<void> {
+  const cls = await db.rateServiceClass.findFirst({
+    where: { id: rateServiceClassId, utilityId },
+    select: { commodityId: true, isActive: true, label: true },
+  });
+  if (!cls) {
+    throw Object.assign(new Error("Service class not found"), {
+      statusCode: 400,
+      code: "SERVICE_CLASS_INVALID",
+    });
+  }
+  if (cls.commodityId !== commodityId) {
+    throw Object.assign(
+      new Error(`"${cls.label}" is a class for a different service than this agreement's`),
+      { statusCode: 400, code: "SERVICE_CLASS_INVALID" },
+    );
+  }
+  if (!cls.isActive) {
+    throw Object.assign(new Error(`"${cls.label}" is retired; pick an active class`), {
+      statusCode: 400,
+      code: "SERVICE_CLASS_INVALID",
+    });
+  }
+}
+
+/** The active classes an agreement for this commodity may be put in, in display order. */
+export async function listServiceClassesForCommodity(utilityId: string, commodityId: string) {
+  return prisma.rateServiceClass.findMany({
+    where: { utilityId, commodityId, isActive: true },
+    orderBy: [{ sortOrder: "asc" }, { label: "asc" }],
+    select: { id: true, code: true, label: true },
+  });
+}
+
 export async function createServiceAgreement(
   utilityId: string,
   actorId: string,
@@ -95,6 +142,7 @@ export async function createServiceAgreement(
     data.customFields,
     { mode: "create" },
   );
+  await assertServiceClass(prisma, utilityId, data.commodityId, data.rateServiceClassId);
 
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
@@ -144,6 +192,7 @@ export async function createServiceAgreement(
           agreementNumber,
           accountId: data.accountId,
           commodityId: data.commodityId,
+          rateServiceClassId: data.rateServiceClassId,
           startDate,
           endDate: data.endDate ? new Date(data.endDate) : null,
           status,
@@ -273,6 +322,12 @@ export async function updateServiceAgreement(
       { mode: "update", existingStored },
     );
     updateData.customFields = merged as object;
+  }
+
+  // The service class — a correction, audited with the rest of the update.
+  if (data.rateServiceClassId !== undefined) {
+    await assertServiceClass(prisma, utilityId, before.commodityId, data.rateServiceClassId);
+    updateData.rateServiceClassId = data.rateServiceClassId;
   }
 
   return auditUpdate(

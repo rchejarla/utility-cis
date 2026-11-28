@@ -10,6 +10,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -144,6 +145,7 @@ async function makeAgreement(
         agreementNumber: opts.number ?? "SA-TRANSFER",
         accountId: fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
       },
@@ -186,6 +188,7 @@ async function makeTwoMeterAgreement() {
         agreementNumber: "SA-TWO-METERS",
         accountId: fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
       },

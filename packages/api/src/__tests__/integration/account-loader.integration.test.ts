@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, resetDb, makeTenantFixture, TENANT_A, endAdminPool, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, resetDb, makeTenantFixture, TENANT_A, endAdminPool, seedAsPlatform, serviceClassFor } from "./_effective-dating-fixtures.js";
 import { AccountLoader } from "../../lib/rate-engine-loaders/loaders/account-loader.js";
 
 import { runAsTenant } from "../../lib/tenant-context.js";
@@ -96,7 +96,9 @@ async function makeSaFixture(opts: {
       });
     }
 
-    let serviceClassId = "";
+    // An agreement's class is required (NOT NULL since 2026-11-28), so a
+    // fixture that does not care which gets the default one.
+    let serviceClassId: string;
     if (opts.attachServiceClass) {
       const cls = await prisma.rateServiceClass.create({
         data: {
@@ -107,6 +109,8 @@ async function makeSaFixture(opts: {
         },
       });
       serviceClassId = cls.id;
+    } else {
+      serviceClassId = await serviceClassFor(prisma, fix.utilityId, fix.commodityId);
     }
 
     const sa = await prisma.serviceAgreement.create({
@@ -117,7 +121,7 @@ async function makeSaFixture(opts: {
         commodityId: fix.commodityId,
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
-        rateServiceClassId: opts.attachServiceClass ? serviceClassId : null,
+        rateServiceClassId: serviceClassId,
       },
     });
 
@@ -150,14 +154,6 @@ describe("AccountLoader", () => {
     const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
     const out = await scoped(TENANT_A, () => loader.load(["account:class"]));
     expect(out.get("account:class")).toBe("multi_family");
-  });
-
-  it("account:class returns null when the SA has no rateServiceClassId", async () => {
-    const { saId } = await makeSaFixture({ attachServiceClass: false });
-
-    const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await scoped(TENANT_A, () => loader.load(["account:class"]));
-    expect(out.get("account:class")).toBeNull();
   });
 
   it("account:flag:paperless_billing returns true when the column is true", async () => {

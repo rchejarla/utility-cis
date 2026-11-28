@@ -13,6 +13,7 @@ import {
   truncateTables,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -157,6 +158,7 @@ beforeEach(() =>
       agreementNumber: "SA-00bb",
       accountId: fixB.accountId,
       commodityId: fixB.commodityId,
+      rateServiceClassId: await serviceClassFor(prisma, TENANT_B, fixB.commodityId),
       startDate: new Date("2024-01-01"),
       status: "ACTIVE",
     },

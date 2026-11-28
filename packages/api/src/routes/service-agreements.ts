@@ -21,6 +21,7 @@ import {
   createServiceAgreement,
   updateServiceAgreement,
   addMeterToAgreement,
+  listServiceClassesForCommodity,
 } from "../services/service-agreement.service.js";
 import {
   activateServiceAgreement,
@@ -36,6 +37,23 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
     const result = await listServiceAgreements(utilityId, query);
     return reply.send(result);
   });
+
+  /*
+   * The service classes an agreement for this commodity may be put in —
+   * active ones, in display order. Under `agreements:VIEW` so anyone who
+   * creates or edits an agreement can choose its (required) class without
+   * also holding `rate_schedules:VIEW`, which gates managing the classes.
+   * Registered before `/:id`; Fastify's static segment wins regardless.
+   */
+  app.get(
+    "/api/v1/service-agreements/service-classes",
+    { config: { module: "agreements", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const { commodityId } = z.object({ commodityId: z.string().uuid() }).parse(request.query);
+      return reply.send({ data: await listServiceClassesForCommodity(utilityId, commodityId) });
+    },
+  );
 
   app.get("/api/v1/service-agreements/:id", { config: { module: "agreements", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;

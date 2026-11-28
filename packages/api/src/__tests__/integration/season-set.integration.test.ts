@@ -9,6 +9,7 @@ import {
   truncateTables,
   seedAsPlatform,
   endAdminPool,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
 
@@ -64,6 +65,7 @@ beforeEach(() =>
         agreementNumber: "SA-SEASON",
         accountId: fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, TENANT_A, fixA.commodityId),
         startDate: new Date("2025-01-01"),
         status: "ACTIVE",
       },

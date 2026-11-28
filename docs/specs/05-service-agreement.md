@@ -28,6 +28,7 @@ The core billing unit linking account, premise, commodity, rate schedule, billin
 | account_id | UUID | FK → Account (required) |
 | premise_id | UUID | FK → Premise (where service is delivered) |
 | commodity_id | UUID | FK → Commodity (what is being measured and billed) |
+| rate_service_class_id | UUID | **Required** (NOT NULL since 2026-11-28). FK → RateServiceClass, tenant-scoped composite, ON DELETE RESTRICT. The customer category this service is priced as — see *Service class* below |
 | rate_schedule_id | UUID | FK → RateSchedule (pricing rules) |
 | billing_cycle_id | UUID | FK → BillingCycle (when to read and bill) |
 | start_date | DATE | Required; when service begins |
@@ -84,7 +85,8 @@ All endpoints require JWT authentication with `utility_id` claim.
 |--------|------|-------------|
 | GET | `/api/v1/service-agreements` | List service agreements (paginated, filterable) |
 | POST | `/api/v1/service-agreements` | Create a new service agreement (with meter assignments) |
-| GET | `/api/v1/service-agreements/:id` | Get agreement by ID (includes meters, premise, account) |
+| GET | `/api/v1/service-agreements/service-classes?commodityId=` | The commodity's active service classes, for the pickers. Under `agreements:VIEW`, so choosing an agreement's required class does not also need `rate_schedules:VIEW`, which gates managing the classes (`/api/v1/rate-service-classes`) |
+| GET | `/api/v1/service-agreements/:id` | Get agreement by ID (includes meters, premise, account, service class) |
 | PATCH | `/api/v1/service-agreements/:id` | Update editable fields (rate, cycle, read sequence, custom fields). **Lifecycle fields (`startDate`, `endDate`, `status`) are not allowed here** — see the transitional endpoints below |
 | POST | `/api/v1/service-agreements/:id/close` | Cascading close: terminal-status the SA AND set `removed_date` on every still-open meter assignment in one transaction. Body: `{ endDate, status: FINAL\|CLOSED, reason? }` |
 | POST | `/api/v1/service-agreements/:id/transfer` | Reassign the agreement to another account as of `transferDate`. Body: `{ targetAccountId, transferDate, newAgreementNumber?, finalMeterReading?, initialMeterReading?, reason? }`. See **Transfer of service** below for what it carries and its five refusals |
@@ -116,6 +118,7 @@ All endpoints require JWT authentication with `utility_id` claim.
 | accountId | Yes | UUID |
 | premiseId | Yes | UUID |
 | commodityId | Yes | UUID |
+| rateServiceClassId | Yes | UUID — one of the commodity's active classes (`SERVICE_CLASS_INVALID` otherwise) |
 | rateScheduleId | Yes | UUID |
 | billingCycleId | Yes | UUID |
 | startDate | Yes | ISO date string |
@@ -137,10 +140,44 @@ All endpoints require JWT authentication with `utility_id` claim.
 | rateScheduleId | Yes |
 | billingCycleId | Yes |
 | customFields | Yes |
+| rateServiceClassId | Yes — a correction; same commodity check as create |
 
 The PATCH input schema is `.strict()` — passing any field not in the table above returns 422 with a Zod error. Lifecycle fields (`startDate`, `endDate`, `status`) are intentionally rejected: they go through the dedicated `POST /:id/close` endpoint, which cascades onto meter assignments atomically. Generic UPDATE setting `status=FINAL` without `endDate` (or vice versa) is also rejected at the database layer by the `enforce_sa_lifecycle_invariants` trigger (migration `20260427144400`). Fields that cannot be changed after creation under any path: `agreementNumber`, `accountId`, `premiseId`, `commodityId`.
 
 ## Business Rules
+
+### Service class (required, 2026-11-28)
+
+The customer category the service is priced as — residential, single
+family, multi-family, commercial, irrigation… Each service's tariff
+defines its own classes (water says "single family" where electric says
+"residential"), so classes are defined **per commodity** and an
+agreement's class must be one of its commodity's active ones. It is on the
+agreement, not the account, because one account holds agreements for
+several services, each in its own tariff's vocabulary; the account type
+(Residential, Commercial, Industrial) is too coarse to stand in for it.
+
+**Why it is required.** A rate charge can be restricted to classes
+("customer class equals residential"), and rating compares the
+agreement's class code with it. An agreement with no class silently missed
+every restricted charge — water and sewer bills came out without their
+usage charges — and until 2026-11-28 no screen could set it, so every
+agreement created through the app was in that state. The 2026-11-28
+migration filled the unambiguous blanks from the account type and refuses
+to proceed while any remain.
+
+**Set on every path that creates an agreement:** New Agreement and the
+agreement page's Edit (`ServiceClassSelect`, pre-selecting the class whose
+code matches the account type, which staff can change), move-in (per
+agreement), transfer (carried from the source agreement — same service,
+same premise), and the CSV import (`serviceClassCode`, resolved per
+commodity; `MISSING_SERVICE_CLASS`, `SERVICE_CLASS_NOT_FOUND`,
+`SERVICE_CLASS_RETIRED`).
+
+**Not dated.** Rating reads the current class, so a change applies to
+every period rated afterwards, a re-rate of an earlier period included —
+right for correcting a wrong class, wrong for a customer who genuinely
+changed category mid-term. Dating it waits on rebill (spec 07b).
 
 ### Status Transitions
 

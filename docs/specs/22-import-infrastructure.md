@@ -769,6 +769,13 @@ meter would then feed two bills. The check runs inside the row's own
 transaction, so two lines of one file naming the same meter cannot both
 pass. `/service-agreements/import` mounts the existing wizard.
 
+**Service class, required since 2026-11-28** (spec 05): a `serviceClassCode`
+column, resolved by code **within the row's commodity** (classes are defined
+per commodity, so "residential" for electric and for sewer are different
+rows). `MISSING_SERVICE_CLASS`, `SERVICE_CLASS_NOT_FOUND` and
+`SERVICE_CLASS_RETIRED` each name the column's problem. An overlay update by
+legacy key mirrors the class like the agreement's other fields.
+
 ### Slice 4b — Bell icon  *(✓ shipped 2026-04-29)*
 Topbar bell renders unread `InAppNotification` rows. Three backend endpoints under `/api/v1/inbox/*` (separated from `/api/v1/notifications/*` which already serves the outbound email/SMS template log): `GET /inbox/unread` (list + unread count), `POST /inbox/:id/read`, `POST /inbox/read-all`. These intentionally bypass the tenant-module gate — every signed-in user sees their own bell — but auth + tenant scoping still apply via the standard middleware. Bell polls every 30s while focused, pauses on blur, optimistic mark-read on click. Items with a `link` (e.g. `/imports/<id>`) render as clickable rows.
 

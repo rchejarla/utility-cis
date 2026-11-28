@@ -9,6 +9,7 @@ import {
   type TenantFixture,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
 
@@ -85,6 +86,7 @@ async function service(opts: {
         agreementNumber: opts.agreementNumber,
         accountId: opts.accountId ?? fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, utilityId, fix.commodityId),
         startDate: new Date("2025-01-01"),
         endDate: opts.endDate ?? null,
         status: opts.status ?? "ACTIVE",

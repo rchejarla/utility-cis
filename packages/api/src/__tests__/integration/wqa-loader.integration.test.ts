@@ -8,6 +8,7 @@ import {
   TENANT_A,
   endAdminPool,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { WqaLoader } from "../../lib/rate-engine-loaders/loaders/wqa-loader.js";
 
@@ -80,6 +81,7 @@ async function makeSa(agreementNumber = "SA-WQA-1"): Promise<SaFixture> {
         agreementNumber,
         accountId: fix.accountId,
         commodityId: fix.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fix.utilityId, fix.commodityId),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },

@@ -11,6 +11,7 @@ import { NotesTab } from "@/components/ui/notes-tab";
 import { AssignRateScheduleDialog } from "@/components/service-agreements/assign-rate-schedule-dialog";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
+import { ServiceClassSelect } from "@/components/service-agreements/service-class-select";
 import { DataTable } from "@/components/ui/data-table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
@@ -43,6 +44,9 @@ interface ServiceAgreement {
   }>;
   commodity?: { name: string };
   commodityId?: string;
+  /** The customer category this service is priced as. Required (spec 05). */
+  rateServiceClassId?: string;
+  rateServiceClass?: { id: string; code: string; label: string } | null;
   meters?: Array<{
     id: string;
     meterId: string;
@@ -141,6 +145,7 @@ export default function ServiceAgreementDetailPage({
   const [closeBillDialog, setCloseBillDialog] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
+  const [editServiceClassId, setEditServiceClassId] = useState("");
   const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
   const [showAddMeter, setShowAddMeter] = useState(false);
@@ -284,12 +289,14 @@ export default function ServiceAgreementDetailPage({
   const handleEdit = async () => {
     if (!sa) return;
     setEditCustomFields({ ...(sa.customFields ?? {}) });
+    setEditServiceClassId(sa.rateServiceClassId ?? "");
     setEditing(true);
   };
 
   const handleCancel = () => {
     setEditing(false);
     setEditCustomFields({});
+    setEditServiceClassId("");
   };
 
   const handleSave = async () => {
@@ -308,6 +315,10 @@ export default function ServiceAgreementDetailPage({
       const editedCustomJson = JSON.stringify(editCustomFields ?? {});
       if (storedCustomJson !== editedCustomJson) {
         changes.customFields = editCustomFields;
+      }
+      // The service class: required, so only a real choice is sent.
+      if (editServiceClassId && editServiceClassId !== sa.rateServiceClassId) {
+        changes.rateServiceClassId = editServiceClassId;
       }
 
       // Nothing changed, so nothing is sent. An empty PATCH is not inert:
@@ -561,6 +572,26 @@ export default function ServiceAgreementDetailPage({
             <div style={fieldStyle}>
               <span style={labelStyle}>Commodity</span>
               <CommodityBadge commodity={sa.commodity?.name ?? ""} />
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Service Class</span>
+              {editing && sa.commodityId ? (
+                <div>
+                  <ServiceClassSelect
+                    style={{ ...valueStyle, padding: "6px 10px", borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--bg-elevated)", fontFamily: "inherit", maxWidth: 320 }}
+                    commodityId={sa.commodityId}
+                    value={editServiceClassId}
+                    onChange={setEditServiceClassId}
+                  />
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: 4 }}>
+                    Applies to every bill rated from now on, including a re-rate of an earlier period.
+                  </div>
+                </div>
+              ) : (
+                <span data-testid="service-class" style={valueStyle}>
+                  {sa.rateServiceClass?.label ?? "—"}
+                </span>
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Billing Cycle</span>

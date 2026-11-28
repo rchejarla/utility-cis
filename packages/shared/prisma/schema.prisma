@@ -597,7 +597,12 @@ model ServiceAgreement {
   startDate       DateTime               @map("start_date") @db.Date
   endDate         DateTime?              @map("end_date") @db.Date
   status          ServiceAgreementStatus @default(PENDING) @map("status")
-  rateServiceClassId String?             @map("rate_service_class_id") @db.Uuid
+  /// The customer category this service is priced as. **Required** since
+  /// 2026-11-28: a rate charge restricted to a class silently did not apply
+  /// to an agreement with none. One of this commodity's classes (checked by
+  /// the service). The key is the tenant-scoped composite, ON DELETE
+  /// RESTRICT, in the `service_agreement_class_required` migration.
+  rateServiceClassId String             @map("rate_service_class_id") @db.Uuid
   customFields    Json                   @default("{}") @map("custom_fields")
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
@@ -619,7 +624,7 @@ model ServiceAgreement {
   // Relations
   account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
   commodity       Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
-  rateServiceClass RateServiceClass?      @relation(fields: [rateServiceClassId], references: [id], onDelete: SetNull)
+  rateServiceClass RateServiceClass       @relation(fields: [rateServiceClassId], references: [id], onDelete: Restrict)
   servicePoints   ServicePoint[]
   meterReads      MeterRead[]
   containers      Container[]

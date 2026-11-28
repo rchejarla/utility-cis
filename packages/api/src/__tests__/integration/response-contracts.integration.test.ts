@@ -16,6 +16,7 @@ import {
   endAdminPool,
   ensurePrincipal,
   seedAsPlatform,
+  serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -106,6 +107,7 @@ async function seedRead(over: { exceptionCode?: string; billed?: boolean } = {})
         agreementNumber: "SA-CONTRACT",
         accountId: fixA.accountId,
         commodityId: fixA.commodityId,
+        rateServiceClassId: await serviceClassFor(prisma, fixA.utilityId, fixA.commodityId),
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },
