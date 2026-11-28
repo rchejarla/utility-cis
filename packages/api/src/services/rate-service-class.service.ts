@@ -30,7 +30,11 @@ export async function listRateServiceClasses(
       ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
     },
     orderBy: [{ commodityId: "asc" }, { sortOrder: "asc" }],
-    include: { commodity: { select: commoditySelect } },
+    include: {
+      commodity: { select: commoditySelect },
+      // How many agreements are in each class — what retiring one affects.
+      _count: { select: { serviceAgreements: true } },
+    },
   });
 }
 

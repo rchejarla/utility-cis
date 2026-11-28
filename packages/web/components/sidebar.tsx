@@ -22,6 +22,7 @@ import {
   faClock,
   faCloudSunRain,
   faLayerGroup,
+  faUsersRectangle,
   faTags,
   faDroplet,
   faClipboardList,
@@ -371,6 +372,14 @@ export const navSections: NavSection[] = [
        * and whoever may set the hours may set which days get them.
        */
       { href: "/tou-holiday-sets", label: "Holidays", icon: faCalendarStar, module: "rate_schedules" },
+      /*
+       * The customer categories a tariff's charges are conditioned on
+       * ("customer class equals residential"), and which every agreement
+       * must be in (2026-11-28). Under Tariffs and `rate_schedules`
+       * because that is what they are for; choosing an agreement's class
+       * needs only `agreements:VIEW`.
+       */
+      { href: "/service-classes", label: "Service Classes", icon: faUsersRectangle, module: "rate_schedules" },
     ],
   },
   {

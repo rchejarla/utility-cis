@@ -201,6 +201,18 @@ loser, which is why its message had to be legible too (see below).
 
 ## UI Pages
 
+### Service Classes (`/service-classes`, 2026-11-28)
+
+Under Tariffs, gated on `rate_schedules` (`/api/v1/rate-service-classes`).
+The customer categories a charge's `class` / `class_in` condition names,
+and which every agreement must be in (spec 05). One commodity at a time,
+since each service's tariff defines its own; each class shows how many
+agreements are in it (`_count.serviceAgreements` on the list). Add takes a
+code, label and sort order; **the code is fixed after creation** — rating
+compares codes, so renaming one would silently detach every charge naming
+it — while label, order and status can change. Retiring a class that
+agreements are in asks first; they keep it, and it stops being offered.
+
 ### Rate Schedules List (`/rate-schedules`)
 
 - Paginated table: name, code, commodity, rate_type, effective_date, expiration_date, status badge (Active/Expired/Future)

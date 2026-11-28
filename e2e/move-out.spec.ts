@@ -234,11 +234,19 @@ async function makeFixture(api: Api): Promise<Fixture> {
     status: "ACTIVE",
   });
 
+  // Every agreement is in a service class (spec 05, required since
+  // 2026-11-28). Whichever the commodity offers first, as the screen does.
+  const { data: classes } = await api.get<{ data: { id: string }[] }>(
+    `/api/v1/service-agreements/service-classes?commodityId=${commodity!.id}`,
+  );
+  expect(classes.length, `no service class for ${COMMODITY_CODE} — run seed_db.bat`).toBeGreaterThan(0);
+
   const agreement = await api.post<Agreement>("/api/v1/service-agreements", {
     agreementNumber: `${FIXTURE_PREFIX}-SRC`,
     accountId: account.id,
     premiseId: premise.id,
     commodityId: commodity!.id,
+    rateServiceClassId: classes[0]!.id,
     startDate: today(),
     status: "ACTIVE",
     meters: [{ meterId: meter.id, isPrimary: true }],
