@@ -346,17 +346,21 @@ async function main() {
   };
   for (const [period, value] of Object.entries(SUPPLY_BY_QUARTER)) {
     const [y, q] = period.split("-Q");
+    const effectiveDate = new Date(Date.UTC(Number(y), (Number(q) - 1) * 3, 1));
     await p.rateIndex.create({
-      data: {
-        utilityId: UID,
-        name: "supply_residential",
-        period,
-        value,
-        effectiveDate: new Date(Date.UTC(Number(y), (Number(q) - 1) * 3, 1)),
-      },
+      data: { utilityId: UID, name: "supply_residential", period, value, effectiveDate },
+    });
+    /*
+     * The general-service supply price, for the commercial classes
+     * (2026-11-28). Placeholder: a little under the residential price, as
+     * commercial supply usually is — not NorthWestern's figure, which this
+     * repo does not have (07c: NWE publishes scanned PDFs).
+     */
+    await p.rateIndex.create({
+      data: { utilityId: UID, name: "supply_commercial", period, value: +(value - 0.0045).toFixed(5), effectiveDate },
     });
   }
-  console.log("  " + (2 + Object.keys(SUPPLY_BY_QUARTER).length) + " rate indices");
+  console.log("  " + (2 + 2 * Object.keys(SUPPLY_BY_QUARTER).length) + " rate indices");
 
   // ============ RATE SCHEDULES + COMPONENTS (v2 — slice 1 task 10) ============
   // Schedules are metadata-only; pricing lives in rate_component rows.
@@ -674,6 +678,18 @@ async function main() {
         period_resolver: "current_quarter", multiplier: 1, unit: "kWh" },
     },
   });
+  // Default supply for the commercial classes, on its own index.
+  await p.rateComponent.create({
+    data: {
+      utilityId: UID, rateScheduleId: rsE_ESS.id, kindCode: "consumption",
+      label: "Default Supply — General Service, Indexed Quarterly", sortOrder: 20,
+      effectiveDate: new Date("2026-01-01"),
+      predicate: { class_in: ["small_commercial", "large_commercial"] },
+      quantitySource: { base: "metered" },
+      pricing: { type: "indexed", index_name: "supply_commercial",
+        period_resolver: "current_quarter", multiplier: 1, unit: "kWh" },
+    },
+  });
 
   const rsE_USBC = await p.rateSchedule.create({
     data: {
@@ -698,6 +714,61 @@ async function main() {
     },
   });
 
+  /*
+   * ---- NWE General Service delivery, for the commercial classes ----
+   *
+   * Shaped on NorthWestern's GSEDS-1 **minus its demand charge** (added
+   * 2026-11-28). GSEDS-1 is a customer charge, energy per kWh and a
+   * demand charge per kW with a ratchet; the rating engine cannot price
+   * demand yet (no spec — 07c, spec 26), so a commercial bill here
+   * understates what NWE would charge by that component. The dollar
+   * figures are **placeholders**, not NWE's: the repo has the tariff's
+   * shape but not its rates. Before this, the seed's commercial electric
+   * agreements were on the residential delivery schedule, whose every
+   * charge is residential-only, and billed nothing but the USBC rider.
+   */
+  const rsE_GSEDS = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "NWE General Service Delivery",
+      code: "NWE-GSEDS-1",
+      commodityId: electric.id,
+      effectiveDate: new Date("2026-01-01"),
+      description:
+        "NWE-style general service delivery (GSEDS-1) without its demand charge, which the engine cannot price yet. Placeholder rates, not NWE's published figures.",
+      regulatoryRef: "Sched GSEDS-1",
+      version: 1,
+    },
+  });
+  await p.rateComponent.createMany({
+    data: [
+      { utilityId: UID, rateScheduleId: rsE_GSEDS.id, kindCode: "service_charge",
+        label: "General Service Customer Charge — Small", sortOrder: 10, effectiveDate: new Date("2026-01-01"),
+        predicate: { class: "small_commercial" },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "flat", rate: 26.5, unit: "MONTH" },
+      },
+      { utilityId: UID, rateScheduleId: rsE_GSEDS.id, kindCode: "service_charge",
+        label: "General Service Customer Charge — Large", sortOrder: 11, effectiveDate: new Date("2026-01-01"),
+        predicate: { class: "large_commercial" },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "flat", rate: 85.0, unit: "MONTH" },
+      },
+      { utilityId: UID, rateScheduleId: rsE_GSEDS.id, kindCode: "consumption",
+        label: "General Service Delivery Energy", sortOrder: 20, effectiveDate: new Date("2026-01-01"),
+        predicate: { class_in: ["small_commercial", "large_commercial"] },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 0.0298, unit: "kWh" },
+      },
+      { utilityId: UID, rateScheduleId: rsE_GSEDS.id, kindCode: "surcharge",
+        label: "General Service Delivery Tax", sortOrder: 30, effectiveDate: new Date("2026-01-01"),
+        predicate: { class_in: ["small_commercial", "large_commercial"] },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 0.0117650, unit: "kWh" },
+      },
+    ],
+  });
+
   // Published, because a draft schedule cannot be billed against:
   // `bill-segment.service` picks assignments by their own date window
   // and then refuses any schedule with no publishedAt
@@ -717,7 +788,7 @@ async function main() {
     data: { publishedAt: new Date() },
   });
 
-  console.log("  7 rate schedules with components, published");
+  console.log("  8 rate schedules with components, published");
 
   const premiseData = [
     { addressLine1: "742 Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704", geoLat: 39.7817, geoLng: -89.6501, premiseType: "RESIDENTIAL", commodityIds: [water.id, sewer.id, stormwater.id, solidWaste.id], eruCount: 1, hasStormwaterInfra: true },
@@ -839,15 +910,16 @@ async function main() {
     { agreementNumber: "SA-0001", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: water.id, mIdx: [0], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
     { agreementNumber: "SA-0002", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: sewer.id, mIdx: [1], svcClass: classMap[S].residential.id, schedules: [{ rs: rsS, role: "primary" }] },
     { agreementNumber: "SA-0003", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: water.id, mIdx: [2], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
+    // Commercial electric is on general-service delivery, not residential.
     { agreementNumber: "SA-0004", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: electric.id, mIdx: [3], svcClass: classMap[E].small_commercial.id, schedules: [
-      { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
+      { rs: rsE_GSEDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
     ]},
     { agreementNumber: "SA-0006", accountId: aArr[2].id, premiseId: pArr[2].id, commodityId: electric.id, mIdx: [5], svcClass: classMap[E].residential.id, schedules: [
       { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
     ]},
     { agreementNumber: "SA-0007", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: water.id, mIdx: [7], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
     { agreementNumber: "SA-0008", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: electric.id, mIdx: [8], svcClass: classMap[E].large_commercial.id, schedules: [
-      { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
+      { rs: rsE_GSEDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
     ]},
     { agreementNumber: "SA-0009", accountId: aArr[4].id, premiseId: pArr[4].id, commodityId: water.id, mIdx: [9], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
     { agreementNumber: "SA-0010", accountId: aArr[5].id, premiseId: pArr[5].id, commodityId: water.id, mIdx: [11], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
@@ -1069,8 +1141,10 @@ async function main() {
    */
   const usageFor = (sa) => {
     const uom = uomCodeById[sa.servicePoints[0].meters[0].meter.uomId];
-    const commercial = /commercial|industrial|government|msu/.test(sa.rateServiceClass?.code ?? "");
+    const cls = sa.rateServiceClass?.code ?? "";
+    const commercial = /commercial|industrial|government|msu/.test(cls);
     if (uom === "KWH") {
+      if (/large_commercial|industrial/.test(cls)) return () => 15000 + Math.floor(Math.random() * 10000);
       return commercial
         ? () => 2500 + Math.floor(Math.random() * 2000)
         : () => 650 + Math.floor(Math.random() * 300);

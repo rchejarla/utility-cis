@@ -76,7 +76,7 @@ afterAll(async () => {
 });
 
 describe("the dev seed produces a database that can bill", () => {
-  it("rates a run end to end, at residential magnitudes", () =>
+  it("rates a run end to end, at one month's magnitudes", () =>
     seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
        * scoped wrappers re-enter their own tenant scope. */
       const { prisma } = prismaImports;
@@ -138,10 +138,13 @@ describe("the dev seed produces a database that can bill", () => {
         where: { billingRunId: run.id, status: "BILLED" },
       });
       for (const item of billed) {
-        // Tens of dollars. $530,257.75 and $33,467.69 both cleared a
-        // "greater than zero" assertion earlier today.
+        // One month's magnitudes. $530,257.75 and $33,467.69 both cleared
+        // a "greater than zero" assertion once. The cap was $500 while
+        // every seeded customer was residential; since 2026-11-28 the seed
+        // has a large commercial electric customer billing ~$2,000 a
+        // month, so it is $5,000 — still far under a catch-up of months.
         expect(Number(item.total)).toBeGreaterThan(1);
-        expect(Number(item.total)).toBeLessThan(500);
+        expect(Number(item.total)).toBeLessThan(5000);
         // One month, not a catch-up from the agreement's start date.
         const days =
           (item.servicePeriodEnd!.getTime() - item.servicePeriodStart!.getTime()) / 86_400_000;
