@@ -19,6 +19,7 @@ export interface RatedSegment {
     quantity: Decimal | null;
     unit?: string | null;
     amount: Decimal;
+    basis?: string | null;
   }>;
 }
 
@@ -43,6 +44,9 @@ export function chargeGroups(segments: RatedSegment[]): BillPresentationGroup[] 
             ? `${money(line.quantity)} ${line.unit}`
             : money(line.quantity),
       amount: money(line.amount),
+      // Only when there is one: an absent key keeps every other bill's
+      // presentation, and so its reprint, exactly as it was.
+      ...(line.basis ? { basis: line.basis } : {}),
     }));
     groups.push({
       heading: commodity?.name ?? commodity?.code ?? "Charges",

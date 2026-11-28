@@ -41,13 +41,28 @@ export function resolveQuantity(
   qsource: QuantitySource,
   ctx: RatingContext,
   targetUnit?: string,
+  /** Collects why the quantity differs from the measurement — the bill line's `basis`. */
+  notes?: string[],
 ): Decimal {
   let qty = lookupBase(qsource, ctx, targetUnit);
   for (const t of qsource.transforms ?? []) {
-    qty = applyTransform(t, qty, ctx);
+    qty = applyTransform(t, qty, ctx, targetUnit, notes);
   }
   return qty;
 }
+
+/** Where a meter's period peak lives (spec 31): `demand:peak:<meterId>`. */
+const DEMAND_PEAK_PREFIX = "demand:peak:";
+
+/** A rating refusal with a code a billing run can record against the account. */
+function refusal(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code, statusCode: 422 });
+}
+
+/** A kW figure as a bill prints it: up to two decimals, no trailing zeros. */
+const kw = (d: Decimal) => String(Number(d.toFixed(2)));
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const monthName = (yyyyMm: string) => `${MONTHS[Number(yyyyMm.slice(5, 7)) - 1]} ${yyyyMm.slice(0, 4)}`;
 
 function lookupBase(
   qsource: QuantitySource,
@@ -159,8 +174,42 @@ function lookupBase(
       }
       return total;
     }
-    case "peak_demand":
-      throw new UnsupportedInSlice3Error("peak_demand quantity source");
+    case "peak_demand": {
+      /*
+       * The period's measured peak (spec 31, DEM-ENG-1): each meter's own
+       * peak — already the maximum of its reads, DEM-ENG-1a — then the
+       * meters added (DEM-ENG-2, non-coincident).
+       *
+       * **An absent peak is never zero** (DEM-ENG-3), the rule the TOU
+       * buckets follow. A meter with a demand register and no read this
+       * period may have had its peak in the read that is missing; an
+       * agreement whose meters measure no demand at all cannot be billed
+       * a demand charge. Both refuse, naming why.
+       */
+      const peaks = [...ctx.vars.entries()].filter(([k]) => k.startsWith(DEMAND_PEAK_PREFIX));
+      const missing = peaks.filter(([, v]) => (v as { quantity: unknown }).quantity === null);
+      if (missing.length > 0) {
+        const ids = missing.map(([k]) => k.slice(DEMAND_PEAK_PREFIX.length)).join(", ");
+        throw refusal(
+          "DEMAND_READ_MISSING",
+          `No demand read in this period for meter ${ids}, which has a demand register. ` +
+            "Its peak may be the read that is missing, so the demand charge cannot be worked out.",
+        );
+      }
+      if (peaks.length === 0) {
+        throw refusal(
+          "DEMAND_NOT_MEASURED",
+          "This agreement's tariff charges for peak demand, but none of its meters measures demand. " +
+            "Give a meter a demand register, or move the agreement to a tariff without a demand charge.",
+        );
+      }
+      let total = ZERO;
+      for (const [, v] of peaks) {
+        const peak = v as { quantity: Decimal; unit: string };
+        total = total.plus(targetUnit ? convertQuantity(peak.quantity, peak.unit, targetUnit) : peak.quantity);
+      }
+      return total;
+    }
     default:
       throw new Error(`Unknown quantity source base: ${qsource.base}`);
   }
@@ -170,10 +219,12 @@ function applyTransform(
   t: Record<string, unknown>,
   qty: Decimal,
   ctx: RatingContext,
+  targetUnit: string | undefined,
+  notes: string[] | undefined,
 ): Decimal {
   switch (t.type) {
     case "ratchet":
-      throw new UnsupportedInSlice3Error("ratchet transform");
+      return applyRatchet(t, qty, ctx, targetUnit, notes);
     case "clamp": {
       let q = qty;
       if (t.min !== undefined) q = Decimal.max(q, toDecimal(t.min as number));
@@ -223,6 +274,61 @@ function applyTransform(
     default:
       throw new Error(`Unknown quantity transform type: ${t.type}`);
   }
+}
+
+/**
+ * Billed demand = max(measured, percent% × the highest measured peak in
+ * the lookback) — spec 31, DEM-ENG-4.
+ *
+ * The lookback is the agreement's own history (D1), **measured** peaks
+ * rather than billed ones (D7: ratcheting on a ratchet would compound for
+ * ever), over the `lookback_months` before this period. `months` limits it
+ * to peaks read in those calendar months — a summer ratchet (D2).
+ *
+ * When the ratchet sets the figure, it says so in `notes`; that becomes
+ * the line's `basis`, because a customer billed for capacity they did not
+ * use this month has to be able to see why (DEM-BIL-1).
+ */
+function applyRatchet(
+  t: Record<string, unknown>,
+  measured: Decimal,
+  ctx: RatingContext,
+  targetUnit: string | undefined,
+  notes: string[] | undefined,
+): Decimal {
+  const percent = toDecimal(t.percent as number);
+  const lookback = Number(t.lookback_months);
+  const months = Array.isArray(t.months) ? new Set((t.months as number[]).map(Number)) : null;
+
+  const historyKey = `demand:history:${ctx.base.sa.id}`;
+  const history = ctx.vars.get(historyKey) as
+    | Array<{ month: string; readDate: string; quantity: Decimal; unit: string }>
+    | undefined;
+  if (!history) {
+    throw new Error(`The ratchet transform requires the ${historyKey} variable`);
+  }
+
+  const from = new Date(ctx.base.period.startDate);
+  from.setUTCMonth(from.getUTCMonth() - lookback);
+  const fromDay = from.toISOString().slice(0, 10);
+
+  let best: { month: string; quantity: Decimal } | null = null;
+  for (const h of history) {
+    if (h.readDate < fromDay) continue;
+    if (months && !months.has(Number(h.month.slice(5, 7)))) continue;
+    const q = targetUnit ? convertQuantity(toDecimal(h.quantity), h.unit, targetUnit) : toDecimal(h.quantity);
+    if (!best || q.gt(best.quantity)) best = { month: h.month, quantity: q };
+  }
+  // A young agreement ratchets on what it has; one with no history, not at all.
+  if (!best) return measured;
+
+  const floor = best.quantity.mul(percent).div(100);
+  if (floor.lte(measured)) return measured;
+
+  notes?.push(
+    `Ratchet: ${kw(percent)}% of ${kw(best.quantity)} kW peak (${monthName(best.month)}); measured ${kw(measured)} kW`,
+  );
+  return floor;
 }
 
 function inferMeterId(ctx: RatingContext): string | undefined {

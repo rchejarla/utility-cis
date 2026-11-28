@@ -67,6 +67,27 @@ describe("quantitySourceSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a summer-only ratchet (spec 31, D2)", () => {
+    const result = quantitySourceSchema.safeParse({
+      base: "peak_demand",
+      transforms: [{ type: "ratchet", percent: 75, lookback_months: 11, months: [6, 7, 8, 9] }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("refuses a ratchet over 100%, or one reaching past the 36 months loaded", () => {
+    const over = quantitySourceSchema.safeParse({
+      base: "peak_demand",
+      transforms: [{ type: "ratchet", percent: 120, lookback_months: 11 }],
+    });
+    const far = quantitySourceSchema.safeParse({
+      base: "peak_demand",
+      transforms: [{ type: "ratchet", percent: 75, lookback_months: 48 }],
+    });
+    expect(over.success).toBe(false);
+    expect(far.success).toBe(false);
+  });
+
   it("rejects an unknown base", () => {
     const result = quantitySourceSchema.safeParse({
       base: "telepathic",

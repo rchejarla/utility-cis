@@ -62,8 +62,10 @@ export function rate(ctx: RatingContext): RatingResult {
       unit?: string;
     };
 
-    // Quantity
-    const qty = resolveQuantity(c.quantitySource as never, ctx, pricing.unit);
+    // Quantity — and, where a transform overrode the measurement (a
+    // demand ratchet), why: it reaches the bill line as `basis`.
+    const notes: string[] = [];
+    const qty = resolveQuantity(c.quantitySource as never, ctx, pricing.unit, notes);
     evalTrace.evaluatedQuantity = qty;
     const amount = applyPricing(pricing as never, qty, lines, ctx);
 
@@ -84,6 +86,7 @@ export function rate(ctx: RatingContext): RatingResult {
       quantity: qty,
       unit: pricing.unit,
       rate: pricing,
+      ...(notes.length > 0 ? { basis: notes.join("; ") } : {}),
     });
     evalTrace.fired = true;
     evalTrace.evaluatedAmount = amount;

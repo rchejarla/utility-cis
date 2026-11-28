@@ -150,6 +150,7 @@ describe("seed sanity", () => {
       const expected = [
         "service_charge",
         "consumption",
+        "demand",
         "derived_consumption",
         "non_meter",
         "item_price",

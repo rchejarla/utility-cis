@@ -155,6 +155,8 @@ export interface BillSegmentLineRow {
   quantity: string | null;
   /** What `quantity` is counted in, when the tariff names a unit. */
   unit: string | null;
+  /** Why the quantity is not simply the measurement — a ratchet (spec 31). */
+  basis: string | null;
   sourceScheduleId: string;
   sourceComponentId: string;
   sortOrder: number;
@@ -176,6 +178,7 @@ export function toBillSegmentLineRow(l: {
   amount: Prisma.Decimal;
   quantity: Prisma.Decimal | null;
   unit: string | null;
+  basis: string | null;
   sourceScheduleId: string;
   sourceComponentId: string;
   sortOrder: number;
@@ -187,6 +190,7 @@ export function toBillSegmentLineRow(l: {
     amount: l.amount.toFixed(4),
     quantity: l.quantity ? l.quantity.toFixed(4) : null,
     unit: l.unit,
+    basis: l.basis,
     sourceScheduleId: l.sourceScheduleId,
     sourceComponentId: l.sourceComponentId,
     sortOrder: l.sortOrder,
@@ -315,6 +319,7 @@ export async function createBillSegmentForServiceAgreement(
             ? new Prisma.Decimal(decToFixedRequired(line.quantity))
             : null,
         unit: line.unit ?? null,
+        basis: line.basis ?? null,
         sourceScheduleId: line.sourceScheduleId,
         sourceComponentId: line.sourceComponentId,
         sortOrder: (idx + 1) * 100,
@@ -465,6 +470,10 @@ export async function rateAgreementPeriod(
     .touPeakCodes(base)
     .flatMap((peakCode) => meterIds.map((id) => `meter:tou:${id}:${peakCode}`));
 
+  // 4b. Peak demand (spec 31), crossed with the meters like the TOU
+  //     buckets — asked for only when the tariff prices demand.
+  const demandKeys = engine.pricesDemand(base) ? meterIds.map((id) => `demand:peak:${id}`) : [];
+
   // 5. registry + loadVariables
   const registry = buildRegistry(tx as unknown as typeof prisma, {
     utilityId,
@@ -473,7 +482,7 @@ export async function rateAgreementPeriod(
     premiseId: base.sa.premiseId,
     period,
   });
-  const vars = await registry.loadVariables([...manifestKeys, ...meterKeys, ...touKeys]);
+  const vars = await registry.loadVariables([...manifestKeys, ...meterKeys, ...touKeys, ...demandKeys]);
   if (opts.fill) await opts.fill({ base, meterIds, touKeys, vars: vars as Map<string, unknown> });
 
   // 6. rate

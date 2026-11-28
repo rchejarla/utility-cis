@@ -81,7 +81,8 @@ beforeEach(() =>
 );
 
 describe("/api/v1/rate-component-kinds", () => {
-  it("GET returns 11 globals for a fresh tenant", async () => {
+  // 12 since `demand` (spec 31, 2026-11-28).
+  it("GET returns 12 globals for a fresh tenant", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/api/v1/rate-component-kinds",
@@ -89,7 +90,7 @@ describe("/api/v1/rate-component-kinds", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body).toHaveLength(11);
+    expect(body).toHaveLength(12);
     expect(body.every((k: { isGlobal: boolean }) => k.isGlobal)).toBe(true);
     expect(body.map((k: { code: string }) => k.code)).toContain("service_charge");
   });

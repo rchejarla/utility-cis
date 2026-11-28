@@ -34,6 +34,12 @@ export interface BillPresentationLine {
    */
   quantity: string | null;
   amount: string;
+  /**
+   * Why the quantity is not simply what was measured — a demand charge
+   * billed on a ratchet (spec 31, DEM-BIL-1). Printed under the label.
+   * Absent otherwise, so a bill without one renders exactly as before.
+   */
+  basis?: string;
 }
 
 export interface BillPresentationGroup {

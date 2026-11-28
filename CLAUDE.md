@@ -68,7 +68,7 @@ docs/specs/
 ├── 28-legacy-cis-overlay.md         — Run a utility's existing CIS alongside this one and shadow-rate it (operating mode, mirrored-record rules and the legacy-key mirror shipped; the connector pack waits on a pilot)
 ├── 29-rate-modeling.md              — The rate engine as an independent offer to rate-study consultants (proposed; nothing built)
 ├── 30-read-routes.md                — Read routes, the printed sheet, keyboard entry, skips (schema, services, routes and screens shipped)
-└── 31-demand-charges.md             — Peak demand (register and interval), ratchets, the demand line on the bill (approved; slice 1 built — demand reads stored as peaks and kept out of usage; slices 2–3 not started)
+└── 31-demand-charges.md             — Peak demand (register and interval), ratchets, the demand line on the bill (approved; slices 1–2 built — demand reads stored as peaks and kept out of usage, demand priced per kW with ratchet and its explanation on the bill line; slice 3, interval and on-peak demand, not started)
 ```
 
 ### Master Design Document

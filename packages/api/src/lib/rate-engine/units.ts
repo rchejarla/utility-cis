@@ -47,7 +47,18 @@ const ENERGY_PER_KWH: Record<string, Decimal> = {
   WH: toDecimal(1000),
 };
 
-const DIMENSIONS: Array<Record<string, Decimal>> = [VOLUME_PER_HCF, ENERGY_PER_KWH];
+/**
+ * How many of each unit make one kilowatt of demand (spec 31). Its own
+ * dimension, so a kW tariff can never be handed kWh — the two are a
+ * different physical quantity, and that confusion is what slice 1 fixed.
+ */
+const DEMAND_PER_KW: Record<string, Decimal> = {
+  KW: toDecimal(1),
+  MW: toDecimal("0.001"),
+  W: toDecimal(1000),
+};
+
+const DIMENSIONS: Array<Record<string, Decimal>> = [VOLUME_PER_HCF, ENERGY_PER_KWH, DEMAND_PER_KW];
 
 /**
  * `quantity` restated in `to`.

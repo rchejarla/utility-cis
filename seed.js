@@ -717,15 +717,14 @@ async function main() {
   /*
    * ---- NWE General Service delivery, for the commercial classes ----
    *
-   * Shaped on NorthWestern's GSEDS-1 **minus its demand charge** (added
-   * 2026-11-28). GSEDS-1 is a customer charge, energy per kWh and a
-   * demand charge per kW with a ratchet; the rating engine cannot price
-   * demand yet (no spec — 07c, spec 26), so a commercial bill here
-   * understates what NWE would charge by that component. The dollar
-   * figures are **placeholders**, not NWE's: the repo has the tariff's
-   * shape but not its rates. Before this, the seed's commercial electric
-   * agreements were on the residential delivery schedule, whose every
-   * charge is residential-only, and billed nothing but the USBC rider.
+   * Shaped on NorthWestern's GSEDS-1 (added 2026-11-28): a customer
+   * charge, energy per kWh, and a demand charge per kW with a 75%
+   * ratchet — the last since spec 31 slice 2 taught the engine to price
+   * demand. The dollar figures are **placeholders**, not NWE's: the repo
+   * has the tariff's shape but not its rates. Before this, the seed's
+   * commercial electric agreements were on the residential delivery
+   * schedule, whose every charge is residential-only, and billed nothing
+   * but the USBC rider.
    */
   const rsE_GSEDS = await p.rateSchedule.create({
     data: {
@@ -735,7 +734,7 @@ async function main() {
       commodityId: electric.id,
       effectiveDate: new Date("2026-01-01"),
       description:
-        "NWE-style general service delivery (GSEDS-1) without its demand charge, which the engine cannot price yet. Placeholder rates, not NWE's published figures.",
+        "NWE-style general service delivery (GSEDS-1): customer charge, energy, and demand per kW with a 75% eleven-month ratchet. Placeholder rates, not NWE's published figures.",
       regulatoryRef: "Sched GSEDS-1",
       version: 1,
     },
@@ -766,6 +765,26 @@ async function main() {
         quantitySource: { base: "metered" },
         pricing: { type: "flat", rate: 0.0117650, unit: "kWh" },
       },
+      /*
+       * The demand charge GSEDS-1 always had and the engine could not
+       * price until spec 31 (2026-11-28): per kW of the month's peak,
+       * held at 75% of the highest peak in the last eleven months — the
+       * PSC-typical ratchet 07c records. Placeholder rates, like the rest
+       * of this schedule.
+       */
+      ...[
+        ["small_commercial", "Small", 8.75, 15],
+        ["large_commercial", "Large", 11.4, 16],
+      ].map(([cls, size, rate, sortOrder]) => ({
+        utilityId: UID, rateScheduleId: rsE_GSEDS.id, kindCode: "demand",
+        label: `General Service Demand Charge — ${size}`, sortOrder, effectiveDate: new Date("2026-01-01"),
+        predicate: { class: cls },
+        quantitySource: {
+          base: "peak_demand",
+          transforms: [{ type: "ratchet", percent: 75, lookback_months: 11 }],
+        },
+        pricing: { type: "flat", rate, unit: "kW" },
+      })),
     ],
   });
 
@@ -898,9 +917,22 @@ async function main() {
   // registers — one for energy consumption (kWh) and one for peak demand
   // (kW) — captured together on each field visit.
   const em003 = mArr[8];
-  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 1, description: "Energy usage", uomId: kwh.id, measureTypeId: measureUsage.id, multiplier: 1.0, isActive: true } });
-  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 2, description: "Peak demand", uomId: kw.id, measureTypeId: measureDemand.id, multiplier: 1.0, isActive: true } });
-  console.log("  2 registers on EM-003 (multi-register demo)");
+  /*
+   * Energy and demand registers by meter, for the read series below.
+   * Since 2026-11-28 (spec 31) both commercial electric meters carry a
+   * demand register, because their tariff (NWE-GSEDS-1) charges per kW
+   * of peak demand: EM-001 for SA-0004 (small commercial) and EM-003 for
+   * SA-0008 (large commercial).
+   */
+  const registersByMeter = {};
+  const addRegisters = async (meter) => {
+    const energy = await p.meterRegister.create({ data: { utilityId: UID, meterId: meter.id, registerNumber: 1, description: "Energy usage", uomId: kwh.id, measureTypeId: measureUsage.id, multiplier: 1.0, isActive: true } });
+    const demand = await p.meterRegister.create({ data: { utilityId: UID, meterId: meter.id, registerNumber: 2, description: "Peak demand", uomId: kw.id, measureTypeId: measureDemand.id, multiplier: 1.0, isActive: true } });
+    registersByMeter[meter.id] = { energy: energy.id, demand: demand.id };
+  };
+  await addRegisters(em003);
+  await addRegisters(mArr[3]); // EM-001
+  console.log("  energy + demand registers on EM-001 and EM-003");
 
   // SAs now carry rate_service_class_id (slice 1 task 10). The class
   // depends on (commodity, account_type / premise_type). Assign sensible
@@ -1209,11 +1241,42 @@ async function main() {
       running += usage;
       const estimated =
         anomaly?.estimatedMonths !== undefined && m < anomaly.estimatedMonths;
+      const registers = registersByMeter[meterId];
+      if (registers) {
+        /*
+         * The demand register, read on the same visit (spec 31). Its
+         * reading is the month's peak — the dial is reset when read — so
+         * reading, consumption and the bill's kW are one figure.
+         *
+         * **July is the summer peak, deliberately.** A ratchet holds
+         * billed demand at 75% of the highest peak in the last eleven
+         * months, so the large customer's July 130 kW holds every later
+         * month at 97.5 kW against a measured ~80 — a ratcheted bill to
+         * look at. The small customer's July peak is mild, so its bills
+         * show the measured figure: one of each.
+         */
+        const large = /large_commercial|industrial/.test(sa.rateServiceClass?.code ?? "");
+        const july = d.getUTCMonth() === 6;
+        const peakKw = large
+          ? (july ? 130 : 72 + Math.floor(Math.random() * 16))
+          : (july ? 26 : 20 + Math.floor(Math.random() * 5));
+        await p.meterRead.create({
+          data: {
+            utilityId: UID, meterId, serviceAgreementId: sa.id, registerId: registers.demand,
+            uomId: kw.id, readDate: d, readDatetime: d,
+            reading: peakKw, priorReading: 0, consumption: peakKw,
+            readType: "ACTUAL", readSource: "AMR",
+          },
+        });
+        readCount++;
+      }
       await p.meterRead.create({
         data: {
           utilityId: UID,
           meterId,
           serviceAgreementId: sa.id,
+          // The energy register, where the meter has registers.
+          ...(registers ? { registerId: registers.energy } : {}),
           uomId,
           readDate: d,
           readDatetime: d,

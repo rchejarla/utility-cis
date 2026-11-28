@@ -12,7 +12,6 @@ import {
   serviceClassFor,
 } from "./_effective-dating-fixtures.js";
 import { MeterLoader } from "../../lib/rate-engine-loaders/loaders/meter-loader.js";
-import { UnsupportedInSlice4Error } from "../../lib/rate-engine-loaders/types.js";
 
 import { runAsTenant } from "../../lib/tenant-context.js";
 /**
@@ -332,14 +331,6 @@ describe("MeterLoader", () => {
     }
   });
 
-  it("meter:peak_demand:* throws UnsupportedInSlice4Error", async () => {
-    const { fix } = await makeMeterFixture({});
-    const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
-
-    await expect(
-      scoped(TENANT_A, () => loader.load([`meter:peak_demand:${fix.meterId}:15min`])),
-    ).rejects.toBeInstanceOf(UnsupportedInSlice4Error);
-  });
 });
 
 describe("MeterLoader - TOU buckets (spec 26, TOU-REG-1/2)", () => {

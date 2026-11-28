@@ -6,6 +6,8 @@
 export const RATE_COMPONENT_KIND_CODES = [
   "service_charge",
   "consumption",
+  // Per kW of peak demand (spec 31, 2026-11-28).
+  "demand",
   "derived_consumption",
   "non_meter",
   "item_price",

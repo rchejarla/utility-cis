@@ -15,6 +15,8 @@ interface SegmentLine {
   quantity: string | null;
   /** What the quantity counts — the tariff's unit, not always the meter's. */
   unit: string | null;
+  /** Why the quantity is not simply what was measured — a demand ratchet (spec 31). */
+  basis?: string | null;
   sortOrder: number;
 }
 
@@ -407,6 +409,11 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                           <span style={{ marginLeft: "8px", fontSize: "11px", color: "var(--text-muted)" }}>
                             {l.kindCode}
                           </span>
+                          {l.basis && (
+                            <div data-testid="line-basis" style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: 2 }}>
+                              {l.basis}
+                            </div>
+                          )}
                         </td>
                         <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
                           {l.quantity

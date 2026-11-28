@@ -93,6 +93,8 @@ Pricing rules for a single commodity. Effective-dated and versioned via a self-r
 ```
 `demand_ratchet_percent` establishes a minimum billable demand as a percentage of peak demand in the prior 12 months.
 
+*As built (rate model v2, spec 31, 2026-11-28):* demand is a component, not a schedule type. A component of kind `demand` uses quantity source `{ base: "peak_demand", transforms: [{ type: "ratchet", percent, lookback_months, months? }] }` and is priced per kW like any other quantity.
+
 **BUDGET** — smoothed billing based on estimated annual consumption:
 ```json
 {
@@ -305,8 +307,9 @@ agreements are in asks first; they keep it, and it stops being offered.
   - **Order is semantic.** They apply left to right, and clamping then
     prorating is a different quantity from prorating then clamping. The
     list is numbered, says so, and rows move with ↑/↓.
-  - **The four declared-but-unevaluated transforms are not offered.**
-    `ratchet`, `tou_window_filter`, `power_factor` and `load_factor`
+  - **The declared-but-unevaluated transforms are not offered.**
+    `tou_window_filter`, `power_factor` and `load_factor` (and `ratchet`
+    until spec 31 built it on 2026-11-28; it is now offered)
     exist in the Zod union and the engine does not evaluate them, so
     offering them would invite a tariff that cannot be rated — the
     unsatisfiable-gate mistake again. The list of what *is* offered
