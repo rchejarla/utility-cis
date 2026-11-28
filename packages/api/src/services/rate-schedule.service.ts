@@ -264,9 +264,6 @@ export async function reviseRateSchedule(
            */
           touCalendarId:
             data.touCalendarId === undefined ? predecessor.touCalendarId : data.touCalendarId,
-          // Carried forward: a repriced tariff still compares against the
-          // same other tariff, which resolves its own version per period.
-          comparisonScheduleCode: predecessor.comparisonScheduleCode,
           version: predecessor.version + 1,
           supersedesId: id,
           // publishedAt left NULL — the new revision is a draft until
@@ -370,95 +367,6 @@ export async function assignTouCalendar(
       const updated = await tx.rateSchedule.update({
         where: { id, utilityId },
         data: { touCalendarId },
-        include: fullInclude,
-      });
-      await cacheDel(`rate-schedule:${utilityId}:${before.code}`);
-      return updated;
-    },
-  );
-}
-
-/**
- * Name (or clear) the schedule a shadow bill compares this one against
- * (spec 26, TOU-BIL-4) — on a TOU schedule its standard rate, on a standard
- * schedule its TOU alternative.
- *
- * Draft-only, the rule `assignTouCalendar` follows (decided 2026-11-27): a
- * published schedule is frozen, and gets a comparison by revising. It
- * changes no bill — the shadow bill is never stored or printed — but one
- * editability rule for the fields of a schedule is simpler to reason about
- * than two.
- *
- * Validated here because there is no foreign key (a code is not unique
- * across versions): some version of the code exists, it is the same
- * commodity, and it is **the opposite kind** — exactly one of the pair has
- * a TOU calendar, since comparing TOU with TOU, or standard with standard,
- * answers nobody's question.
- */
-export async function assignComparisonSchedule(
-  utilityId: string,
-  actorId: string,
-  actorName: string,
-  id: string,
-  comparisonScheduleCode: string | null,
-) {
-  const before = await prisma.rateSchedule.findUniqueOrThrow({ where: { id, utilityId } });
-
-  if (before.publishedAt !== null || before.supersededById !== null) {
-    throw Object.assign(
-      new Error(
-        before.publishedAt !== null
-          ? "This schedule is published and cannot change. Revise it and set the comparison on the new version."
-          : "This schedule has been superseded — change the newer version instead.",
-      ),
-      { statusCode: 409, code: "SCHEDULE_NOT_EDITABLE" },
-    );
-  }
-
-  if (comparisonScheduleCode !== null) {
-    if (comparisonScheduleCode === before.code) {
-      throw Object.assign(new Error("A schedule cannot be compared with itself."), {
-        statusCode: 400,
-        code: "COMPARISON_SCHEDULE_INVALID",
-      });
-    }
-    const other = await prisma.rateSchedule.findFirst({
-      where: { utilityId, code: comparisonScheduleCode },
-      orderBy: { version: "desc" },
-      select: { commodityId: true, touCalendarId: true },
-    });
-    if (!other) {
-      throw Object.assign(new Error(`No rate schedule has the code "${comparisonScheduleCode}".`), {
-        statusCode: 400,
-        code: "COMPARISON_SCHEDULE_INVALID",
-      });
-    }
-    if (other.commodityId !== before.commodityId) {
-      throw Object.assign(
-        new Error(`"${comparisonScheduleCode}" prices a different commodity, so its bill would not compare.`),
-        { statusCode: 400, code: "COMPARISON_SCHEDULE_INVALID" },
-      );
-    }
-    if ((other.touCalendarId === null) === (before.touCalendarId === null)) {
-      throw Object.assign(
-        new Error(
-          before.touCalendarId
-            ? `"${comparisonScheduleCode}" is also a time-of-use schedule. A TOU schedule compares against a standard rate.`
-            : `"${comparisonScheduleCode}" is also a standard schedule. A standard schedule compares against a time-of-use rate.`,
-        ),
-        { statusCode: 400, code: "COMPARISON_SCHEDULE_INVALID" },
-      );
-    }
-  }
-
-  return auditUpdate(
-    { utilityId, actorId, actorName, entityType: "RateSchedule" },
-    EVENT_TYPES.RATE_SCHEDULE_COMPARISON_SET,
-    before,
-    async (tx) => {
-      const updated = await tx.rateSchedule.update({
-        where: { id, utilityId },
-        data: { comparisonScheduleCode },
         include: fullInclude,
       });
       await cacheDel(`rate-schedule:${utilityId}:${before.code}`);

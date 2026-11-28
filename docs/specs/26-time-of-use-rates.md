@@ -16,11 +16,10 @@ unstarted.
   (TOU-BIL-1).
 - **Built 2026-11-27:** TOU on the bill — the usage-by-period table with
   shares and the hours footnote (TOU-BIL-2) — and the portal's billed
-  usage by period and by hour (TOU-BIL-3), and the staff shadow bill in
-  both directions — TOU → standard, and standard → TOU from registers or
-  classified intervals, and in the portal behind a tenant switch (TOU-BIL-4,
-  slices 3a, 3b and 4).
-- **Not built:** modeling (TOU-MOD-*, slice 4, overlapping
+  usage by period and by hour (TOU-BIL-3), and the staff shadow bill
+  against rates staff pick, either way round, TOU usage from registers or
+  classified intervals (TOU-BIL-4; reworked 2026-11-28).
+- **Not built:** the shadow bill in the portal (TOU-BIL-4); modeling (TOU-MOD-*, slice 4, overlapping
   spec 29); the TOU-INT-8 volume measurement; and the follow-ups marked
   in place — the register-mapping importer (§3a), the zoneless-file
   warning (§3b), predicting interval gaps at preview (TOU-INT-4a),
@@ -1839,65 +1838,58 @@ it is wrong.
   standard rate. Shown to staff, and in the portal when the tenant
   enables it.
 
-  *Staff half, TOU → standard, built 2026-11-27* (plan slice 3a):
+  *Built 2026-11-27, reworked 2026-11-28 — staff pick the rate:*
 
-  - **Which schedule to compare with** is `rate_schedule.comparison_schedule_code`,
-    set by `PUT /api/v1/rate-schedules/:id/comparison-schedule`. It is a
-    **code** because the other tariff versions on its own: the version used
-    is the one published and in effect on the billed period's start,
-    highest version. It must name the opposite kind (a TOU schedule
-    compares with a standard one and the reverse), the same commodity, and
-    not itself. Like the calendar it is **draft-only**, audited as
-    `rate_schedule.comparison_set`, and carried forward by a revise. It is
-    on the schedule rather than a tenant setting because a tenant with a
-    residential and a commercial TOU tariff compares each with a different
-    standard rate.
-  - **`GET /api/v1/bill-segments/:id/shadow`** (`agreements:VIEW`) rates the
-    segment's period through `rateAgreementPeriod` — the steps segment
-    creation uses, extracted so the two cannot drift — with each comparing
-    assignment swapped for its comparison schedule. Riders and other
-    assignments carry over unchanged. **Nothing is written**: no segment,
-    no lines, no `billedAt`, no audit row. The actual side is the stored
-    segment, the charge itself; if reads were corrected since, the shadow
-    rates the corrected ones, and settling that is a rebill's job.
-  - Refusals, all 409: `NO_COMPARISON_SCHEDULE`;
-    `COMPARISON_SCHEDULE_NOT_IN_FORCE`; `COMPARISON_SCHEDULE_SAME_KIND`
-    when the version in force for the period is the same kind as the
-    billed tariff (kinds are checked at set time against the then latest
-    version, and a tariff can change kind across versions).
-  - **UI:** the rate schedule page's "Compare against" field, and "Compare
-    rates" on each segment of the staff bill dialog whose tariff names a
-    comparison (`GET /api/v1/bills/:id` carries `comparesWith` per
-    segment), captioned as a comparison never stored or sent.
-
-  *Standard → TOU, "considering TOU", built 2026-11-27* (plan slice 3b):
-  a TOU tariff prices usage by period, so the comparison needs buckets
-  the standard customer's bill never had. `rateAgreementPeriod`'s `fill`
-  hook supplies the ones the loader left unset, after it has run:
-
-  - A meter that already carries **TOU bucket reads** (a TOU register
-    meter billed on a standard rate) uses them — what a TOU bill for it
-    would use. `touUsageFrom: "registers"`.
-  - A meter with **intervals** has them classified in memory by
+  - **Staff pick what to compare with**, when they ask. Until 2026-11-28
+    each schedule named its comparison in `rate_schedule.comparison_schedule_code`;
+    but a published schedule is frozen, so the comparison could only be
+    set by revising, and bills priced on earlier versions could never be
+    compared. A comparison prices nothing, so it does not belong on an
+    immutable tariff — the column was dropped (migration
+    `20261128090000_drop_rate_schedule_comparison`) and the portal half
+    withdrawn with it: what a customer may be offered needs someone to say
+    which rates are alternatives, and staff-only needs nobody to.
+  - **`GET /api/v1/bill-segments/:id/shadow/options`** lists what can be
+    picked: published rates in force by the period's start, same
+    commodity, not already on the bill, with each one's usual assignment
+    role — and **never riders**, which are levied whatever the rate.
+  - **`GET /api/v1/bill-segments/:id/shadow?with=<code>[,<code>]`**
+    (`agreements:VIEW`) re-rates the period with the picked rates standing
+    in for **every non-rider assignment**; riders carry over. More than one
+    code because a standard rate is often delivery **and** supply, and
+    comparing an all-in TOU tariff with delivery alone would understate it.
+    Each code's version is the one published and in effect on the period's
+    start. The result names `replaced` and `kept`, so it says what it
+    compared. It goes through `rateAgreementPeriod` — the rating steps of
+    segment creation, extracted so the two cannot drift — and **writes
+    nothing**: no segment, lines, `billedAt`, audit row or bucket reads.
+    The actual side is the stored segment, what the customer was charged.
+  - **A TOU pick for a customer without TOU data:** `rateAgreementPeriod`'s
+    `fill` hook supplies the buckets the loader left unset — the meter's
+    own TOU bucket reads where it has them (`touUsageFrom: "registers"`),
+    otherwise its intervals for the billed days classified in memory by
     `classifyIntervals`, the roll-up's own rules extracted from
-    `rollUpIntervals` (which now calls it), against the comparison
-    tariff's calendar, over the billed days as whole UTC days.
-    `touUsageFrom: "intervals"`, and the dialog says so. Nothing is
-    written — no bucket reads.
-  - It refuses as the roll-up does: `SHADOW_INTERVALS_INCOMPLETE` for a
-    gap, a missing interval, or one that cannot be classified or straddles
-    a boundary; and `SHADOW_NEEDS_INTERVALS` for a meter with neither
-    buckets nor intervals, which records how much was used, not when.
+    `rollUpIntervals`, against the picked rate's calendar
+    (`touUsageFrom: "intervals"`).
+  - Refusals: `COMPARISON_SCHEDULE_INVALID` (400 — unknown, unpublished by
+    the period's start, another commodity, already on the bill, or two TOU
+    rates at once); `NOTHING_TO_REPLACE`; `COMPARISON_NOT_APPLICABLE` when
+    a picked rate prices nothing because none of its components' conditions
+    (service class, premise type) match the agreement — otherwise a $0
+    total would read as "cheaper by the whole bill", which the 2026-11-28
+    walkthrough showed on a TOU agreement with no service class;
+    `SHADOW_NEEDS_INTERVALS` (a meter that records totals only) and
+    `SHADOW_INTERVALS_INCOMPLETE` (a gap, a missing, unclassifiable or
+    straddling interval) — all 409.
+  - **UI:** "Compare rates" (`components/bill-segments/rate-comparison.tsx`)
+    under each segment of the staff bill dialog **and** in the segment
+    dialog on the agreement's Bills tab, so a period can be compared before
+    it is on a bill: pick one or more rates (each shown with its role), see
+    the total, the difference, what it stood in for, and its lines,
+    captioned as a comparison never stored or sent.
 
-  *Portal, built 2026-11-27* (plan slice 4): `settings.portal.showRateComparison`,
-  **off by default** — whether customers learn a cheaper rate existed is
-  the utility's decision — set on Settings → Bill Production. When on,
-  the portal bills list flags comparable bills and
-  `GET /portal/api/bills/:billId/rate-comparison` runs `shadowBill` per
-  comparable segment of the customer's own posted bill
-  (`services/portal-rate-comparison.ts`). Every "not shown" is a 404; a
-  segment the comparison refuses comes back `unavailable`, worded for a
-  customer, so one meter without the detail does not hide the rest.
+  Not built: the shadow bill in the customer portal — it needs the
+  utility to say which rates are alternatives to which.
 
 ## 7. Modeling (the stand-alone rate engine offer)
 

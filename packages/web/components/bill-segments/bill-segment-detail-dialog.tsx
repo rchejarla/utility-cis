@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
+import { RateComparison } from "./rate-comparison";
 
 interface BillSegmentLine {
   id: string;
@@ -140,6 +141,11 @@ export function BillSegmentDetailDialog({
                 </tr>
               </tfoot>
             </table>
+
+            {/* What this period would have cost on another rate — before it is on a bill as well as after. */}
+            <div style={{ marginBottom: 16, border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+              <RateComparison segmentId={segment.id} />
+            </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               <button onClick={onClose} style={btn}>Close</button>

@@ -5,11 +5,6 @@ import { prisma } from "../lib/prisma.js";
 import { listBillsForAccount } from "../services/bill.service.js";
 import { monthlyUsage } from "../services/portal-usage.js";
 import { billedPeriodUsage, listBilledPeriods } from "../services/portal-tou-usage.js";
-import {
-  comparableBillIds,
-  portalRateComparison,
-  portalRateComparisonEnabled,
-} from "../services/portal-rate-comparison.js";
 
 /**
  * Portal data endpoints under /portal/api/*.
@@ -226,38 +221,8 @@ export async function portalApiRoutes(app: FastifyInstance) {
       // for the same reason. The staff Bills tab must still show them
       // (that is where posting happens), so the filter belongs here
       // rather than in the shared service.
-      const bills = (await listBillsForAccount(utilityId, accountId)).filter((b) => b.postedAt !== null);
-      /*
-       * Which bills can be compared with another rate (spec 26, TOU-BIL-4),
-       * flagged only when the utility shows comparisons at all — so a
-       * tenant that has not opted in sends nothing that hints at one.
-       */
-      const comparable = (await portalRateComparisonEnabled(utilityId))
-        ? await comparableBillIds(utilityId, bills.map((b) => b.id))
-        : new Set<string>();
-      return reply.send({ data: bills.map((b) => ({ ...b, rateComparison: comparable.has(b.id) })) });
-    },
-  );
-
-  /*
-   * What a posted bill would have cost on its tariff's comparison rate.
-   * 404 for a stranger's bill, an unposted one, a tenant that has not
-   * turned comparisons on, or a bill with nothing to compare — the caller
-   * learns nothing about which.
-   */
-  app.get(
-    "/portal/api/bills/:billId/rate-comparison",
-    { config: { module: "portal_billing", permission: "VIEW" } },
-    async (request, reply) => {
-      const customerId = requireCustomerId(request);
-      const { billId } = request.params as { billId: string };
-      const result = await portalRateComparison(request.user.utilityId, customerId, billId);
-      if (!result) {
-        return reply.status(404).send({
-          error: { code: "RATE_COMPARISON_NOT_FOUND", message: "No rate comparison for this bill" },
-        });
-      }
-      return reply.send(result);
+      const bills = await listBillsForAccount(utilityId, accountId);
+      return reply.send({ data: bills.filter((b) => b.postedAt !== null) });
     },
   );
 
