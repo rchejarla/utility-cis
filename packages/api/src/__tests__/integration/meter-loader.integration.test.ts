@@ -146,6 +146,8 @@ interface SeedReadOpts {
   consumption: string;
   /** Set to make this row a TOU bucket rather than a total read. */
   peakCode?: string;
+  /** Which register; two reads at one instant on one meter need distinct ones. */
+  registerId?: string;
 }
 
 async function seedRead(opts: SeedReadOpts): Promise<void> {
@@ -172,6 +174,7 @@ async function seedRead(opts: SeedReadOpts): Promise<void> {
         priorReading: opts.priorReading ?? null,
         consumption: opts.consumption,
         peakCode: opts.peakCode ?? null,
+        registerId: opts.registerId ?? null,
         readType: "ACTUAL",
         readSource: "MANUAL",
       },
@@ -555,6 +558,53 @@ describe("MeterLoader - meter:reads against a TOU meter", () => {
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
     const out = await scoped(TENANT_A, () => loader.load([`meter:reads:${fix.meterId}`]));
     expect(qty(out, `meter:reads:${fix.meterId}`)).toBe("600");
+  });
+
+  /*
+   * Spec 31, DEM-MEAS-2. A meter with an energy and a demand register
+   * writes a row for each per read event, and the period's usage was the
+   * sum of every row — so a 310 kW peak was added to the energy and
+   * priced as if it had been used.
+   */
+  it("leaves a demand register's kW out of the period's usage", async () => {
+    const { fix, saId } = await makeMeterFixture({});
+    const { kwUomId, energyRegister, demandRegister } = await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      // `resetDb` truncates the reference catalog, so the migration's
+      // global DEMAND row is gone here; a tenant row carries the same code.
+      const demand = await prisma.measureTypeDef.create({
+        data: { utilityId: fix.utilityId, code: "DEMAND", label: "Demand" },
+      });
+      const kw = await prisma.unitOfMeasure.create({
+        data: {
+          utilityId: fix.utilityId,
+          code: "KW",
+          name: "Kilowatts",
+          commodityId: fix.commodityId,
+          measureTypeId: demand.id,
+          conversionFactor: 1,
+          isBaseUnit: true,
+          isActive: true,
+        },
+      });
+      const energyUom = await prisma.unitOfMeasure.findUniqueOrThrow({ where: { id: fix.uomId } });
+      const register = (registerNumber: number, uomId: string, measureTypeId: string) =>
+        prisma.meterRegister.create({
+          data: { utilityId: fix.utilityId, meterId: fix.meterId, registerNumber, uomId, measureTypeId },
+        });
+      const energy = await register(1, fix.uomId, energyUom.measureTypeId);
+      const dem = await register(2, kw.id, demand.id);
+      return { kwUomId: kw.id, energyRegister: energy.id, demandRegister: dem.id };
+    });
+    // One read event: both registers at the same instant, as a field visit records them.
+    const common = { meterId: fix.meterId, saId, utilityId: fix.utilityId, readDate: new Date("2026-01-20") };
+    await seedRead({ ...common, uomId: fix.uomId, registerId: energyRegister, reading: "1600", priorReading: "1000", consumption: "600" });
+    await seedRead({ ...common, uomId: kwUomId, registerId: demandRegister, reading: "310", priorReading: "0", consumption: "310" });
+
+    const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
+    const out = await scoped(TENANT_A, () => loader.load([`meter:reads:${fix.meterId}`]));
+    expect(qty(out, `meter:reads:${fix.meterId}`)).toBe("600");
+    expect((out.get(`meter:reads:${fix.meterId}`) as { unit: string }).unit).toBe("GAL");
   });
 
   it("is unchanged for an ordinary meter", async () => {

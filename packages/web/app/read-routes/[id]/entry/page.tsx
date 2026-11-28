@@ -268,7 +268,10 @@ export default function ReadRouteEntryPage() {
       // because a reading below the last one is a different question —
       // a rollover, a replaced meter, or a digit dropped — and the band
       // has nothing useful to say about it.
-      if (last !== null && reading < last) {
+      //
+      // Not on a demand register (spec 31): it shows the period's peak
+      // and is reset when read, so a lower month is ordinary.
+      if (!row.isDemand && last !== null && reading < last) {
         setHeld((prev) => ({ ...prev, [row.rowId]: { reading, why: "below-last" } }));
         return;
       }
@@ -732,7 +735,16 @@ export default function ReadRouteEntryPage() {
                       a dropped digit. Press <b>Enter</b> again to enter it as typed.
                     </>
                   )}
-                  {hold?.why === "outside-band" && row.band && last !== null && (
+                  {hold?.why === "outside-band" && row.band && row.isDemand && (
+                    <>
+                      <b>That looks wrong.</b> {fmt(hold.reading)} is far from this demand
+                      register&apos;s usual peak of about <b>{fmt(Number(row.band.typical))}</b>
+                      {" — "}its recent peaks ran <b>{fmt(Number(row.band.typicalLow))}</b> to{" "}
+                      <b>{fmt(Number(row.band.typicalHigh))}</b>. Press <b>Enter</b> again to enter
+                      it as typed.
+                    </>
+                  )}
+                  {hold?.why === "outside-band" && row.band && !row.isDemand && last !== null && (
                     <>
                       <b>That looks wrong.</b> {fmt(hold.reading)} is{" "}
                       <b>{fmt(hold.reading - last)}</b> of use since {row.lastReadDate}. This meter

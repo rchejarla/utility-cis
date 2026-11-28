@@ -28,7 +28,7 @@ Every reading associated with a meter. Stored in a TimescaleDB hypertable, parti
 | read_datetime | TIMESTAMPTZ | Hypertable partition key; precise time for AMI |
 | reading | DECIMAL(12,4) | Raw dial reading as recorded |
 | prior_reading | DECIMAL(12,4) | Previous read value for consumption calculation |
-| consumption | DECIMAL(12,4) | Calculated: (reading - prior_reading) × multiplier |
+| consumption | DECIMAL(12,4) | Calculated: (reading - prior_reading) × multiplier — except on a **demand** register, where it is reading × multiplier (spec 31, DEM-MEAS-1) |
 | read_type | ENUM | ACTUAL, ESTIMATED, CORRECTED, FINAL — whether the figure was measured, and if not what stands in its place. `AMI` was removed 2026-11-06: it named a source, not a type, so a read that came from a head-end could say nothing about whether it was estimated. No row had ever carried it. |
 | read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM — where the read came from, which is where `AMI` belongs |
 | exception_code | VARCHAR(50) | Nullable: HIGH_USAGE, ZERO_USAGE, METER_DEFECT, REVERSE_FLOW, ROLLOVER |
@@ -149,7 +149,9 @@ Supported file formats (configurable per tenant):
 
 1. **Consumption calculation:** `consumption = (reading - prior_reading) × meter.multiplier`. If `register_id` is set, use `register.multiplier` instead. Stored on save; not recalculated on read.
 
-2. **Rollover handling:** If `reading < prior_reading`, check meter dial count. If `(10^dial_count - prior_reading + reading)` is within a reasonable rollover range, treat as rollover and flag with `exception_code=ROLLOVER`. Otherwise flag as `METER_DEFECT` for human review.
+   **Demand registers are the exception** (since 2026-11-28, spec 31 DEM-MEAS-1): a register whose unit's measure type is `DEMAND` shows the period's peak and is reset when read, so `consumption = reading × multiplier`, with no subtraction and no rollover. `prior_reading` is still stored, for display. A negative demand reading is refused (`DEMAND_READING_NEGATIVE`). Demand rows never count toward a period's usage: the rating engine's `meter:reads` and the portal's monthly usage both exclude them (DEM-MEAS-2). *Known discrepancy:* the code applies `meter.multiplier` for every register, not `register.multiplier` as this rule says — pre-existing, left for a separate fix.
+
+2. **Rollover handling:** If `reading < prior_reading`, check meter dial count. Not applied to demand registers. If `(10^dial_count - prior_reading + reading)` is within a reasonable rollover range, treat as rollover and flag with `exception_code=ROLLOVER`. Otherwise flag as `METER_DEFECT` for human review.
 
 3. **Estimated reads:** When a physical read is unavailable, the system generates an ESTIMATED read using the trailing 3-month average consumption for the meter. Estimation is only allowed for up to 2 consecutive billing cycles before escalating to an exception requiring field action.
 
@@ -226,7 +228,7 @@ Many commercial and industrial meters expose multiple registers on a single devi
 
 ### Billing touchpoints
 
-- Rate schedules for multi-register meters typically carry separate charge components (energy `$/kWh` vs. demand `$/kW`). The billing engine selects the correct register's consumption by matching the component's commodity + UoM against each sibling read's `uom_id`. Validation at rate-schedule save time: if the rate schedule references a UoM that the assigned meter's registers don't provide, surface a warning ("rate expects kW demand register; meter has only kWh register").
+- Rate schedules for multi-register meters typically carry separate charge components (energy `$/kWh` vs. demand `$/kW`). *As built:* an energy component prices the period's usage with demand rows excluded (spec 31, DEM-MEAS-2); a demand component prices the period's peak through its own quantity source (spec 31 slice 2, not yet built). Validation at rate-schedule save time: if the rate schedule references a UoM that the assigned meter's registers don't provide, surface a warning ("rate expects kW demand register; meter has only kWh register").
 - Freeze semantics apply at the row level, not the event level. In practice billing either freezes all siblings of an event together (normal path) or freezes the ones it actually used and leaves others editable (unusual). Default behavior: freeze the whole event — simpler for correction workflows.
 
 ### Migration and rollout

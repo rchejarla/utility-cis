@@ -6,11 +6,26 @@ import type { Loader, LoaderCapability } from "../types.js";
 import { UnsupportedInSlice4Error } from "../types.js";
 
 /**
+ * **Demand reads never enter an energy total** (spec 31, DEM-MEAS-2).
+ *
+ * A meter with an energy and a demand register writes a row for each per
+ * read event, and the period's usage used to be the sum of every row on
+ * the meter — so a 310 kW peak was added to the kWh and priced as energy.
+ * Demand is filtered out by measure type rather than usage filtered in,
+ * because TOU registers may carry a TOU measure type and must still count.
+ * A demand quantity has its own variable (slice 2), never this one.
+ */
+const NOT_DEMAND = {
+  uom: { measureType: { code: { not: "DEMAND" } } },
+} as const;
+
+/**
  * Slice 4 task 3 — meter-domain variable loader.
  *
  * Capabilities:
  *   - `meter:reads:<meter_id>`            → { quantity: Decimal, unit: string }
- *                                            (sum of MeterRead.consumption inside the period)
+ *                                            (sum of MeterRead.consumption inside the period,
+ *                                            demand reads excluded — spec 31)
  *   - `meter:size:<meter_id>`             → string | null (meter.customFields.size)
  *   - `meter:role:<meter_id>`             → string | null (meter.customFields.role)
  *   - `meter:peak_demand:<meter_id>:<window>` → throws UnsupportedInSlice4Error
@@ -139,6 +154,7 @@ export class MeterLoader implements Loader {
           meterId: { in: [...meterIdsForReads] },
           utilityId: this.utilityId,
           readDate: { gte: this.period.startDate, lte: this.period.endDate },
+          ...NOT_DEMAND,
         },
         select: {
           meterId: true,
@@ -239,6 +255,7 @@ export class MeterLoader implements Loader {
           utilityId: this.utilityId,
           peakCode: { in: peakCodes },
           readDate: { gte: this.period.startDate, lte: this.period.endDate },
+          ...NOT_DEMAND,
         },
         select: {
           meterId: true,

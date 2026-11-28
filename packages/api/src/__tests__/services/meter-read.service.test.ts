@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createMeterReadEvent, listMeterReads } from "../../services/meter-read.service.js";
+import {
+  computeConsumption,
+  createMeterReadEvent,
+  listMeterReads,
+} from "../../services/meter-read.service.js";
 import { meterReadQuerySchema } from "@utility-cis/shared";
 import { prisma } from "../../lib/prisma.js";
 
@@ -231,6 +235,63 @@ describe("createMeterReadEvent", () => {
  * query for `exception_code IS NULL`, and not as the opposite or as
  * nothing at all.
  */
+/**
+ * A demand dial shows the period's peak and is reset when read, so its
+ * reading is the quantity — spec 31, DEM-MEAS-1. Before 2026-11-28 every
+ * register was differenced, so a 300 kW month after a 310 kW one came out
+ * as a rollover or a defect.
+ */
+describe("computeConsumption — demand registers", () => {
+  const measure = (code: string) => ({ uom: { measureType: { code } } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.meter.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      multiplier: 40,
+      dialCount: 5,
+      ...measure("USAGE"),
+    });
+    (prisma.meterRead.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ reading: 310 });
+  });
+
+  it("takes a demand reading as the period's peak, times the multiplier, whatever the prior", async () => {
+    (prisma.meterRegister.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(measure("DEMAND"));
+
+    const out = await computeConsumption(UID, METER_ID, REG_2, 300, new Date("2026-11-08"));
+
+    expect(out).toEqual({ priorReading: 310, consumption: 300 * 40, exceptionCode: null });
+  });
+
+  it("still differences an energy register on the same meter", async () => {
+    (prisma.meterRegister.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(measure("USAGE"));
+
+    const out = await computeConsumption(UID, METER_ID, REG_1, 1310, new Date("2026-11-08"));
+
+    expect(out.consumption).toBe(1000 * 40);
+  });
+
+  it("judges a register-less read by the meter's own unit", async () => {
+    (prisma.meter.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      multiplier: 1,
+      dialCount: 5,
+      ...measure("DEMAND"),
+    });
+
+    const out = await computeConsumption(UID, METER_ID, null, 12.5, new Date("2026-11-08"));
+
+    expect(out.consumption).toBe(12.5);
+    expect(prisma.meterRegister.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("refuses a negative demand reading rather than inventing a rollover", async () => {
+    (prisma.meterRegister.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(measure("DEMAND"));
+
+    await expect(
+      computeConsumption(UID, METER_ID, REG_2, -4, new Date("2026-11-08")),
+    ).rejects.toMatchObject({ code: "DEMAND_READING_NEGATIVE", statusCode: 400 });
+  });
+});
+
 describe("listMeterReads — the exception and billed filters", () => {
   beforeEach(() => {
     // Cleared here as well: the `clearAllMocks` above belongs to the

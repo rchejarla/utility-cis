@@ -71,6 +71,7 @@ function row(over: Record<string, unknown> = {}) {
     meterNumber: "WM-101",
     registerId: null,
     registerNumber: null,
+    isDemand: false,
     accountNumber: "ACCT-1",
     lastReading: "1090",
     lastReadDate: "2026-04-03",
@@ -485,6 +486,55 @@ describe("Read route entry — a number that looks wrong", () => {
       }),
     );
     expect(screen.queryByText(/that looks wrong/i)).not.toBeInTheDocument();
+  });
+});
+
+/*
+ * A demand register (spec 31, DEM-RD-1) shows the period's peak and is
+ * reset when read. A lower month than the last is ordinary, and the band
+ * sits around the typical peak — the API sends it as values, not as
+ * "last reading plus a month's use".
+ */
+describe("Read route entry — a demand register", () => {
+  /** Peaks of 290–330 kW, typically 310: held below 155 or above 620. */
+  const DEMAND = row({
+    registerId: "r-2",
+    registerNumber: "2",
+    isDemand: true,
+    lastReading: "310",
+    band: { low: "155", high: "620", typical: "310", typicalLow: "290", typicalHigh: "330" },
+  });
+
+  it("takes a peak below last month's without asking about a dial going backwards", async () => {
+    serve({ rows: [DEMAND] });
+    renderPage();
+
+    const [first] = await inputs();
+    await userEvent.click(first!);
+    await userEvent.keyboard("295{Enter}");
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/read-routes/rt-1/entry/b-1/rows", {
+        meterId: "m-1",
+        registerId: "r-2",
+        reading: 295,
+      }),
+    );
+    expect(screen.queryByText(/below the last reading/i)).not.toBeInTheDocument();
+  });
+
+  it("holds a wild peak, and says so in terms of peaks rather than use", async () => {
+    serve({ rows: [DEMAND] });
+    renderPage();
+
+    const [first] = await inputs();
+    await userEvent.click(first!);
+    await userEvent.keyboard("3100{Enter}");
+
+    const held = await screen.findByTestId("held-row-1");
+    expect(held).toHaveTextContent(/usual peak of about 310/i);
+    expect(held).not.toHaveTextContent(/of use since/i);
+    expect(patch).not.toHaveBeenCalled();
   });
 });
 
