@@ -1,0 +1,13 @@
+-- Spec 31 (demand charges), DEM-BIL-1.
+--
+-- Why a line's quantity is what it is, when that is not simply what was
+-- measured: a demand charge billed on a ratchet carries
+-- "Ratchet: 75% of 56 kW peak (Jul 2026); measured 31.4 kW". Written by the
+-- rating engine with the line and never edited — like every column on a
+-- line. Nullable: an ordinary line has nothing to explain, and every line
+-- written before this has no basis to record.
+--
+-- A column rather than folded into `label`, so the label stays the
+-- tariff's own and selectors matching on it (`has_label_prefix`) keep
+-- working.
+ALTER TABLE "bill_segment_line" ADD COLUMN "basis" TEXT;

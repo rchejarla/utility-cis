@@ -105,6 +105,13 @@ export interface LineItem {
    */
   unit?: string;
   rate?: unknown;
+  /**
+   * Why the quantity is what it is, when that is not simply what was
+   * measured (spec 31, DEM-BIL-1) — a demand line billed on a ratchet says
+   * so. A customer charged for capacity they did not use this month has to
+   * be able to see why. Absent on an ordinary line.
+   */
+  basis?: string;
 }
 
 export interface ComponentTrace {

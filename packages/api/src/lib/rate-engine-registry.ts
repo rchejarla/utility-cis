@@ -8,6 +8,7 @@ import { PremiseLoader } from "./rate-engine-loaders/loaders/premise-loader.js";
 import { IndexLoader } from "./rate-engine-loaders/loaders/index-loader.js";
 import { LinkedCommodityLoader } from "./rate-engine-loaders/loaders/linked-commodity-loader.js";
 import { ItemsLoader } from "./rate-engine-loaders/loaders/items-loader.js";
+import { DemandLoader } from "./rate-engine-loaders/loaders/demand-loader.js";
 
 /**
  * Slice 5a task 3 — single source of truth for assembling a `VariableRegistry`
@@ -43,5 +44,6 @@ export function buildRegistry(prisma: PrismaClient, ctx: RegistryContext): Varia
     }),
   );
   r.register(new ItemsLoader(prisma, ctx.utilityId, ctx.saId));
+  r.register(new DemandLoader(prisma, ctx.utilityId, ctx.saId, ctx.period));
   return r;
 }

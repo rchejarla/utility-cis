@@ -136,7 +136,16 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
             </View>
             {group.lines.map((line, li) => (
               <View key={li} style={s.row} wrap={false}>
-                <Text style={s.cellLabel}>{line.label}</Text>
+                {line.basis ? (
+                  // A ratchet (spec 31): the customer has to see why they
+                  // are billed for more demand than they drew this month.
+                  <View style={s.cellLabel}>
+                    <Text>{line.label}</Text>
+                    <Text style={s.muted}>{line.basis}</Text>
+                  </View>
+                ) : (
+                  <Text style={s.cellLabel}>{line.label}</Text>
+                )}
                 <Text style={s.cellQty}>{line.quantity ?? ""}</Text>
                 <Text style={s.cellAmount}>{printed(line.amount)}</Text>
               </View>

@@ -3,7 +3,6 @@ import type { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
 import type { VariableKey, VariableValue } from "../../rate-engine/types.js";
 import { Decimal, ZERO } from "../../rate-engine/decimal.js";
 import type { Loader, LoaderCapability } from "../types.js";
-import { UnsupportedInSlice4Error } from "../types.js";
 
 /**
  * **Demand reads never enter an energy total** (spec 31, DEM-MEAS-2).
@@ -28,7 +27,9 @@ const NOT_DEMAND = {
  *                                            demand reads excluded — spec 31)
  *   - `meter:size:<meter_id>`             → string | null (meter.customFields.size)
  *   - `meter:role:<meter_id>`             → string | null (meter.customFields.role)
- *   - `meter:peak_demand:<meter_id>:<window>` → throws UnsupportedInSlice4Error
+ *   - `meter:tou:<meter_id>:<peak_code>`  → one TOU period's consumption
+ *
+ * Peak demand is not here: `demand-loader.ts` (spec 31).
  *
  * The Meter model has no dedicated `size`/`role` columns — both live on
  * `customFields` (JSONB). Reads are aggregated against the period
@@ -72,13 +73,9 @@ export class MeterLoader implements Loader {
         returns: z.object({ quantity: z.unknown(), unit: z.string() }),
         description: "One TOU period's consumption for the billing period (spec 26, TOU-REG-1)",
       },
-      {
-        pattern: "meter:peak_demand:<meter_id>:<window>",
-        paramTypes: { meter_id: z.string().uuid(), window: z.string() },
-        scope: "per_sa",
-        description: "Peak demand for a meter — not implemented in Slice 4",
-        unsupported: true,
-      },
+      // Peak demand is the DemandLoader's (`demand:peak:<meter_id>`,
+      // spec 31). The `meter:peak_demand:<id>:<window>` stub that stood
+      // here and always threw was removed when that shipped.
     ];
   }
 
@@ -88,7 +85,6 @@ export class MeterLoader implements Loader {
 
     const meterIdsForReads = new Set<string>();
     const meterIdsForMeta = new Set<string>(); // size + role
-    const peakDemandKeys: VariableKey[] = [];
     /** `meter:tou:<meterId>:<peakCode>` → the two parts, parsed. */
     const touKeys: Array<{ key: VariableKey; meterId: string; peakCode: string }> = [];
 
@@ -107,16 +103,7 @@ export class MeterLoader implements Loader {
         meterIdsForMeta.add(k.slice("meter:size:".length));
       } else if (k.startsWith("meter:role:")) {
         meterIdsForMeta.add(k.slice("meter:role:".length));
-      } else if (k.startsWith("meter:peak_demand:")) {
-        peakDemandKeys.push(k);
       }
-    }
-
-    // Fail fast on peak_demand — Slice 4 explicitly does not implement
-    // it. Surfacing the error early keeps the trace readable: the
-    // engine sees one clean exception with the offending key.
-    if (peakDemandKeys.length > 0) {
-      throw new UnsupportedInSlice4Error(`meter:peak_demand variable (${peakDemandKeys[0]})`);
     }
 
     // One Meter query covers size + role for all distinct meter ids.

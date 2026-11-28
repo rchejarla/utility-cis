@@ -80,7 +80,28 @@ function collectFromQuantitySource(
     if (t.type === "subtract_linked_commodity" && typeof t.commodity_id === "string") {
       keys.add(`linked:${t.commodity_id}:current_period`);
     }
+    // The agreement's past peaks (spec 31, DEM-ENG-5). Per agreement, so
+    // the key needs no meter id and belongs here rather than with the
+    // caller's per-meter keys.
+    if (t.type === "ratchet") {
+      keys.add(`demand:history:${base.sa.id}`);
+    }
   }
+}
+
+/**
+ * Whether the schedule prices peak demand — so the caller asks for each
+ * meter's `demand:peak:<meterId>`, crossed with the agreement's meters
+ * as the TOU buckets are. A schedule without a demand charge adds no keys
+ * and costs no query.
+ */
+export function pricesDemand(base: BaseContext): boolean {
+  return base.assignments.some((a) =>
+    a.schedule.components.some((c) => {
+      const qs = c.quantitySource as Record<string, unknown> | null | undefined;
+      return !!qs && typeof qs === "object" && qs.base === "peak_demand";
+    }),
+  );
 }
 
 function collectFromPricing(

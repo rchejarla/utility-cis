@@ -63,7 +63,10 @@ export const QUANTITY_SOURCES = [
   { code: "item_count", label: "Count of attached items", supported: true },
   { code: "linked_commodity", label: "Linked commodity quantity", supported: true },
   { code: "premise_attribute", label: "Premise attribute", supported: true },
-  { code: "peak_demand", label: "Peak demand (Slice 4+ only)", supported: false },
+  // The period's measured peak: each meter's highest demand read, meters
+  // added (spec 31). A charge on it refuses rather than billing 0 kW when
+  // no meter measures demand.
+  { code: "peak_demand", label: "Peak demand (kW)", supported: true },
 ] as const;
 
 export const TRANSFORMS = [
@@ -72,7 +75,7 @@ export const TRANSFORMS = [
   { code: "prorate", label: "Prorate by days", supported: true },
   { code: "subtract_linked_commodity", label: "Subtract linked commodity", supported: true },
   { code: "floor", label: "Floor (minimum)", supported: true },
-  { code: "ratchet", label: "Ratchet (peak-demand-based)", supported: false },
+  { code: "ratchet", label: "Ratchet (% of the highest recent peak)", supported: true },
   { code: "tou_window_filter", label: "Filter by TOU window", supported: false },
   { code: "power_factor", label: "Power factor adjustment", supported: false },
   { code: "load_factor", label: "Load factor adjustment", supported: false },
@@ -100,6 +103,10 @@ export const VARIABLE_NAMESPACES = [
   // period the meter does not report has no variable at all rather than
   // a zero (spec 26, TOU-REG-1).
   { pattern: "meter:tou:<meter_id>:<peak_code>", scope: "per_sa", description: "One TOU period's consumption for the billing period" },
+  // Spec 31. Supplied by the caller when a schedule prices peak demand;
+  // a meter with no demand register gets no variable rather than a zero.
+  { pattern: "demand:peak:<meter_id>", scope: "per_sa", description: "A meter's measured peak demand for the billing period" },
+  { pattern: "demand:history:<sa_id>", scope: "per_sa", description: "The agreement's measured peak demand by month, before this period (for ratchets)" },
   { pattern: "wqa:current:<sa_id>", scope: "per_sa", description: "Current WQA value (override or computed)" },
   // Fully implemented since the WQA loader shipped, and undocumented
   // until 2026-11-03 — so a tariff that wanted the override alone could

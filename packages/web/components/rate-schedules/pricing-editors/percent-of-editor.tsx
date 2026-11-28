@@ -59,6 +59,7 @@ const SIMPLE_SELECTORS = [
 const KIND_OPTIONS = [
   "service_charge",
   "consumption",
+  "demand",
   "derived_consumption",
   "non_meter",
   "item_price",

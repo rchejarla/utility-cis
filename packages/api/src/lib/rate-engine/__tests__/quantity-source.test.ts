@@ -139,11 +139,7 @@ describe("resolveQuantity — bases", () => {
     expect(result.toString()).toBe("1");
   });
 
-  it("peak_demand throws UnsupportedInSlice3Error", () => {
-    expect(() => resolveQuantity({ base: "peak_demand" }, makeCtx())).toThrow(
-      UnsupportedInSlice3Error,
-    );
-  });
+  // Peak demand: spec 31 — see the "peak demand" describe below.
 
   it("unknown base throws clear error", () => {
     expect(() =>
@@ -276,17 +272,6 @@ describe("resolveQuantity — transforms", () => {
     expect(result.toString()).toBe("10");
   });
 
-  it("ratchet transform throws UnsupportedInSlice3Error", () => {
-    const vars = new Map<string, unknown>([
-      ["meter:reads:m-1", { quantity: "5" }],
-    ]);
-    expect(() =>
-      resolveQuantity(
-        { base: "metered", transforms: [{ type: "ratchet" }] },
-        makeCtx({}, vars),
-      ),
-    ).toThrow(UnsupportedInSlice3Error);
-  });
 
   it("unknown transform type throws clear error", () => {
     const vars = new Map<string, unknown>([

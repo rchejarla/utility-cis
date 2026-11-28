@@ -911,6 +911,10 @@ model BillSegmentLine {
   /// always the meter's: the engine converts, so a gallons meter on an
   /// HCF tariff bills 6.6279 and the bill has to say of what.
   unit                String?  @map("unit") @db.VarChar(20)
+  /// Why the quantity is what it is, when that is not simply what was
+  /// measured — a demand line billed on a ratchet says so (spec 31,
+  /// DEM-BIL-1). Null on an ordinary line.
+  basis               String?  @map("basis") @db.Text
   sourceScheduleId    String   @map("source_schedule_id") @db.Uuid
   sourceComponentId   String   @map("source_component_id") @db.Uuid
   sortOrder           Int      @map("sort_order")

@@ -10,6 +10,9 @@ interface BillSegmentLine {
   kindCode: string;
   amount: string;
   quantity: string | null;
+  unit?: string | null;
+  /** Why the quantity is not simply what was measured — a demand ratchet (spec 31). */
+  basis?: string | null;
   sourceScheduleId: string;
   sourceComponentId: string;
   sortOrder: number;
@@ -28,6 +31,7 @@ interface BillSegmentWithLines {
 }
 
 const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
+const basisStyle = { fontSize: "11px", color: "var(--text-muted)", marginTop: 2 };
 
 export function BillSegmentDetailDialog({
   segmentId,
@@ -95,7 +99,10 @@ export function BillSegmentDetailDialog({
               <tbody>
                 {segment.lines.map((l) => (
                   <tr key={l.id}>
-                    <td style={td}>{l.label}</td>
+                    <td style={td}>
+                      {l.label}
+                      {l.basis && <div style={basisStyle}>{l.basis}</div>}
+                    </td>
                     <td style={{ ...td, color: "var(--text-muted)", fontSize: "11px" }}>
                       {l.kindCode}
                     </td>

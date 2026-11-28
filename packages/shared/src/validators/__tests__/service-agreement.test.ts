@@ -9,6 +9,8 @@ const validAgreement = {
   accountId: "550e8400-e29b-41d4-a716-446655440001",
   premiseId: "550e8400-e29b-41d4-a716-446655440002",
   commodityId: "550e8400-e29b-41d4-a716-446655440003",
+  // Required since 2026-11-28 (spec 05): every agreement is in a class.
+  rateServiceClassId: "550e8400-e29b-41d4-a716-446655440004",
   startDate: "2024-01-01",
   meters: [
     { meterId: "550e8400-e29b-41d4-a716-446655440006", isPrimary: true },
@@ -16,6 +18,12 @@ const validAgreement = {
 };
 
 describe("createServiceAgreementSchema", () => {
+  it("refuses an agreement with no service class", () => {
+    const { rateServiceClassId: _omitted, ...withoutClass } = validAgreement;
+    const result = createServiceAgreementSchema.safeParse(withoutClass);
+    expect(result.success).toBe(false);
+  });
+
   it("accepts a valid service agreement", () => {
     const result = createServiceAgreementSchema.safeParse(validAgreement);
     expect(result.success).toBe(true);

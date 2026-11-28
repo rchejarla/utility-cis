@@ -44,11 +44,20 @@ export const QUANTITY_BASES = [
 const baseSchema = z.enum(QUANTITY_BASES);
 
 const transformSchema = z.discriminatedUnion("type", [
+  /*
+   * Billed demand = max(measured, percent% × the highest measured peak in
+   * the last `lookback_months`) — spec 31, DEM-ENG-4. `months` limits the
+   * lookback to peaks read in those calendar months (a summer ratchet,
+   * D2). Over 100% would bill more than the customer ever drew, and the
+   * loader keeps 36 months, so both are bounded here rather than failing
+   * quietly at rating.
+   */
   z
     .object({
       type: z.literal("ratchet"),
-      percent: z.number().nonnegative(),
-      lookback_months: z.number().int().positive(),
+      percent: z.number().positive().max(100),
+      lookback_months: z.number().int().positive().max(36),
+      months: z.array(z.number().int().min(1).max(12)).min(1).max(12).optional(),
     })
     .strict(),
   z

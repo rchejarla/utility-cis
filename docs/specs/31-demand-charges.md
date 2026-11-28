@@ -1,8 +1,53 @@
 # 31 — Demand Charges
 
 **Status:** Approved 2026-11-28 — D1–D7 taken as recommended.
-**Slice 1 built 2026-11-28** (DEM-MEAS-1, DEM-MEAS-2, DEM-RD-1); slices 2
-and 3 not started.
+**Slices 1 and 2 built 2026-11-28**; slice 3 (interval-derived and
+on-peak demand) not started.
+
+### Slice 2 as built
+
+- **Loader** `rate-engine-loaders/loaders/demand-loader.ts`, registered
+  with the rest:
+  - `demand:peak:<meter_id>`: the meter's highest DEMAND-unit read in the
+    period (`peak_code` null), with its unit and date. A meter that has an
+    active demand register but no read gets `{ quantity: null }`. A meter
+    with no demand register gets no key at all.
+  - `demand:history:<sa_id>`: the agreement's own reads (D1) for up to 36
+    months before the period start. Per calendar month: each meter's
+    highest read, then the meters added.
+- **Keys:** `pricesDemand(base)` tells `rateAgreementPeriod` to ask for
+  `demand:peak:*` for each of the agreement's meters, the way it asks for
+  TOU buckets. `manifest()` adds `demand:history:<sa_id>` when a
+  component ratchets.
+- **Engine** (`evaluators/quantity-source.ts`):
+  - **`peak_demand`** sums the meters' peaks, converting through a new
+    demand dimension (KW, MW, W). kWh is refused as "measure different
+    things".
+  - **Refusals** (422): `DEMAND_READ_MISSING` when a demand register has no
+    read; `DEMAND_NOT_MEASURED` when there are no demand meters at all.
+  - **`ratchet`** is `{ percent ≤ 100, lookback_months ≤ 36, months? }`.
+    The lookback is measured on read dates: a history entry counts if read
+    on or after the period start minus `lookback_months`. When the ratchet
+    sets the figure, it writes a note.
+- **Basis:** `LineItem.basis` carries that note into a new nullable
+  `bill_segment_line.basis` column (migration
+  `20261128120000_bill_segment_line_basis`). It is shown:
+  - in the staff bill dialog and the segment dialog, under the label;
+  - on the PDF under the label, only when present, so other bills reprint
+    byte-identically.
+- **Kind** `demand` (migration
+  `20261128120100_rate_component_kind_demand`; registered codes, the
+  percent-of selector list).
+- **Seed:**
+  - NWE-GSEDS-1 has demand charges: small $8.75/kW and large $11.40/kW,
+    75% ratchet over 11 months, placeholder rates.
+  - EM-001 and EM-003 have energy and demand registers and a year of
+    peaks, with a July summer peak.
+  - SA-0008 (large) bills 97.5 kW against a measured 82 (ratchet on July's
+    130), $1,111.50. SA-0004 (small) bills its measured 20 kW.
+- **Golden test** `tariff-golden/nwe-general-service-demand.test.ts`: a
+  ratcheted month with its basis, and the same customer a year later
+  after July has aged out.
 
 ### Slice 1 as built
 
@@ -153,10 +198,12 @@ Rate model v2 (07b, "Loader strategy") anticipated a
   **refuses to rate** (`DEMAND_NOT_MEASURED`) rather than billing 0 kW.
   The same rule the TOU buckets follow: an absent quantity is not zero.
 - **DEM-ENG-4 (Must).** Ratchet transform:
-  `{ type: "ratchet", percent: 75, lookback_periods: 11, months?: [6,7,8,9] }`.
+  `{ type: "ratchet", percent: 75, lookback_months: 11, months?: [6,7,8,9] }`.
   Billed demand = `max(measured, percent% × highest measured peak in the
   lookback)`. The lookback is the agreement's own demand reads in the
-  `lookback_periods` billing periods before this one (D1, D7). `months`,
+  `lookback_months` before this period (D1, D7). (Drafted as
+  `lookback_periods`; built as `lookback_months`, the name the grammar
+  already validated — billing periods here are monthly.) `months`,
   when given, admits only peaks measured in those calendar months — a
   summer ratchet (D2).
 - **DEM-ENG-5 (Must).** Ratchet history comes from
