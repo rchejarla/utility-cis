@@ -266,6 +266,12 @@ export const entryRowSchema = z.object({
   registerId: z.string().uuid().nullable(),
   /** A label, not a count. */
   registerNumber: z.string().nullable(),
+  /**
+   * A demand register (spec 31): its dial shows the period's peak and is
+   * reset when read, so a reading below the last one is ordinary and the
+   * band is around the typical peak — not "use since the last read".
+   */
+  isDemand: z.boolean(),
   accountNumber: z.string(),
   /** What this meter last read, before the sheet's date. Null if never read. */
   lastReading: z.string().nullable(),

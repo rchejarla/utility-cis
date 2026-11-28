@@ -619,6 +619,13 @@ checking each claim against the code rather than against the plan.
    was not, and every ordinary reading on a meter with a multiplier other
    than 1 was held.
 
+   **A demand register's band is around its typical peak** (spec 31,
+   DEM-RD-1, 2026-11-28), not on top of its last reading: the dial shows
+   the period's peak and is reset when read. The entry row carries
+   `isDemand` (from the register's unit, so a first-ever demand read is
+   still treated as one); for those rows the screen does not hold a reading
+   below the last one, and its hold message speaks of peaks, not use.
+
 3. **The inbound vendor API is gated on a machine credential that does not
    exist.** Rao decided on 2026-11-09 that an API to populate `meter_read`
    must be exposed, and the shape is settled — `POST

@@ -233,6 +233,9 @@ export async function listExceptions(
   });
 }
 
+/** The measure type whose reads are a period's peak rather than a running total. */
+export const DEMAND_MEASURE = "DEMAND";
+
 /**
  * Compute consumption for a new read. Looks up the most recent prior
  * read on the same meter+register to determine `priorReading`, then
@@ -252,7 +255,7 @@ export async function computeConsumption(
 }> {
   const meter = await prisma.meter.findFirst({
     where: { id: meterId, utilityId },
-    select: { multiplier: true, dialCount: true },
+    select: { multiplier: true, dialCount: true, uom: { select: { measureType: { select: { code: true } } } } },
   });
   if (!meter) {
     throw Object.assign(new Error("Meter not found"), { statusCode: 404 });
@@ -271,6 +274,33 @@ export async function computeConsumption(
 
   const multiplier = Number(meter.multiplier);
   const priorReading = prior ? Number(prior.reading) : 0;
+
+  /*
+   * **A demand dial is not an energy dial** (spec 31, DEM-MEAS-1). An
+   * energy register accumulates, so a period's usage is the difference
+   * between two readings. A demand register shows the period's peak and
+   * is reset when read, so the reading *is* the quantity: subtracting the
+   * previous one turned a 300 kW month after a 310 kW month into −10, or
+   * into a "rollover". The prior is still returned, for the screens that
+   * print it beside the reading, and takes no part in the arithmetic.
+   */
+  const measure = registerId
+    ? (
+        await prisma.meterRegister.findFirst({
+          where: { id: registerId, utilityId },
+          select: { uom: { select: { measureType: { select: { code: true } } } } },
+        })
+      )?.uom.measureType.code
+    : meter.uom?.measureType.code;
+  if (measure === DEMAND_MEASURE) {
+    if (!Number.isFinite(reading) || reading < 0) {
+      throw Object.assign(new Error("A demand reading cannot be negative"), {
+        statusCode: 400,
+        code: "DEMAND_READING_NEGATIVE",
+      });
+    }
+    return { priorReading, consumption: reading * multiplier, exceptionCode: null };
+  }
   let raw = reading - priorReading;
   let exceptionCode: string | null = null;
 

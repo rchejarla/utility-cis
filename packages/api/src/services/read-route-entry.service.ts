@@ -128,7 +128,8 @@ async function decorate(
 ): Promise<EntryRow[]> {
   const staged = rows.map((row) => ({ row, raw: row.rawData as unknown as StagedRaw }));
   const premiseIds = [...new Set(staged.map((s) => s.raw.premiseId))];
-  const [premises, history] = await Promise.all([
+  const registerIds = [...new Set(staged.map((s) => s.raw.registerId).filter(Boolean))] as string[];
+  const [premises, history, demandRegisters] = await Promise.all([
     premiseIds.length
       ? prisma.premise.findMany({
           where: { utilityId, id: { in: premiseIds } },
@@ -140,6 +141,16 @@ async function decorate(
       staged.map((s) => ({ meterId: s.raw.meterId, registerId: s.raw.registerId || null })),
       onDate,
     ),
+    // From the register's own unit rather than from history, so a demand
+    // register read for the first time is still treated as one (spec 31).
+    registerIds.length
+      ? prisma.meterRegister
+          .findMany({
+            where: { utilityId, id: { in: registerIds }, uom: { measureType: { code: "DEMAND" } } },
+            select: { id: true },
+          })
+          .then((rs) => new Set(rs.map((r) => r.id)))
+      : Promise.resolve(new Set<string>()),
   ]);
   const address = new Map(premises.map((p) => [p.id, `${p.addressLine1}, ${p.city}`]));
 
@@ -156,6 +167,7 @@ async function decorate(
       meterNumber: raw.meterNumber,
       registerId,
       registerNumber: raw.registerNumber || null,
+      isDemand: registerId !== null && demandRegisters.has(registerId),
       accountNumber: raw.accountNumber,
       lastReading: past?.lastReading ?? null,
       lastReadDate: past?.lastReadDate ?? null,

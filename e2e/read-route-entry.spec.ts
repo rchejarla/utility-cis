@@ -234,9 +234,10 @@ interface Target {
 const READINGS: Target[] = [
   { meter: ONE_REGISTER, register: "1", opening: 133_000, monthly: 3_500 },
   // Energy and demand are different magnitudes; a shared delta would be
-  // absurd on one of them.
+  // absurd on one of them. Register 2 is demand: a peak, typed as a
+  // value near its last one, never accumulated (`monthly` is unused).
   { meter: TWO_REGISTER, register: "1", opening: 52_400, monthly: 700 },
-  { meter: TWO_REGISTER, register: "2", opening: 310, monthly: 20 },
+  { meter: TWO_REGISTER, register: "2", opening: 310, monthly: 0 },
   { meter: "WM-005", opening: 41_250, monthly: 3_500 },
   { meter: "WM-004", opening: 88_900, monthly: 3_500 },
 ];
@@ -256,6 +257,8 @@ interface EntryRow {
   meterId: string;
   meterNumber: string;
   registerNumber: string | null;
+  /** A demand register (spec 31): its reading is a peak, not a running total. */
+  isDemand: boolean;
   reading: string | null;
   /** What the sheet prints beside the row: the last reading before this date. */
   lastReading: string | null;
@@ -507,6 +510,15 @@ function readingField(row: Locator): Locator {
  */
 function nextReading(rows: EntryRow[], target: Target): number {
   const row = staged(rows, target.meter, target.register);
+  /*
+   * A demand register is reset each period (spec 31), so its next reading
+   * is a peak near its usual one — not the last reading plus anything. The
+   * last + typical rule would type twice the usual peak, which is the
+   * band's upper edge.
+   */
+  if (row.isDemand) {
+    return row.band ? Math.round(Number(row.band.typical)) : Number(row.lastReading ?? target.opening);
+  }
   if (row.band && row.lastReading !== null) {
     return Math.round(Number(row.lastReading) + Number(row.band.typical));
   }

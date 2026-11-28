@@ -131,19 +131,29 @@ export async function historyForRows(
    * drops out as non-positive below.
    */
   const reads = await prisma.$queryRaw<
-    { meter_id: string; register_id: string | null; reading: unknown; consumption: unknown; read_date: Date }[]
+    {
+      meter_id: string;
+      register_id: string | null;
+      reading: unknown;
+      consumption: unknown;
+      read_date: Date;
+      measure: string;
+    }[]
   >`
-    SELECT meter_id, register_id, reading, consumption, read_date
+    SELECT meter_id, register_id, reading, consumption, read_date, measure
     FROM (
       SELECT mr.meter_id, mr.register_id, mr.reading,
              mr.consumption / NULLIF(m.multiplier, 0) AS consumption,
              mr.read_date,
+             mt.code AS measure,
              row_number() OVER (
                PARTITION BY mr.meter_id, mr.register_id
                ORDER BY mr.read_date DESC, mr.read_datetime DESC
              ) AS rn
       FROM meter_read mr
       JOIN meter m ON m.id = mr.meter_id AND m.utility_id = mr.utility_id
+      JOIN unit_of_measure u ON u.id = mr.uom_id
+      JOIN measure_type_def mt ON mt.id = u.measure_type_id
       WHERE mr.utility_id = ${utilityId}::uuid
         AND mr.meter_id = ANY(${meterIds}::uuid[])
         AND mr.reading IS NOT NULL
@@ -156,7 +166,7 @@ export async function historyForRows(
     WHERE rn <= ${TRAILING_READS}
     ORDER BY meter_id, register_id, read_date DESC`;
 
-  const byRow = new Map<string, { reading: number; consumption: number; readDate: Date }[]>();
+  const byRow = new Map<string, HistoryRead[]>();
   for (const r of reads) {
     const key = keyOf(r.meter_id, r.register_id);
     const list = byRow.get(key) ?? [];
@@ -164,6 +174,7 @@ export async function historyForRows(
       reading: Number(r.reading),
       consumption: Number(r.consumption),
       readDate: r.read_date,
+      isDemand: r.measure === "DEMAND",
     });
     byRow.set(key, list);
   }
@@ -193,9 +204,15 @@ export async function historyForRows(
   return out;
 }
 
-function fromHistory(
-  history: { reading: number; consumption: number; readDate: Date }[],
-): MeterHistory {
+interface HistoryRead {
+  reading: number;
+  consumption: number;
+  readDate: Date;
+  /** A demand register's read: the dial *is* the quantity (spec 31). */
+  isDemand: boolean;
+}
+
+function fromHistory(history: HistoryRead[]): MeterHistory {
   const latest = history[0];
   const lastReading = latest ? quantity(latest.reading) : null;
   const lastReadDate = latest ? isoDay(latest.readDate) : null;
@@ -212,12 +229,20 @@ function fromHistory(
     return { lastReading, lastReadDate, band: null };
   }
   const typical = median(used);
+  /*
+   * **A demand dial is reset each period** (spec 31, DEM-RD-1), so its
+   * next reading lands near its typical peak — not on top of the last
+   * reading, which is where an energy dial's does. Measured from the last
+   * reading, a demand band would hold every ordinary peak and pass only a
+   * figure twice the usual one.
+   */
+  const base = latest.isDemand ? 0 : latest.reading;
   return {
     lastReading,
     lastReadDate,
     band: {
-      low: quantity(latest.reading + typical * LOW_FACTOR),
-      high: quantity(latest.reading + typical * HIGH_FACTOR),
+      low: quantity(base + typical * LOW_FACTOR),
+      high: quantity(base + typical * HIGH_FACTOR),
       typical: quantity(typical),
       // The observed range, reported beside the typical rather than used
       // as the bound: it is what the operator recognises their own meter

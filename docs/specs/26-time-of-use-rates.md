@@ -1931,7 +1931,8 @@ unsupported pieces, and the other four are not TOU's:
   commercial and industrial accounts billable, and it is where an
   electric utility's revenue concentrates. Scoped out of this spec on
   purpose (it needs slice 2's interval store but none of the TOU
-  pricing) and **has no spec of its own yet.**
+  pricing). **Specified in [31 — Demand Charges](31-demand-charges.md)**
+  (proposed 2026-11-28).
 - **`power_factor` and `load_factor`** — adjustments on large accounts.
   Also unspecified.
 

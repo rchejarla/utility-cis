@@ -264,6 +264,11 @@ export async function portalApiRoutes(app: FastifyInstance) {
         where: {
           serviceAgreementId: agreementId,
           readDate: { gte: fromDate, lte: toDate },
+          // Usage only (spec 31, DEM-MEAS-2): a demand register's kW is a
+          // peak, not usage, and summed into the month it would add 310 to
+          // a customer's kWh. Peak demand reaches the portal with the bill's
+          // demand presentation (DEM-BIL-2), shown as what it is.
+          uom: { measureType: { code: { not: "DEMAND" } } },
         },
         select: {
           id: true,
