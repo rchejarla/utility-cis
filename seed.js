@@ -1044,6 +1044,10 @@ async function main() {
    * on the bill day itself nothing after the window has happened.
    */
   const R01_WINDOW = cycleWindow({ billDayOfMonth: 10, readDayOfMonth: 8 });
+  const TODAY_UTC = (() => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  })();
   const READ_DAY_UTC = new Date(Date.UTC(
     R01_WINDOW.endDate.getUTCFullYear(),
     R01_WINDOW.endDate.getUTCMonth() + 1,
@@ -1169,12 +1173,34 @@ async function main() {
     const uomId = firstSpm.meter.uomId;
     let running = baseReading;
     const readDay = readDayFor(sa);
+    /*
+     * **Never a read dated after today** (2026-11-28). The newest read is
+     * next period's — it must sit after the agreement's own billing window,
+     * so a run leaves it over — and on its cycle's read day that is up to a
+     * month ahead: a dev database on 28 November held reads for 8 and 15
+     * December, which every screen showing a last read then printed.
+     *
+     * Next period's read only has to be *after the window*, not on the read
+     * day, so it is taken today instead: an off-cycle read, which a utility
+     * takes all the time. The one day that cannot work is the bill day
+     * itself, when the window ends today and nothing after it has happened
+     * — then it is tomorrow, at most one day ahead rather than thirty.
+     */
+    const cycle = sa?.account?.billingCycle;
+    const ownWindow = cycle?.billDayOfMonth
+      ? cycleWindow({ billDayOfMonth: cycle.billDayOfMonth, readDayOfMonth: cycle.readDayOfMonth })
+      : R01_WINDOW;
+    const latestAllowed = new Date(Math.max(
+      TODAY_UTC.getTime(),
+      ownWindow.endDate.getTime() + 86_400_000,
+    ));
     for (let m = 11; m >= 0; m--) {
-      const d = new Date(Date.UTC(
+      const onCycle = new Date(Date.UTC(
         READ_DAY_UTC.getUTCFullYear(),
         READ_DAY_UTC.getUTCMonth() - m,
         readDay,
       ));
+      const d = onCycle > latestAllowed ? latestAllowed : onCycle;
       const anomaly = ANOMALY[sa.agreementNumber];
       const isNewest = m === 0;
       const zeroed = isNewest && anomaly?.zeroUsage === true;

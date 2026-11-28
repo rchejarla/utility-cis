@@ -268,7 +268,7 @@ interface EntryRow {
    * to — so the outlier test below asserts it is present rather than
    * assuming it, and says what to run when it is not.
    */
-  band: { low: string; high: string; typicalLow: string; typicalHigh: string } | null;
+  band: { low: string; high: string; typical: string; typicalLow: string; typicalHigh: string } | null;
   skipReason: string | null;
   status: "PENDING" | "IMPORTED" | "ERROR" | "SKIPPED";
   errorCode: string | null;
@@ -490,9 +490,26 @@ function readingField(row: Locator): Locator {
   return row.getByRole("spinbutton");
 }
 
-/** Where the meter's history says its next read should land. */
+/**
+ * Where the meter's history says its next read should land.
+ *
+ * **The last reading plus the meter's own typical month, when the screen
+ * has a band** — `band.typical` is a consumption (the median of recent
+ * months), while `low` and `high` are readings, `last + typical × factor`.
+ * `target.monthly` is a guess at a month's use, and it stopped being a good
+ * one on 2026-11-28, when the dev seed began giving every metered agreement
+ * a year of reads: WM-004 turned out to be a business using ~11,600 gallons a
+ * month, so last + 3,500 was an outlier, the screen held the row, and
+ * `Enter` staged nothing. The band is the screen's own answer to "what would
+ * this meter plausibly read next", so typing at its centre cannot drift from it.
+ * `monthly` remains for a meter with a last reading but too little history
+ * for a band, and `opening` for one with no reading at all.
+ */
 function nextReading(rows: EntryRow[], target: Target): number {
   const row = staged(rows, target.meter, target.register);
+  if (row.band && row.lastReading !== null) {
+    return Math.round(Number(row.lastReading) + Number(row.band.typical));
+  }
   return row.lastReading === null ? target.opening : Number(row.lastReading) + target.monthly;
 }
 
