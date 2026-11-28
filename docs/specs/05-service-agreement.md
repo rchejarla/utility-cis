@@ -174,6 +174,10 @@ same premise), and the CSV import (`serviceClassCode`, resolved per
 commodity; `MISSING_SERVICE_CLASS`, `SERVICE_CLASS_NOT_FOUND`,
 `SERVICE_CLASS_RETIRED`).
 
+**Managed on Tariffs → Service Classes** (`/service-classes`, spec 07):
+add per commodity, relabel, reorder, retire. A commodity with no active
+class cannot take a new agreement, and the page says so.
+
 **Not dated.** Rating reads the current class, so a change applies to
 every period rated afterwards, a re-rate of an earlier period included —
 right for correcting a wrong class, wrong for a customer who genuinely

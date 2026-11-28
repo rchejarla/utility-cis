@@ -145,6 +145,7 @@ interface Agreement {
   agreementNumber: string;
   accountId: string;
   commodityId: string;
+  rateServiceClassId: string;
   status: string;
   startDate: string;
   endDate: string | null;
@@ -332,11 +333,20 @@ async function makeFixture(api: Api): Promise<Fixture> {
     status: "ACTIVE",
   });
 
+  // Every agreement is in a service class (spec 05, required since
+  // 2026-11-28). Whichever the commodity offers first, as the screen does;
+  // the transfer must carry it to the new agreement.
+  const { data: classes } = await api.get<{ data: { id: string }[] }>(
+    `/api/v1/service-agreements/service-classes?commodityId=${commodity!.id}`,
+  );
+  expect(classes.length, `no service class for ${COMMODITY_CODE} — run seed_db.bat`).toBeGreaterThan(0);
+
   const agreement = await api.post<Agreement>("/api/v1/service-agreements", {
     agreementNumber: `${FIXTURE_PREFIX}-SRC`,
     accountId: source.id,
     premiseId: premise.id,
     commodityId: commodity!.id,
+    rateServiceClassId: classes[0]!.id,
     startDate: today(),
     status: "ACTIVE",
     meters: [{ meterId: meter.id, isPrimary: true }],
@@ -540,6 +550,9 @@ test.describe("Transfer of service", () => {
     expect(opened.accountId).toBe(target.id);
     expect(opened.status).toBe("ACTIVE");
     expect(opened.commodityId).toBe(source.commodityId);
+    // The service class followed too: the new account is billed as the
+    // same kind of customer until someone says otherwise.
+    expect(opened.rateServiceClassId).toBe(source.rateServiceClassId);
 
     // One point, at the same premise, holding the same meter: the
     // mirror's one-premise case end to end.

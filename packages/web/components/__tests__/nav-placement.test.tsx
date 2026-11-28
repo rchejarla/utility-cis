@@ -82,6 +82,10 @@ describe("sidebar grouping (2026-11-03)", () => {
       "Periods",
       "Seasons",
       "Holidays",
+      // The customer categories a charge is conditioned on, which every
+      // agreement must be in (2026-11-28). Last: it is configuration a
+      // tariff refers to, not a step in building a calendar.
+      "Service Classes",
     ]);
   });
 
